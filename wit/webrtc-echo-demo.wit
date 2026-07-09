@@ -60,13 +60,15 @@ interface rendezvous {
         /// delivered to the peer in publish order.
         send: async func(blob: list<u8>) -> result<_, error>;
 
-        /// Fetch the next opaque signaling blob published by the peer,
+        /// Fetch the next opaque signaling blob published by the *peer*,
         /// long-polling the server until one is available. Returns `none` once
-        /// the peer has signalled that it will publish no more blobs.
+        /// the peer has closed its side of the session (see `close`), meaning
+        /// no further blobs from the peer will arrive.
         recv: async func() -> result<option<list<u8>>, error>;
 
-        /// Signal that this peer has published its final blob and close the
-        /// session's mailbox on the server.
+        /// Signal to the peer that this side has published its final blob, and
+        /// release the local session. After this call the peer's next `recv`
+        /// drains any remaining blobs and then observes `none`.
         close: func();
     }
 }
