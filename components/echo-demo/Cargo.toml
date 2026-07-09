@@ -1,0 +1,21 @@
+[package]
+name = "echo-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# `async` pulls in the component-model `stream`/`future` runtime support and the
+# `wit_stream` helpers; `async-spawn` provides `wit_bindgen::spawn`, used to run
+# the outbound message producer as a detached task.
+wit-bindgen = { version = "0.57", features = ["async", "async-spawn"] }
+# `join!` lets the component send and receive concurrently on the same channel
+# within a single cooperative task (no OS threads).
+futures = { version = "0.3", default-features = false, features = ["async-await"] }
+
+[profile.release]
+opt-level = "s"
+lto = true

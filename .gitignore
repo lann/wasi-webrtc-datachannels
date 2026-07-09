@@ -1,1 +1,9 @@
+# Rust
+target/
+
+# Node
 node_modules/
+
+# Build artifacts
+build/
+hosts/node/generated/
