@@ -1,0 +1,20 @@
+{
+  "name": "wasi-webrtc-datachannels-node-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-first (Node) host for the wasi:webrtc-data-channels spike, using jco + @roamhq/wrtc.",
+  "scripts": {
+    "build:component": "cd ../../components/echo-demo && cargo build --release --target wasm32-unknown-unknown && mkdir -p build && wasm-tools component new target/wasm32-unknown-unknown/release/echo_demo.wasm -o build/echo-demo.component.wasm",
+    "transpile": "jco transpile ../../components/echo-demo/build/echo-demo.component.wasm --name echo-demo --async-mode jspi --async-exports 'wasi:webrtc-data-channels/demo@0.1.0#run' --async-imports 'wasi:webrtc-data-channels/connect@0.1.0#open-echo' --async-imports 'wasi:webrtc-data-channels/data-channels@0.1.0#[method]data-channel.send' --map 'wasi:webrtc-data-channels/connect@0.1.0=../webrtc.js' --map 'wasi:webrtc-data-channels/data-channels@0.1.0=../webrtc.js' -o generated",
+    "start": "node src/run.mjs",
+    "test": "node src/run.mjs"
+  },
+  "devDependencies": {
+    "@bytecodealliance/jco": "^1.19.0",
+    "@bytecodealliance/componentize-js": "^0.20.0"
+  },
+  "dependencies": {
+    "@roamhq/wrtc": "^0.8.0"
+  }
+}
