@@ -1,0 +1,102 @@
+package demo:webrtc-echo@0.1.0;
+
+/// A convenience used by the spike demo.
+///
+/// The host connects a data channel to an internal "echo" endpoint, performing
+/// a genuine SDP/ICE handshake between two peer connections under the hood, and
+/// returns the near side to the guest. This keeps the runnable example focused
+/// on the streaming hot path while still exercising a real WebRTC stack in the
+/// host.
+///
+/// `connect` is a shortcut: both peers live inside a single host, so no external
+/// signaling is involved. See `rendezvous` for the interface that would carry
+/// signaling between two *separate* peers (the "real signaling" path).
+interface connect {
+    use wasi:webrtc-data-channels/types@0.1.0.{error, data-channel-options};
+    use wasi:webrtc-data-channels/data-channels@0.1.0.{data-channel};
+
+    /// Open a data channel connected to a host-provided echo endpoint. Every
+    /// message the guest sends is echoed back verbatim.
+    open-echo: async func(options: data-channel-options) -> result<data-channel, error>;
+}
+
+/// Demo-only HTTP signaling rendezvous (a proposal, not yet wired into the
+/// runnable world — mirroring how `wasi:webrtc-data-channels/signaling` is
+/// designed but not yet exercised).
+///
+/// To connect two *separate* peers (offerer and answerer) they must exchange
+/// SDP offers/answers and trickled ICE candidates out of band. `rendezvous` is
+/// a tiny mailbox that carries those opaque blobs between the two sides through
+/// an existing HTTP signaling server, so remote connections can be developed
+/// and tested entirely locally: run two component instances, point both at the
+/// same room on the same server, and let a real WebRTC/SCTP connection form
+/// between them.
+///
+/// The transport is deliberately unstandardized — it lives in the demo package,
+/// not in `wasi:webrtc-data-channels`. A host is expected to implement it by
+/// relaying blobs to and from an existing HTTP signaling server over
+/// `wasi:http@0.3` (the guest itself does not need to speak HTTP). The blob
+/// payloads are opaque here; the guest chooses the encoding (for example, JSON
+/// produced from the `signaling` records).
+interface rendezvous {
+    use wasi:webrtc-data-channels/types@0.1.0.{error};
+
+    /// Which half of the exchange this peer is driving. The offerer creates the
+    /// SDP offer; the answerer waits for it and replies with an answer.
+    enum role {
+        offerer,
+        answerer,
+    }
+
+    /// A named signaling session shared by exactly two peers on the server.
+    resource session {
+        /// Join (creating if necessary) the room `room` on the signaling
+        /// server as `role`. Both peers must agree on `room`; the server keeps
+        /// the two directions of blobs separate by role.
+        open: static async func(room: string, as-role: role) -> result<session, error>;
+
+        /// Publish the next opaque signaling blob (an SDP or a batch of ICE
+        /// candidates, encoded by the guest) for the peer to fetch. Blobs are
+        /// delivered to the peer in publish order.
+        send: async func(blob: list<u8>) -> result<_, error>;
+
+        /// Fetch the next opaque signaling blob published by the peer,
+        /// long-polling the server until one is available. Returns `none` once
+        /// the peer has signalled that it will publish no more blobs.
+        recv: async func() -> result<option<list<u8>>, error>;
+
+        /// Signal that this peer has published its final blob and close the
+        /// session's mailbox on the server.
+        close: func();
+    }
+}
+
+/// The exported demo entry point.
+interface demo {
+    use wasi:webrtc-data-channels/types@0.1.0.{error};
+
+    /// Parameters for a single demo run.
+    record demo-config {
+        /// Number of messages to send through the echo channel.
+        message-count: u32,
+        /// Size, in bytes, of each message.
+        message-size: u32,
+    }
+
+    /// The result of a demo run.
+    record demo-stats {
+        messages-sent: u32,
+        messages-received: u32,
+        bytes-echoed: u64,
+    }
+
+    /// Send `message-count` messages of `message-size` bytes through an echo
+    /// data channel, read them all back, and verify the round trip.
+    run: async func(config: demo-config) -> result<demo-stats, error>;
+}
+
+/// The world implemented by the example component and driven by both hosts.
+world webrtc-echo-demo {
+    import connect;
+    export demo;
+}

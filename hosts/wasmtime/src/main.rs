@@ -47,9 +47,9 @@ impl HasData for Ctx {
 
 impl bindings::wasi::webrtc_data_channels::types::Host for Ctx {}
 
-impl bindings::wasi::webrtc_data_channels::connect::Host for Ctx {}
+impl bindings::demo::webrtc_echo::connect::Host for Ctx {}
 
-impl<T> bindings::wasi::webrtc_data_channels::connect::HostWithStore<T> for Ctx {
+impl<T> bindings::demo::webrtc_echo::connect::HostWithStore<T> for Ctx {
     async fn open_echo(
         accessor: &Accessor<T, Self>,
         options: DataChannelOptions,
@@ -149,10 +149,10 @@ async fn main() -> Result<()> {
     let started = std::time::Instant::now();
     let stats = store
         .run_concurrent(async move |accessor: &Accessor<Ctx>| {
-            demo.wasi_webrtc_data_channels_demo()
+            demo.demo_webrtc_echo_demo()
                 .call_run(
                     accessor,
-                    bindings::exports::wasi::webrtc_data_channels::demo::DemoConfig {
+                    bindings::exports::demo::webrtc_echo::demo::DemoConfig {
                         message_count,
                         message_size,
                     },
