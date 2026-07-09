@@ -60,7 +60,7 @@ impl Guest for Component {
 
         // Inbound message stream. Created before `send` starts so no echoed
         // message can be missed.
-        let mut incoming = channel.receive();
+        let mut incoming = channel.receive().await;
 
         // Drive send and receive concurrently on this single task.
         let send_fut = channel.send(rx);

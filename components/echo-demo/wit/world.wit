@@ -51,7 +51,7 @@ interface data-channels {
 
         /// A stream of inbound messages, one `list<u8>` per received message.
         /// The stream ends (its reader is dropped) when the channel closes.
-        receive: func() -> stream<list<u8>>;
+        receive: async func() -> stream<list<u8>>;
     }
 }
 

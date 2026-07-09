@@ -53,7 +53,7 @@ export class DataChannel {
   }
 
   /** A stream of inbound messages, one chunk per received message. */
-  receive() {
+  async receive() {
     return this.#incoming;
   }
 
