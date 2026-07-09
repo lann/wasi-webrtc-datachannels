@@ -21,8 +21,8 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use exports::wasi::webrtc_data_channels::demo::{DemoConfig, DemoStats, Guest};
-use wasi::webrtc_data_channels::connect;
+use exports::demo::webrtc_echo::demo::{DemoConfig, DemoStats, Guest};
+use demo::webrtc_echo::connect;
 use wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
 use wit_bindgen::StreamResult;
 
