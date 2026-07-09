@@ -73,6 +73,53 @@ interface rendezvous {
     }
 }
 
+/// The exported entry point for the *real signaling* demo.
+///
+/// Unlike `demo` (which uses the `connect` shortcut and a single host-internal
+/// echo endpoint), this drives a connection between two genuinely *separate*
+/// peers. Each peer is its own component instance: an `offerer` and an
+/// `answerer` that discover each other through a shared `rendezvous` room on an
+/// HTTP signaling server and then form a real WebRTC/SCTP data channel by
+/// exchanging SDP and trickled ICE over that room.
+///
+/// The guest drives the `wasi:webrtc-data-channels/signaling` peer-connection
+/// interface directly; the host relays the opaque signaling blobs through
+/// `rendezvous`. See `AGENTS.md` ("Real signaling") for the big picture.
+interface signaling-demo {
+    use wasi:webrtc-data-channels/types@0.1.0.{error};
+    use rendezvous.{role};
+
+    /// Parameters for one peer of a signaling run.
+    record signaling-config {
+        /// The shared rendezvous room. Both peers must use the same value.
+        room: string,
+        /// Which half of the exchange this peer drives. Exactly one peer is the
+        /// `offerer` and the other the `answerer`.
+        as-role: role,
+        /// Number of messages the offerer sends (and the answerer echoes).
+        message-count: u32,
+        /// Size, in bytes, of each message.
+        message-size: u32,
+    }
+
+    /// The result of one peer's signaling run.
+    record signaling-stats {
+        /// Whether the peer connection reached the connected state.
+        connected: bool,
+        /// Messages this peer sent over the data channel.
+        messages-sent: u32,
+        /// Messages this peer received over the data channel.
+        messages-received: u32,
+        /// Total bytes carried over the data channel by this peer.
+        bytes-echoed: u64,
+    }
+
+    /// Connect to the peer in `room` via signaling, then run the echo round
+    /// trip: the offerer sends `message-count` messages and reads them back,
+    /// while the answerer echoes every message it receives.
+    run: async func(config: signaling-config) -> result<signaling-stats, error>;
+}
+
 /// The exported demo entry point.
 interface demo {
     use wasi:webrtc-data-channels/types@0.1.0.{error};
@@ -101,4 +148,14 @@ interface demo {
 world webrtc-echo-demo {
     import connect;
     export demo;
+}
+
+/// The world for the *real signaling* demo: two separate peers connect through
+/// a `rendezvous` room over an HTTP signaling server. The guest drives the
+/// `wasi:webrtc-data-channels/signaling` peer-connection interface and the host
+/// relays opaque SDP/ICE blobs through `rendezvous`.
+world webrtc-signaling-demo {
+    import wasi:webrtc-data-channels/signaling@0.1.0;
+    import rendezvous;
+    export signaling-demo;
 }

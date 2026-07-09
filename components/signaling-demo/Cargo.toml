@@ -1,0 +1,22 @@
+[package]
+name = "signaling-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# `async` pulls in the component-model `stream`/`future` runtime support and the
+# `wit_stream` helpers; `async-spawn` provides `wit_bindgen::spawn`, used to run
+# the outbound message producer as a detached task.
+wit-bindgen = { version = "0.57", features = ["async", "async-spawn"] }
+# `join!` runs send/receive (and the signaling loops) concurrently on the same
+# cooperative task; `future::select` lets the connect phase stop the signaling
+# loops the moment the peer connection is established.
+futures = { version = "0.3", default-features = false, features = ["async-await"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
