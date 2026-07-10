@@ -95,69 +95,6 @@ interface demo {
     run: async func(config: demo-config) -> result<demo-stats, error>;
 }
 
-/// Demo-only interactive prompt used by the browser manual-signaling component.
-///
-/// A component cannot draw a UI itself, so it drives one through this import:
-/// the host renders `present`ed blobs and collects `request`ed blobs from the
-/// user (a web form in the browser host). The CLI manual-signaling component
-/// does not use this interface — it reads and writes `wasi:cli@0.3` stdio
-/// directly — but both components exchange the *same* base64-encoded SDP blobs,
-/// so a user can copy/paste between them.
-interface prompt {
-    /// Present an outgoing signaling blob (base64-encoded SDP) to the user for
-    /// them to copy to the peer. `title` labels which blob it is (for example
-    /// "offer" or "answer").
-    present: async func(title: string, blob: string);
-
-    /// Ask the user to paste an incoming signaling blob (base64-encoded SDP)
-    /// received from the peer. `title` labels which blob is expected.
-    request: async func(title: string) -> string;
-
-    /// Emit a human-readable status line (progress, the received message, …).
-    status: func(message: string);
-}
-
-/// The exported entry point for the manual-signaling demo components.
-interface manual-demo {
-    use wasi:webrtc-data-channels/types@0.1.0.{error};
-
-    /// Which half of the exchange this peer drives. The offerer produces the
-    /// SDP offer first; the answerer waits for it and replies with an answer.
-    enum role {
-        offerer,
-        answerer,
-    }
-
-    /// The outcome of a manual-signaling run.
-    record round-trip {
-        /// True once the data channel opened and a message was exchanged.
-        connected: bool,
-        /// The message received from the peer over the data channel.
-        peer-message: string,
-    }
-
-    /// Drive a full manual-signaling connection as `as-role`: exchange the
-    /// offer/answer blobs (via stdio or the `prompt` import), open the data
-    /// channel, and send/receive one message to prove the round trip.
-    run: async func(as-role: role) -> result<round-trip, error>;
-}
-
-/// The browser manual-signaling demo world: the guest drives `manual-signaling`
-/// and does its user I/O through the `prompt` import (a web form).
-world browser-signaling-demo {
-    import wasi:webrtc-data-channels/manual-signaling@0.1.0;
-    import prompt;
-    export manual-demo;
-}
-
-/// Host-facing world: the WebRTC imports a native manual-signaling host must
-/// provide. The Wasmtime CLI host bindgens this to satisfy the guest's
-/// `manual-signaling` import; the guest's `wasi:cli@0.3` imports/exports are
-/// provided separately by `wasmtime-wasi`.
-world manual-signaling-host {
-    import wasi:webrtc-data-channels/manual-signaling@0.1.0;
-}
-
 /// The world implemented by the example component and driven by both hosts.
 world webrtc-echo-demo {
     import connect;

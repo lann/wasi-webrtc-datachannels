@@ -39,31 +39,43 @@ starter's examples first.
 ## Repository layout
 
 ```
-wit/                                   # single source of truth for all WIT
-  webrtc-echo-demo.wit                 #   demo:webrtc-echo package (demo-only)
-  deps/webrtc-data-channels/webrtc.wit #   wasi:webrtc-data-channels package (reusable)
+wit/                                   # reusable wasi:webrtc-data-channels package
+  webrtc.wit                           #   types, data-channels, manual-signaling, signaling
 components/echo-demo/                   # example guest component (Rust)
-  wit -> ../../wit                     #   symlink to the canonical wit/
+  wit/                                 #   demo-only WIT for this component
+    webrtc-echo-demo.wit               #     demo:webrtc-echo (connect, rendezvous, demo)
+    deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
+components/cli-signaling/               # manual-signaling CLI guest component (Rust)
+  wit/                                 #   demo-only WIT for this component
+    webrtc-echo-demo.wit               #     demo:webrtc-echo (prompt, manual-demo, worlds)
+    deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
 hosts/node/                            # browser-first host (Node + jco + @roamhq/wrtc)
-hosts/wasmtime/                        # native host (Wasmtime + webrtc-rs)
-  wit -> ../../wit                     #   symlink to the canonical wit/
+hosts/wasmtime/                        # native host (Wasmtime + webrtc-rs); bindgens the
+                                       #   component wit dirs directly (no wit/ of its own)
 ```
 
-### WIT is deduplicated — edit it in one place
+### WIT is organized by ownership — one copy of the reusable package
 
-There is exactly **one** copy of the WIT, under [`wit/`](wit). The component and
-the Wasmtime host reach it through `wit` **symlinks** back to the root, so an
-edit under `wit/` is picked up everywhere with no copying. Do **not** replace
-those symlinks with real directories or reintroduce per-crate copies.
+The reusable **`wasi:webrtc-data-channels`** package is defined exactly once, at
+the root [`wit/`](wit). Each demo component owns its **demo-only** WIT under its
+own `components/<name>/wit/` and pulls the reusable package in through a
+`wit/deps/wasi-webrtc-data-channels` **symlink** back to the root, so there is a
+single copy of the shared surface to edit. Do **not** copy the root package into
+a component or replace those `deps` symlinks with real directories.
 
 The WIT is split into two packages, keeping the reusable and demo-only surfaces
 separate:
 
-- **`wasi:webrtc-data-channels`** (`wit/deps/webrtc-data-channels/webrtc.wit`) —
-  the reusable interfaces: `types`, `data-channels`, and the
+- **`wasi:webrtc-data-channels`** (`wit/webrtc.wit`) — the reusable interfaces:
+  `types`, `data-channels`, the vanilla `manual-signaling` surface, and the
   `RTCPeerConnection`-style `signaling` design target.
-- **`demo:webrtc-echo`** (`wit/webrtc-echo-demo.wit`) — the demo-only
-  interfaces (`connect`, `rendezvous`, `demo`) and the `webrtc-echo-demo` world.
+- **`demo:webrtc-echo`** — the demo-only interfaces, split across the demo
+  components that use them:
+  - `components/echo-demo/wit/webrtc-echo-demo.wit` — `connect`, `rendezvous`,
+    `demo`, and the `webrtc-echo-demo` world.
+  - `components/cli-signaling/wit/webrtc-echo-demo.wit` — `prompt`,
+    `manual-demo`, and the `browser-signaling-demo` / `manual-signaling-host`
+    worlds.
 
 Cross-package `use` must include the version, e.g.
 `use wasi:webrtc-data-channels/types@0.1.0.{error}`.
@@ -71,8 +83,10 @@ Cross-package `use` must include the version, e.g.
 Changing an interface identifier (package, interface, or function name) means
 updating the consumers that name them as strings:
 
-- the guest bindings in `components/echo-demo/src/lib.rs`,
-- the Wasmtime host bindings in `hosts/wasmtime/src/main.rs`, and
+- the guest bindings in `components/echo-demo/src/lib.rs` and
+  `components/cli-signaling/src/lib.rs`,
+- the Wasmtime host bindings in `hosts/wasmtime/src/main.rs` and
+  `hosts/wasmtime/src/bin/cli-signaling.rs`, and
 - the `jco transpile` `--async-exports` / `--async-imports` / `--map` flags in
   `hosts/node/package.json`.
 
@@ -94,7 +108,8 @@ cd ../wasmtime && cargo run --release -- \
 ```
 
 Validate what you touch: `cargo build` the crate(s) you changed, `wasm-tools
-component wit wit/` after WIT edits, and re-run the Node transpile when the
+component wit` on each wit dir you edited (the root `wit/` and/or the affected
+`components/<name>/wit/`) after WIT edits, and re-run the Node transpile when the
 component's interfaces change. Keep the two hosts producing the same result.
 
 ## Real signaling (`rendezvous` + `wasi:http@0.3`) — direction

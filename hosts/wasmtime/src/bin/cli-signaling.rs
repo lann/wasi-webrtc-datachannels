@@ -27,7 +27,7 @@ use wasmtime_webrtc_host::EchoDataChannel;
 
 mod bindings {
     wasmtime::component::bindgen!({
-        path: "wit",
+        path: "../../components/cli-signaling/wit",
         world: "manual-signaling-host",
         imports: {
             default: async | store | trappable,
