@@ -1,0 +1,24 @@
+[package]
+name = "cli-signaling"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# `wasip3` provides the async `wasi:cli/run` export and the `wasi:cli@0.3.0`
+# stdio imports (`stdin::read-via-stream` / `stdout::write-via-stream`) used to
+# prompt the user for the offer/answer blobs.
+wasip3 = { version = "0.7", features = ["async-spawn"] }
+# `wit-bindgen` generates the guest bindings for the imported
+# `wasi:webrtc-data-channels/manual-signaling` interface.
+wit-bindgen = { version = "0.57", features = ["async", "async-spawn"] }
+futures = { version = "0.3", default-features = false, features = ["async-await"] }
+# base64 keeps the copy/pasteable signaling blobs on a single line.
+base64 = "0.22"
+
+[profile.release]
+opt-level = "s"
+lto = true

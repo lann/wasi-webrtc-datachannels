@@ -10,6 +10,7 @@ use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use futures::channel::mpsc::{self, UnboundedReceiver};
 use webrtc::api::media_engine::MediaEngine;
+use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
@@ -23,12 +24,25 @@ pub struct EchoDataChannel {
     channel: Arc<RTCDataChannel>,
     /// Inbound messages, taken once by `receive`.
     incoming: Mutex<Option<UnboundedReceiver<Vec<u8>>>>,
-    /// Keep both peer connections alive for the channel's lifetime.
-    _near: Arc<RTCPeerConnection>,
-    _far: Arc<RTCPeerConnection>,
+    /// Keep the backing peer connection(s) alive for the channel's lifetime.
+    _keep_alive: Vec<Arc<RTCPeerConnection>>,
 }
 
 impl EchoDataChannel {
+    /// Wrap an open data channel and its inbound-message receiver, retaining the
+    /// given peer connections so they outlive the channel.
+    pub fn new(
+        channel: Arc<RTCDataChannel>,
+        incoming: UnboundedReceiver<Vec<u8>>,
+        keep_alive: Vec<Arc<RTCPeerConnection>>,
+    ) -> Self {
+        Self {
+            channel,
+            incoming: Mutex::new(Some(incoming)),
+            _keep_alive: keep_alive,
+        }
+    }
+
     pub fn label(&self) -> String {
         self.channel.label().to_string()
     }
@@ -48,10 +62,19 @@ async fn new_peer_connection() -> Result<Arc<RTCPeerConnection>> {
     // media engine; a default one is sufficient for SCTP.
     let _ = &mut media;
     let registry = Registry::new();
-    let api = APIBuilder::new()
+    let mut builder = APIBuilder::new()
         .with_media_engine(media)
-        .with_interceptor_registry(registry)
-        .build();
+        .with_interceptor_registry(registry);
+    // When two peers run on the *same* host (as in the local demos and tests),
+    // their only mutually reachable addresses may be loopback. webrtc-rs omits
+    // loopback candidates by default, so opt in when asked. Harmless for real
+    // cross-host use (the loopback pair simply never succeeds there).
+    if std::env::var_os("WEBRTC_INCLUDE_LOOPBACK").is_some() {
+        let mut setting = SettingEngine::default();
+        setting.set_include_loopback_candidate(true);
+        builder = builder.with_setting_engine(setting);
+    }
+    let api = builder.build();
     let config = RTCConfiguration::default();
     Ok(Arc::new(api.new_peer_connection(config).await?))
 }
@@ -143,12 +166,14 @@ pub async fn build_echo(
         .await
         .map_err(|_| anyhow!("data channel closed before opening"))?;
 
-    Ok(EchoDataChannel {
-        channel,
-        incoming: Mutex::new(Some(in_rx)),
-        _near: near,
-        _far: far,
-    })
+    Ok(EchoDataChannel::new(channel, in_rx, vec![near, far]))
+}
+
+/// Create a peer connection with a default configuration (host ICE candidates
+/// only — sufficient for two local processes). Shared by the echo endpoint and
+/// the manual-signaling host.
+pub async fn new_peer_connection_pub() -> Result<Arc<RTCPeerConnection>> {
+    new_peer_connection().await
 }
 
 /// Send one message over a data channel.
