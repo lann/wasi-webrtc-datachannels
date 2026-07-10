@@ -1,0 +1,32 @@
+// Test-only guest world exercising the reusable `manual-signaling` and
+// `data-channels` interfaces implemented by the crate under test.
+package test:webrtc-manual-signaling;
+
+/// The exported test entry point.
+interface runner {
+    use wasi:webrtc-data-channels/types@0.1.0.{error};
+
+    /// The outcome of one manual-signaling round trip.
+    record report {
+        /// The label reported by the connected data channel.
+        label: string,
+        /// Number of messages the guest pushed into the offerer's `send` stream.
+        sent: u32,
+        /// Number of messages read back from the answerer's `receive` stream.
+        received: u32,
+        /// Total bytes read back from the answerer's `receive` stream.
+        bytes: u64,
+    }
+
+    /// Stand up an offerer and an answerer `peer-connection` in-process, run the
+    /// vanilla offer/answer exchange, open the data channel, then send
+    /// `count` messages of `size` bytes from the offerer and read them all back
+    /// on the answerer. Proves the crate's `manual-signaling` + `data-channels`
+    /// host implementation round-trips a real WebRTC/SCTP connection.
+    run: async func(count: u32, size: u32) -> result<report, error>;
+}
+
+world manual-signaling-test {
+    import wasi:webrtc-data-channels/manual-signaling@0.1.0;
+    export runner;
+}

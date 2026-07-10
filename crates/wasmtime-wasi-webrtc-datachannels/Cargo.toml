@@ -1,0 +1,28 @@
+[package]
+name = "wasmtime-wasi-webrtc-datachannels"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Reusable Wasmtime host implementation of the wasi:webrtc-data-channels interfaces, backed by webrtc-rs."
+
+[dependencies]
+# Wasmtime with component-model async (streams/futures) support. The
+# `component-model-async` feature gates the host `StreamReader`/`StreamProducer`
+# API used here.
+wasmtime = { version = "46", features = ["component-model", "component-model-async", "async", "runtime"] }
+# `webrtc-rs`: a pure-Rust WebRTC stack. Provides the RTCPeerConnection /
+# RTCDataChannel implementation that backs the host's data channels.
+webrtc = "0.17"
+futures = "0.3"
+anyhow = "1"
+bytes = "1"
+
+[dev-dependencies]
+# The integration tests instantiate a guest component under Wasmtime, so they
+# need a full engine (cranelift) plus a tokio runtime to drive webrtc-rs.
+wasmtime = { version = "46", features = ["component-model", "component-model-async", "async", "cranelift", "runtime"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+# Used to turn the compiled guest core module into a component in-process,
+# avoiding a dependency on the `wasm-tools` binary at test time.
+wit-component = "0.247"
+anyhow = "1"
