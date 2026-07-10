@@ -41,6 +41,9 @@ starter's examples first.
 ```
 wit/                                   # reusable wasi:webrtc-data-channels package
   webrtc.wit                           #   types, data-channels, manual-signaling, signaling
+crates/wasmtime-wasi-webrtc-datachannels/  # reusable Wasmtime host crate (webrtc-rs),
+                                       #   modeled after wasmtime_wasi_http::p3;
+                                       #   p3::add_to_linker + WasiWebrtcView + integration tests
 components/echo-demo/                   # example guest component (Rust)
   wit/                                 #   demo-only WIT for this component
     webrtc-echo-demo.wit               #     demo:webrtc-echo (connect, rendezvous, demo)
@@ -50,8 +53,9 @@ components/cli-signaling/               # manual-signaling CLI guest component (
     webrtc-echo-demo.wit               #     demo:webrtc-echo (prompt, manual-demo, worlds)
     deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
 hosts/node/                            # browser-first host (Node + jco + @roamhq/wrtc)
-hosts/wasmtime/                        # native host (Wasmtime + webrtc-rs); bindgens the
-                                       #   component wit dirs directly (no wit/ of its own)
+hosts/wasmtime/                        # native host binaries (Wasmtime + webrtc-rs); the
+                                       #   reusable host lives in the crate above, and these
+                                       #   binaries add only the demo-only glue on top of it
 ```
 
 ### WIT is organized by ownership — one copy of the reusable package
@@ -85,6 +89,10 @@ updating the consumers that name them as strings:
 
 - the guest bindings in `components/echo-demo/src/lib.rs` and
   `components/cli-signaling/src/lib.rs`,
+- the reusable host bindings in
+  `crates/wasmtime-wasi-webrtc-datachannels/src/p3/bindings.rs` (whose
+  `wit/world.wit` also pulls in the root package through a
+  `deps/wasi-webrtc-data-channels` symlink),
 - the Wasmtime host bindings in `hosts/wasmtime/src/main.rs` and
   `hosts/wasmtime/src/bin/cli-signaling.rs`, and
 - the `jco transpile` `--async-exports` / `--async-imports` / `--map` flags in
@@ -103,14 +111,20 @@ cd hosts/node && npm install && npm run build:component
 npm run transpile && node --experimental-wasm-jspi src/run.mjs
 
 # Wasmtime (native) host:
-cd ../wasmtime && cargo run --release -- \
+cd ../wasmtime && cargo run --release --bin wasmtime-webrtc-host -- \
   ../../components/echo-demo/build/echo-demo.component.wasm 1000 4096
+
+# Reusable host crate integration tests (builds a guest, drives a real
+# webrtc-rs manual-signaling round trip):
+cd ../../crates/wasmtime-wasi-webrtc-datachannels && cargo test
 ```
 
 Validate what you touch: `cargo build` the crate(s) you changed, `wasm-tools
 component wit` on each wit dir you edited (the root `wit/` and/or the affected
 `components/<name>/wit/`) after WIT edits, and re-run the Node transpile when the
-component's interfaces change. Keep the two hosts producing the same result.
+component's interfaces change. When you touch the reusable Wasmtime host, run
+`cargo test` in `crates/wasmtime-wasi-webrtc-datachannels`. Keep the two hosts
+producing the same result.
 
 ## Real signaling (`rendezvous` + `wasi:http@0.3`) — direction
 

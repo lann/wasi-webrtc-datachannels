@@ -24,8 +24,9 @@ does it cost?"* — and the answer is **yes** (see [Findings](#findings)).
 | --- | --- |
 | [`wit/`](wit) | The reusable streaming **WIT interface**, the `wasi:webrtc-data-channels@0.1.0` package. Each demo component keeps its own demo-only WIT and symlinks this package in as a dependency. |
 | [`components/echo-demo`](components/echo-demo) | A **Rust example component** exercising a data channel entirely through streams. |
+| [`crates/wasmtime-wasi-webrtc-datachannels`](crates/wasmtime-wasi-webrtc-datachannels) | The **reusable Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `p3::add_to_linker` + `WasiWebrtcView` and carries the integration tests. |
 | [`hosts/node`](hosts/node) | The **browser-first host** (Node stand-in for the browser). |
-| [`hosts/wasmtime`](hosts/wasmtime) | The **native Rust host** (Wasmtime + webrtc-rs). |
+| [`hosts/wasmtime`](hosts/wasmtime) | The **native Rust host** binaries (Wasmtime + webrtc-rs), built on the crate above. |
 | [`AGENTS.md`](AGENTS.md) | Orientation for agents/contributors, linking the `lann/wasm-component-starter` knowledge base. |
 
 The same `echo-demo.component.wasm` produced from `components/echo-demo` is
@@ -116,7 +117,7 @@ SDP/ICE handshake, and echoes on the far side.
 
 ```sh
 cd hosts/wasmtime
-cargo run --release -- ../../components/echo-demo/build/echo-demo.component.wasm 1000 4096
+cargo run --release --bin wasmtime-webrtc-host -- ../../components/echo-demo/build/echo-demo.component.wasm 1000 4096
 #                                                                    ^msg count ^msg size
 ```
 
@@ -161,6 +162,8 @@ Notes and caveats (this is a spike):
 ```
 wit/                            # reusable wasi:webrtc-data-channels package
   webrtc.wit                    #   types, data-channels, manual-signaling, signaling
+crates/wasmtime-wasi-webrtc-datachannels/  # reusable Wasmtime host crate (webrtc-rs),
+                                #   p3::add_to_linker + WasiWebrtcView + integration tests
 components/echo-demo/            # example guest component (Rust)
   wit/                          #   demo-only WIT for this component
     webrtc-echo-demo.wit        #     demo:webrtc-echo (connect, rendezvous, demo, world)
@@ -170,12 +173,14 @@ components/cli-signaling/        # manual-signaling CLI guest component (Rust)
     webrtc-echo-demo.wit        #     demo:webrtc-echo (prompt, manual-demo, manual-signaling worlds)
     deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
 hosts/node/                      # browser-first host (Node + jco + @roamhq/wrtc)
-hosts/wasmtime/                  # native host (Wasmtime + webrtc-rs); bindgens the
-                                 #   component wit dirs directly
+hosts/wasmtime/                  # native host binaries (Wasmtime + webrtc-rs), built on
+                                 #   crates/wasmtime-wasi-webrtc-datachannels
 ```
 
 The reusable `wasi:webrtc-data-channels` package is defined once at the root
 [`wit/`](wit); each demo component symlinks it in under
 `wit/deps/wasi-webrtc-data-channels` and keeps its own demo-only WIT next to it.
 The Node host reads the WIT embedded in the built component, so it needs no
-`wit/` of its own; the Wasmtime host bindgens the component wit dirs directly.
+`wit/` of its own; the Wasmtime host binaries bindgen the demo component wit
+dirs directly, and delegate the reusable `data-channels`/`manual-signaling`
+surface to `crates/wasmtime-wasi-webrtc-datachannels`.

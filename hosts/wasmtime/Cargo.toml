@@ -5,16 +5,17 @@ edition = "2021"
 publish = false
 
 [dependencies]
+# The reusable `wasi:webrtc-data-channels` host implementation (data channels,
+# manual signaling, and the stream/pipe plumbing) lives in this crate. Both
+# binaries obtain their WebRTC imports from its `add_to_linker`.
+wasmtime-wasi-webrtc-datachannels = { path = "../../crates/wasmtime-wasi-webrtc-datachannels" }
 # Wasmtime with component-model async (streams/futures) support. The
 # `component-model-async` feature gates the `Config::wasm_component_model_async*`
 # switches and the host `StreamReader`/`StreamProducer` API used here.
 wasmtime = { version = "46", features = ["component-model", "component-model-async", "async", "cranelift", "runtime"] }
 wasmtime-wasi = { version = "46", features = ["p3"] }
-# `webrtc-rs`: a pure-Rust WebRTC stack. Provides the RTCPeerConnection /
-# RTCDataChannel implementation that backs the host's echo endpoint.
-webrtc = "0.17"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 futures = "0.3"
 anyhow = "1"
-bytes = "1"
 env_logger = "0.11.11"
+

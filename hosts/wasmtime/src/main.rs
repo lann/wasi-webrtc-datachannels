@@ -2,16 +2,17 @@
 //! pure-Rust `webrtc-rs` stack.
 //!
 //! It is the non-browser counterpart to the Node host: it loads the same
-//! `echo-demo` component, satisfies the `wasi:webrtc-data-channels` imports with
-//! a real WebRTC/SCTP data channel (see [`webrtc`]), and invokes the component's
-//! exported async `run`. The guest's outbound/inbound `stream<list<u8>>`s are
-//! bridged to `webrtc-rs` via the [`pipe`] adapters.
+//! `echo-demo` component and invokes the component's exported async `run`. The
+//! reusable `wasi:webrtc-data-channels` imports (`types`, `data-channels`) are
+//! satisfied by [`wasmtime_wasi_webrtc_datachannels`]; this binary only
+//! implements the demo-only `connect` convenience, which wires a channel to a
+//! host-provided echo endpoint via [`build_echo`].
 
-use futures::channel::mpsc;
-use futures::StreamExt;
-use wasmtime::component::HasData;
-use wasmtime::component::{Accessor, Component, Linker, Resource, ResourceTable, StreamReader};
+use wasmtime::component::{Accessor, Component, HasData, Linker, Resource, ResourceTable};
 use wasmtime::{Config, Engine, Result, Store};
+use wasmtime_wasi_webrtc_datachannels::p3::{
+    self as webrtc, build_echo, DataChannel, WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
+};
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -24,16 +25,16 @@ mod bindings {
             default: async,
         },
         with: {
-            "wasi:webrtc-data-channels/data-channels.data-channel": wasmtime_webrtc_host::EchoDataChannel,
+            "wasi:webrtc-data-channels/data-channels.data-channel":
+                wasmtime_wasi_webrtc_datachannels::p3::DataChannel,
         },
     });
 }
 
 use bindings::wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
-use wasmtime_webrtc_host::pipe::{PipeConsumer, PipeProducer};
-use wasmtime_webrtc_host::{webrtc, EchoDataChannel};
 
 struct Ctx {
+    webrtc: WasiWebrtcCtx,
     table: ResourceTable,
 }
 
@@ -41,75 +42,31 @@ impl HasData for Ctx {
     type Data<'a> = &'a mut Self;
 }
 
-impl bindings::wasi::webrtc_data_channels::types::Host for Ctx {}
+impl WasiWebrtcView for Ctx {
+    fn webrtc(&mut self) -> WasiWebrtcCtxView<'_> {
+        WasiWebrtcCtxView {
+            ctx: &mut self.webrtc,
+            table: &mut self.table,
+        }
+    }
+}
 
+// The demo-only `connect` convenience is implemented here; the reusable
+// `data-channels`/`types` imports come from the crate's `add_to_linker`.
 impl bindings::demo::webrtc_echo::connect::Host for Ctx {}
 
 impl<T> bindings::demo::webrtc_echo::connect::HostWithStore<T> for Ctx {
     async fn open_echo(
         accessor: &Accessor<T, Self>,
         options: DataChannelOptions,
-    ) -> Result<std::result::Result<Resource<EchoDataChannel>, Error>> {
-        let echo = match webrtc::build_echo(&options.label, options.ordered, options.max_retransmits)
-            .await
+    ) -> Result<std::result::Result<Resource<DataChannel>, Error>> {
+        let echo = match build_echo(&options.label, options.ordered, options.max_retransmits).await
         {
             Ok(echo) => echo,
             Err(err) => return Ok(Err(Error::Other(err.to_string()))),
         };
         let resource = accessor.with(|mut access| access.get().table.push(echo))?;
         Ok(Ok(resource))
-    }
-}
-
-impl bindings::wasi::webrtc_data_channels::data_channels::Host for Ctx {}
-
-impl bindings::wasi::webrtc_data_channels::data_channels::HostDataChannel for Ctx {}
-
-impl<T> bindings::wasi::webrtc_data_channels::data_channels::HostDataChannelWithStore<T> for Ctx {
-    async fn label(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<EchoDataChannel>,
-    ) -> Result<String> {
-        accessor.with(|mut access| Ok(access.get().table.get(&self_)?.label()))
-    }
-
-    async fn send(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<EchoDataChannel>,
-        messages: StreamReader<Vec<u8>>,
-    ) -> Result<std::result::Result<(), Error>> {
-        let channel =
-            accessor.with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.channel()))?;
-
-        // Drain the guest's outbound stream into an mpsc sink, then forward each
-        // message to the WebRTC data channel, awaiting the transport.
-        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
-        accessor.with(move |access| messages.pipe(access, PipeConsumer::new(tx)))?;
-
-        while let Some(message) = rx.next().await {
-            if let Err(err) = webrtc::send_message(&channel, message).await {
-                return Ok(Err(Error::Other(err.to_string())));
-            }
-        }
-        Ok(Ok(()))
-    }
-
-    async fn receive(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<EchoDataChannel>,
-    ) -> Result<StreamReader<Vec<u8>>> {
-        let incoming = accessor
-            .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.take_incoming()))?;
-        let incoming =
-            incoming.ok_or_else(|| wasmtime::Error::msg("receive() may only be called once per channel"))?;
-        accessor.with(|access| StreamReader::new(access, PipeProducer::new(incoming)))
-    }
-
-    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<EchoDataChannel>) -> Result<()> {
-        accessor.with(|mut access| {
-            access.get().table.delete(rep)?;
-            Ok(())
-        })
     }
 }
 
@@ -137,9 +94,18 @@ async fn main() -> Result<()> {
     let engine = engine()?;
     let component = Component::from_file(&engine, &path)?;
     let mut linker: Linker<Ctx> = Linker::new(&engine);
-    bindings::WebrtcEchoDemo::add_to_linker::<_, Ctx>(&mut linker, |c| c)?;
+    // Reusable `wasi:webrtc-data-channels` imports.
+    webrtc::add_to_linker(&mut linker)?;
+    // Demo-only `connect` import.
+    bindings::demo::webrtc_echo::connect::add_to_linker::<_, Ctx>(&mut linker, |c| c)?;
 
-    let mut store = Store::new(&engine, Ctx { table: ResourceTable::new() });
+    let mut store = Store::new(
+        &engine,
+        Ctx {
+            webrtc: WasiWebrtcCtx::new(),
+            table: ResourceTable::new(),
+        },
+    );
     let demo = bindings::WebrtcEchoDemo::instantiate_async(&mut store, &component, &linker).await?;
 
     let started = std::time::Instant::now();

@@ -3484,17 +3484,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmtime-webrtc-host"
+name = "wasmtime-wasi-webrtc-datachannels"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "futures",
+ "wasmtime",
+ "webrtc",
+]
+
+[[package]]
+name = "wasmtime-webrtc-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "env_logger",
  "futures",
  "tokio",
  "wasmtime",
  "wasmtime-wasi",
- "webrtc",
+ "wasmtime-wasi-webrtc-datachannels",
 ]
 
 [[package]]
