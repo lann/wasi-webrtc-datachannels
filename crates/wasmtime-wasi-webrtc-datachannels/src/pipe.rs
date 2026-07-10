@@ -2,8 +2,8 @@
 //! component-model host streams to `futures` `Stream`/`Sink`s.
 //!
 //! These mirror the helpers in Wasmtime's own `component-async-tests` and let
-//! the host feed a `StreamReader` from an mpsc receiver (`PipeProducer`) or
-//! drain a `StreamReader` into an mpsc sender (`PipeConsumer`).
+//! the host feed a `StreamReader` from an mpsc receiver ([`PipeProducer`]) or
+//! drain a `StreamReader` into an mpsc sender ([`PipeConsumer`]).
 
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -13,10 +13,11 @@ use futures::{Sink, Stream};
 use wasmtime::component::{Destination, Source, StreamConsumer, StreamProducer, StreamResult};
 use wasmtime::{Result, StoreContextMut};
 
-/// Produce component-stream items from a `futures::Stream`.
+/// Produce component-stream items from a [`futures::Stream`].
 pub struct PipeProducer<S>(S);
 
 impl<S> PipeProducer<S> {
+    /// Wrap a `futures::Stream` as a component-model stream producer.
     pub fn new(stream: S) -> Self {
         Self(stream)
     }
@@ -56,10 +57,11 @@ where
     }
 }
 
-/// Consume component-stream items into a `futures::Sink`.
+/// Consume component-stream items into a [`futures::Sink`].
 pub struct PipeConsumer<T, S>(S, PhantomData<fn() -> T>);
 
 impl<T, S> PipeConsumer<T, S> {
+    /// Wrap a `futures::Sink` as a component-model stream consumer.
     pub fn new(sink: S) -> Self {
         Self(sink, PhantomData)
     }

@@ -1,14 +1,10 @@
-//! Shared host plumbing for the Wasmtime WebRTC hosts.
+//! Demo-only host glue for the Wasmtime WebRTC spike.
 //!
-//! Two binaries build on this library:
-//!
-//! * `main` (the default `echo` binary) — the original streaming echo demo.
-//! * `cli-signaling` — the manual-signaling CLI host, which pairs a real
-//!   `webrtc-rs` peer connection with `wasi:cli@0.3` stdio so the guest can
-//!   walk a user through a copy/paste offer/answer exchange.
+//! The reusable `wasi:webrtc-data-channels` host implementation (`types`,
+//! `data-channels`, and the stream/pipe plumbing) lives in the
+//! [`wasmtime_wasi_webrtc_datachannels`] crate. This library only carries the
+//! demo-only pieces layered on top of it — currently the `manual-signaling`
+//! host implementation, shared by the `cli-signaling` binary and the crate's
+//! integration test.
 
 pub mod manual;
-pub mod pipe;
-pub mod webrtc;
-
-pub use webrtc::EchoDataChannel;

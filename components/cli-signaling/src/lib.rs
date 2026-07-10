@@ -2,7 +2,7 @@
 //! `wasi:cli@0.3` stdio.
 //!
 //! The component drives the host-provided
-//! `wasi:webrtc-data-channels/manual-signaling` `peer-connection` with *vanilla*
+//! `demo:webrtc-echo/manual-signaling` `peer-connection` with *vanilla*
 //! (non-trickle) ICE, so a whole connection needs just two messages: the
 //! offerer prints one complete SDP offer (with all ICE candidates already
 //! embedded) and the answerer prints one complete SDP answer. Each blob is
@@ -23,13 +23,13 @@ wit_bindgen::generate!({
     inline: "
         package demo:cli-signaling-bindings;
         world cli-signaling-bindings {
-            import wasi:webrtc-data-channels/manual-signaling@0.1.0;
+            import demo:webrtc-echo/manual-signaling@0.1.0;
         }
     ",
     generate_all,
 });
 
-use wasi::webrtc_data_channels::manual_signaling::PeerConnection;
+use demo::webrtc_echo::manual_signaling::PeerConnection;
 use wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
 
 /// The label used for the negotiated data channel. Both peers observe it.

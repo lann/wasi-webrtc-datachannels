@@ -1,0 +1,193 @@
+//! Integration test for the demo-only `manual-signaling` host implementation
+//! (`hosts/wasmtime` `manual` module) on top of the reusable
+//! `wasmtime-wasi-webrtc-datachannels` crate.
+//!
+//! It builds the `manual-signaling-test` guest component, instantiates it under
+//! Wasmtime with the reusable crate's `add_to_linker` providing `types` +
+//! `data-channels` and the demo [`manual::add_to_linker`] providing
+//! `manual-signaling`, and drives a full manual-signaling round trip over a real
+//! `webrtc-rs` data channel. This exercises `manual-signaling`
+//! (`create-offer`/`create-answer`/`accept-answer`/`connect`) and the crate's
+//! `data-channels` (`label`/`send`/`receive`) host implementation.
+//!
+//! [`manual::add_to_linker`]: wasmtime_webrtc_host::manual::add_to_linker
+
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::OnceLock;
+
+use wasmtime::component::{Component, Linker, ResourceTable};
+use wasmtime::{Config, Engine, Store};
+use wasmtime_wasi_webrtc_datachannels::{WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView};
+use wasmtime_webrtc_host::manual;
+
+mod bindings {
+    wasmtime::component::bindgen!({
+        path: "tests/manual-signaling-guest/wit",
+        world: "manual-signaling-test",
+        imports: {
+            default: async | store | trappable,
+            "demo:webrtc-echo/manual-signaling@0.1.0.[constructor]peer-connection": trappable,
+            "demo:webrtc-echo/manual-signaling@0.1.0.[method]peer-connection.close": trappable,
+        },
+        exports: {
+            default: async,
+        },
+        with: {
+            "wasi:webrtc-data-channels/data-channels.data-channel":
+                wasmtime_wasi_webrtc_datachannels::DataChannel,
+            "demo:webrtc-echo/manual-signaling.peer-connection":
+                wasmtime_webrtc_host::manual::ManualPeer,
+        },
+    });
+}
+
+use bindings::exports::test::webrtc_manual_signaling::runner::Report;
+
+/// Store state: just the WebRTC context and the shared resource table.
+struct Ctx {
+    webrtc: WasiWebrtcCtx,
+    table: ResourceTable,
+}
+
+impl wasmtime::component::HasData for Ctx {
+    type Data<'a> = &'a mut Self;
+}
+
+impl WasiWebrtcView for Ctx {
+    fn webrtc(&mut self) -> WasiWebrtcCtxView<'_> {
+        WasiWebrtcCtxView {
+            ctx: &mut self.webrtc,
+            table: &mut self.table,
+        }
+    }
+}
+
+fn engine() -> Engine {
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    config.wasm_component_model_async(true);
+    Engine::new(&config).expect("engine")
+}
+
+/// Build (once per test process) the guest component and return its bytes.
+fn guest_component() -> &'static [u8] {
+    static COMPONENT: OnceLock<Vec<u8>> = OnceLock::new();
+    COMPONENT.get_or_init(build_guest_component)
+}
+
+/// Compile the `manual-signaling-test` guest for `wasm32-unknown-unknown` and
+/// encode it as a component in-process (no dependency on the `wasm-tools`
+/// binary).
+fn build_guest_component() -> Vec<u8> {
+    let guest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/manual-signaling-guest");
+    let target_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("manual-signaling-guest");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+
+    let mut command = Command::new(cargo);
+    command
+        .current_dir(&guest_dir)
+        .arg("build")
+        .arg("--release")
+        .arg("--target")
+        .arg("wasm32-unknown-unknown")
+        .arg("--target-dir")
+        .arg(&target_dir);
+
+    // The guest cross-compiles to wasm; strip env that leaks from the outer
+    // `cargo test` invocation and would otherwise break the wasm build.
+    for (key, _) in std::env::vars() {
+        if key.starts_with("CARGO_") || key == "RUSTFLAGS" {
+            command.env_remove(key);
+        }
+    }
+
+    let status = command
+        .status()
+        .expect("failed to spawn cargo to build the test guest");
+    assert!(
+        status.success(),
+        "building the manual-signaling-test guest failed; ensure the \
+         wasm32-unknown-unknown target is installed"
+    );
+
+    let module_path = target_dir
+        .join("wasm32-unknown-unknown")
+        .join("release")
+        .join("manual_signaling_test_guest.wasm");
+    let module = std::fs::read(&module_path)
+        .unwrap_or_else(|err| panic!("reading {}: {err}", module_path.display()));
+
+    wit_component::ComponentEncoder::default()
+        .validate(true)
+        .module(&module)
+        .expect("wrapping guest module as a component")
+        .encode()
+        .expect("encoding guest component")
+}
+
+async fn run_round_trip(count: u32, size: u32) -> anyhow::Result<Report> {
+    let engine = engine();
+    let component = Component::from_binary(&engine, guest_component())?;
+
+    let mut linker: Linker<Ctx> = Linker::new(&engine);
+    // Reusable `types` + `data-channels`, then the demo-only `manual-signaling`.
+    wasmtime_wasi_webrtc_datachannels::add_to_linker(&mut linker)?;
+    manual::add_to_linker(&mut linker)?;
+
+    // Two peer connections share this process; enable loopback ICE candidates
+    // through the crate's `SettingEngine` hook so they can pair even when no
+    // other local address is mutually reachable.
+    let mut webrtc = WasiWebrtcCtx::new();
+    webrtc.set_setting_engine_hook(|engine| {
+        engine.set_include_loopback_candidate(true);
+    });
+
+    let mut store = Store::new(
+        &engine,
+        Ctx {
+            webrtc,
+            table: ResourceTable::new(),
+        },
+    );
+
+    let instance =
+        bindings::ManualSignalingTest::instantiate_async(&mut store, &component, &linker).await?;
+
+    let result = store
+        .run_concurrent(async move |accessor| {
+            instance
+                .test_webrtc_manual_signaling_runner()
+                .call_run(accessor, count, size)
+                .await
+        })
+        .await??;
+
+    result.map_err(|err| anyhow::anyhow!("guest returned error: {err:?}"))
+}
+
+#[test]
+fn manual_signaling_round_trip() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+
+    let count = 64;
+    let size = 1024;
+    let report = runtime
+        .block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(60), run_round_trip(count, size))
+                .await
+        })
+        .expect("manual-signaling round trip timed out")
+        .expect("manual-signaling round trip failed");
+
+    assert_eq!(report.label, "manual-signaling-test");
+    assert_eq!(report.sent, count);
+    assert_eq!(
+        report.received, count,
+        "every message should round-trip through the data channel"
+    );
+    assert_eq!(report.bytes, u64::from(count) * u64::from(size));
+}
