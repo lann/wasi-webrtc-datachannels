@@ -15,7 +15,7 @@ use wasmtime::{Config, Engine, Result, Store};
 
 mod bindings {
     wasmtime::component::bindgen!({
-        path: "wit",
+        path: "../../components/echo-demo/wit",
         world: "webrtc-echo-demo",
         imports: {
             default: async | store | trappable,

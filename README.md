@@ -22,7 +22,7 @@ does it cost?"* — and the answer is **yes** (see [Findings](#findings)).
 
 | Path | Deliverable |
 | --- | --- |
-| [`wit/`](wit) | The streaming **WIT interface**, split into the reusable `wasi:webrtc-data-channels@0.1.0` and demo-only `demo:webrtc-echo@0.1.0` packages. |
+| [`wit/`](wit) | The reusable streaming **WIT interface**, the `wasi:webrtc-data-channels@0.1.0` package. Each demo component keeps its own demo-only WIT and symlinks this package in as a dependency. |
 | [`components/echo-demo`](components/echo-demo) | A **Rust example component** exercising a data channel entirely through streams. |
 | [`hosts/node`](hosts/node) | The **browser-first host** (Node stand-in for the browser). |
 | [`hosts/wasmtime`](hosts/wasmtime) | The **native Rust host** (Wasmtime + webrtc-rs). |
@@ -33,8 +33,10 @@ loaded by **both** hosts. That is the core compatibility result of the spike.
 
 ## The interface
 
-The WIT lives in one place, [`wit/`](wit), and is split into two packages that
-separate the reusable surface from the demo-only glue:
+The reusable interface lives at the root [`wit/`](wit) as the
+`wasi:webrtc-data-channels` package. Each demo component keeps its own demo-only
+WIT alongside it and pulls the reusable package in as a `deps` symlink, so there
+is still a single copy of the shared surface to edit:
 
 **`wasi:webrtc-data-channels`** — the reusable interfaces:
 
@@ -52,7 +54,10 @@ separate the reusable surface from the demo-only glue:
   + trickle ICE) that documents where a *guest-driven* connection API is
   headed. It is the design target and is **not** required by the runnable demo.
 
-**`demo:webrtc-echo`** — the demo-only interfaces:
+**`demo:webrtc-echo`** — the demo-only interfaces, which now live with the demo
+components that use them ([`components/echo-demo/wit`](components/echo-demo/wit)
+for the echo demo, [`components/cli-signaling/wit`](components/cli-signaling/wit)
+for the manual-signaling demos) rather than at the root:
 
 - **`connect`** — a convenience used by the demo: `open-echo` returns a channel
   wired to a host-provided echo endpoint, so the example can focus on the
@@ -154,18 +159,23 @@ Notes and caveats (this is a spike):
 ## Layout
 
 ```
-wit/                            # the interface (single source of truth)
-  webrtc-echo-demo.wit          #   demo:webrtc-echo package (connect, rendezvous, demo, world)
-  deps/webrtc-data-channels/
-    webrtc.wit                  #   wasi:webrtc-data-channels package (types, data-channels, signaling)
+wit/                            # reusable wasi:webrtc-data-channels package
+  webrtc.wit                    #   types, data-channels, manual-signaling, signaling
 components/echo-demo/            # example guest component (Rust)
-  wit -> ../../wit              #   symlink to the canonical wit/
+  wit/                          #   demo-only WIT for this component
+    webrtc-echo-demo.wit        #     demo:webrtc-echo (connect, rendezvous, demo, world)
+    deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
+components/cli-signaling/        # manual-signaling CLI guest component (Rust)
+  wit/                          #   demo-only WIT for this component
+    webrtc-echo-demo.wit        #     demo:webrtc-echo (prompt, manual-demo, manual-signaling worlds)
+    deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
 hosts/node/                      # browser-first host (Node + jco + @roamhq/wrtc)
-hosts/wasmtime/                  # native host (Wasmtime + webrtc-rs)
-  wit -> ../../wit              #   symlink to the canonical wit/
+hosts/wasmtime/                  # native host (Wasmtime + webrtc-rs); bindgens the
+                                 #   component wit dirs directly
 ```
 
-The WIT is no longer duplicated: the component and the Wasmtime host reach the
-canonical [`wit/`](wit) tree through `wit` symlinks, so there is a single copy
-to edit. (The Node host reads the WIT embedded in the built component, so it
-needs no `wit/` of its own.)
+The reusable `wasi:webrtc-data-channels` package is defined once at the root
+[`wit/`](wit); each demo component symlinks it in under
+`wit/deps/wasi-webrtc-data-channels` and keeps its own demo-only WIT next to it.
+The Node host reads the WIT embedded in the built component, so it needs no
+`wit/` of its own; the Wasmtime host bindgens the component wit dirs directly.
