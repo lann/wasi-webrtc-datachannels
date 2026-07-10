@@ -55,6 +55,59 @@ interface data-channels {
     }
 }
 
+/// A minimal, *vanilla* (non-trickle) signaling surface for manual copy/paste
+/// connection setup.
+///
+/// Unlike `signaling` (the full trickle-ICE design target), this interface
+/// gathers ICE candidates up front so a whole connection needs just **two**
+/// messages: the offerer sends one complete SDP offer (with every candidate
+/// already embedded), and the answerer replies with one complete SDP answer
+/// (likewise). That is exactly the shape a human can move between two peers by
+/// hand — print/copy the offer, paste it into the other side, copy the answer
+/// back — which is what the demo `cli-signaling` and `browser-signaling`
+/// components do.
+///
+/// The strings crossing this boundary are raw SDP. Any transport encoding for
+/// human copy/paste (for example base64) is the guest's concern; the demo
+/// components base64-encode these blobs before showing them to the user.
+interface manual-signaling {
+    use types.{error, data-channel-options};
+    use data-channels.{data-channel};
+
+    /// A peer connection driven with vanilla (non-trickle) ICE.
+    ///
+    /// Typical offerer flow:
+    ///   `create-offer` → show the offer → read the peer's answer →
+    ///   `accept-answer` → `connect`.
+    /// Typical answerer flow:
+    ///   read the peer's offer → `create-answer` → show the answer → `connect`.
+    resource peer-connection {
+        constructor();
+
+        /// (Offerer) Create the data channel to negotiate, produce an SDP offer,
+        /// apply it locally, and block until ICE gathering completes so the
+        /// returned SDP already contains every local candidate. The result is
+        /// the single blob the offerer hands to the peer.
+        create-offer: async func(options: data-channel-options) -> result<string, error>;
+
+        /// (Offerer) Apply the peer's complete SDP answer.
+        accept-answer: async func(answer: string) -> result<_, error>;
+
+        /// (Answerer) Apply the peer's complete SDP offer, produce an SDP
+        /// answer, apply it locally, and block until ICE gathering completes so
+        /// the returned SDP already contains every local candidate. The result
+        /// is the single blob the answerer hands back to the peer.
+        create-answer: async func(offer: string) -> result<string, error>;
+
+        /// Resolve once the connection is established, yielding the negotiated
+        /// data channel (the one the offerer created and the answerer received).
+        connect: async func() -> result<data-channel, error>;
+
+        /// Close the peer connection and its data channel.
+        close: func();
+    }
+}
+
 /// The full RTCPeerConnection-style signaling surface.
 ///
 /// This is the design target for the interface and is intended to be iterated

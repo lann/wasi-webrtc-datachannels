@@ -7,17 +7,11 @@
 //! exported async `run`. The guest's outbound/inbound `stream<list<u8>>`s are
 //! bridged to `webrtc-rs` via the [`pipe`] adapters.
 
-mod pipe;
-mod webrtc;
-
 use futures::channel::mpsc;
 use futures::StreamExt;
 use wasmtime::component::HasData;
 use wasmtime::component::{Accessor, Component, Linker, Resource, ResourceTable, StreamReader};
 use wasmtime::{Config, Engine, Result, Store};
-
-use pipe::{PipeConsumer, PipeProducer};
-pub use webrtc::EchoDataChannel;
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -30,12 +24,14 @@ mod bindings {
             default: async,
         },
         with: {
-            "wasi:webrtc-data-channels/data-channels.data-channel": super::EchoDataChannel,
+            "wasi:webrtc-data-channels/data-channels.data-channel": wasmtime_webrtc_host::EchoDataChannel,
         },
     });
 }
 
 use bindings::wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
+use wasmtime_webrtc_host::pipe::{PipeConsumer, PipeProducer};
+use wasmtime_webrtc_host::{webrtc, EchoDataChannel};
 
 struct Ctx {
     table: ResourceTable,
