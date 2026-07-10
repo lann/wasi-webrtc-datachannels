@@ -1,24 +1,79 @@
-//! The `webrtc-rs`-backed manual-signaling [`ManualPeer`].
+//! Demo-only `manual-signaling` host implementation, backed by `webrtc-rs`.
 //!
-//! This backs the `wasi:webrtc-data-channels/manual-signaling` `peer-connection`
+//! `manual-signaling` is a demo-only interface (`demo:webrtc-echo`), so its host
+//! implementation lives here rather than in the reusable
+//! `wasmtime-wasi-webrtc-datachannels` crate. It backs the `peer-connection`
 //! resource with a real `webrtc-rs` [`RTCPeerConnection`], using *vanilla*
 //! (non-trickle) ICE: after applying a local description, we wait for ICE
 //! gathering to complete and read back the local description, which then already
 //! contains every gathered candidate. That is what lets the whole exchange be
 //! just two complete SDP blobs (offer, answer).
+//!
+//! Data channels it hands back are the reusable crate's [`DataChannel`], so the
+//! same crate `add_to_linker` that satisfies `data-channels` also drives the
+//! `send`/`receive` on channels this interface produces.
 
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
 use futures::channel::mpsc::{self, UnboundedReceiver};
 use futures::channel::oneshot;
+use wasmtime::component::{Accessor, HasData, Linker, Resource};
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
-use crate::p3::data_channel::{new_peer_connection, DataChannel};
+use wasmtime_wasi_webrtc_datachannels::{
+    new_peer_connection, DataChannel, SettingEngineHook, WasiWebrtcCtxView, WasiWebrtcView,
+};
+
+mod bindings {
+    wasmtime::component::bindgen!({
+        path: "../../components/cli-signaling/wit",
+        world: "manual-signaling-host",
+        imports: {
+            // The async signaling methods use the component-model async ABI and
+            // need `Accessor` access to the store.
+            default: async | store | trappable,
+            // A resource `constructor` cannot use the async ABI, and `close` is
+            // a synchronous WIT function, so both are bound synchronously.
+            "demo:webrtc-echo/manual-signaling@0.1.0.[constructor]peer-connection": trappable,
+            "demo:webrtc-echo/manual-signaling@0.1.0.[method]peer-connection.close": trappable,
+        },
+        with: {
+            "wasi:webrtc-data-channels/data-channels.data-channel":
+                wasmtime_wasi_webrtc_datachannels::DataChannel,
+            "demo:webrtc-echo/manual-signaling.peer-connection": super::ManualPeer,
+        },
+    });
+}
+
+use bindings::demo::webrtc_echo::manual_signaling::{
+    self, HostPeerConnection, HostPeerConnectionWithStore,
+};
+use bindings::wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
+
+/// [`HasData`] marker for the demo-only `manual-signaling` host bindings.
+struct ManualSignaling;
+
+impl HasData for ManualSignaling {
+    type Data<'a> = WasiWebrtcCtxView<'a>;
+}
+
+/// Add the demo-only `demo:webrtc-echo/manual-signaling` interface to `linker`.
+///
+/// The reusable `data-channels`/`types` imports must be provided separately by
+/// [`wasmtime_wasi_webrtc_datachannels::add_to_linker`]; the channels this
+/// interface returns are that crate's [`DataChannel`].
+pub fn add_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
+where
+    T: WasiWebrtcView + 'static,
+{
+    manual_signaling::add_to_linker::<_, ManualSignaling>(linker, T::webrtc)?;
+    Ok(())
+}
 
 /// Everything captured for the negotiated data channel.
 #[derive(Default)]
@@ -46,28 +101,39 @@ pub struct ManualPeer {
     /// `on_data_channel` and populated `negotiated`. `None` for the offerer,
     /// which creates its channel synchronously in `create_offer`.
     channel_arrived: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
+    /// Hook applied to each peer connection's `SettingEngine` (e.g. to enable
+    /// loopback ICE candidates for two same-host peers).
+    setting_engine_hook: Option<SettingEngineHook>,
 }
 
 impl Default for ManualPeer {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
 impl ManualPeer {
     /// Construct an uninitialized peer (the resource `constructor`). The backing
-    /// `RTCPeerConnection` is created on first use.
-    pub fn new() -> Self {
+    /// `RTCPeerConnection` is created on first use, with `setting_engine_hook`
+    /// applied to its `SettingEngine`.
+    pub fn new(setting_engine_hook: Option<SettingEngineHook>) -> Self {
         Self {
             pc: Arc::new(Mutex::new(None)),
             negotiated: Arc::new(Mutex::new(Negotiated::default())),
             channel_arrived: Arc::new(Mutex::new(None)),
+            setting_engine_hook,
         }
     }
 
     /// Create the backing peer connection and store it, returning a handle.
     async fn init_pc(&self) -> Result<Arc<RTCPeerConnection>> {
-        let pc = new_peer_connection().await?;
+        let hook = self.setting_engine_hook.clone();
+        let pc = new_peer_connection(|engine| {
+            if let Some(hook) = &hook {
+                hook(engine);
+            }
+        })
+        .await?;
         if std::env::var_os("WEBRTC_SIGNALING_DEBUG").is_some() {
             pc.on_ice_connection_state_change(Box::new(|state| {
                 eprintln!("[manual] ice-connection-state: {state}");
@@ -231,4 +297,85 @@ fn wire_channel(channel: &Arc<RTCDataChannel>) -> Negotiated {
         incoming: Some(in_rx),
         open: Some(open_rx),
     }
+}
+
+// --- host trait implementations --------------------------------------------
+
+impl manual_signaling::Host for WasiWebrtcCtxView<'_> {}
+
+impl HostPeerConnection for WasiWebrtcCtxView<'_> {
+    fn new(&mut self) -> wasmtime::Result<Resource<ManualPeer>> {
+        let hook = self.ctx.setting_engine_hook();
+        Ok(self.table.push(ManualPeer::new(hook))?)
+    }
+
+    fn close(&mut self, _self_: Resource<ManualPeer>) -> wasmtime::Result<()> {
+        // The peer connection is torn down when the resource is dropped.
+        Ok(())
+    }
+}
+
+impl<T> HostPeerConnectionWithStore<T> for ManualSignaling {
+    async fn create_offer(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ManualPeer>,
+        options: DataChannelOptions,
+    ) -> wasmtime::Result<std::result::Result<String, Error>> {
+        let peer = accessor.with(|mut access| clone_peer(access.get(), &self_))?;
+        Ok(peer
+            .create_offer(&options.label, options.ordered, options.max_retransmits)
+            .await
+            .map_err(|err| Error::Other(err.to_string())))
+    }
+
+    async fn accept_answer(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ManualPeer>,
+        answer: String,
+    ) -> wasmtime::Result<std::result::Result<(), Error>> {
+        let peer = accessor.with(|mut access| clone_peer(access.get(), &self_))?;
+        Ok(peer
+            .accept_answer(answer)
+            .await
+            .map_err(|err| Error::Other(err.to_string())))
+    }
+
+    async fn create_answer(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ManualPeer>,
+        offer: String,
+    ) -> wasmtime::Result<std::result::Result<String, Error>> {
+        let peer = accessor.with(|mut access| clone_peer(access.get(), &self_))?;
+        Ok(peer
+            .create_answer(offer)
+            .await
+            .map_err(|err| Error::Other(err.to_string())))
+    }
+
+    async fn connect(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<ManualPeer>,
+    ) -> wasmtime::Result<std::result::Result<Resource<DataChannel>, Error>> {
+        let peer = accessor.with(|mut access| clone_peer(access.get(), &self_))?;
+        match peer.connect().await {
+            Ok(channel) => {
+                let resource = accessor.with(|mut access| access.get().table.push(channel))?;
+                Ok(Ok(resource))
+            }
+            Err(err) => Ok(Err(Error::Other(err.to_string()))),
+        }
+    }
+
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<ManualPeer>) -> wasmtime::Result<()> {
+        accessor.with(|mut access| {
+            access.get().table.delete(rep)?;
+            Ok(())
+        })
+    }
+}
+
+/// Clone the cheaply-`Arc`-backed [`ManualPeer`] out of the table so its async
+/// methods can run without holding the store borrow across `.await`.
+fn clone_peer(view: WasiWebrtcCtxView<'_>, self_: &Resource<ManualPeer>) -> wasmtime::Result<ManualPeer> {
+    Ok(view.table.get(self_)?.clone())
 }

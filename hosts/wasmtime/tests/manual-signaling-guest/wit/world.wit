@@ -27,6 +27,6 @@ interface runner {
 }
 
 world manual-signaling-test {
-    import wasi:webrtc-data-channels/manual-signaling@0.1.0;
+    import demo:webrtc-echo/manual-signaling@0.1.0;
     export runner;
 }

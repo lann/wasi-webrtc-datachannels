@@ -7,9 +7,10 @@
 //!     can prompt the user over stdout and read pasted blobs from stdin,
 //!   * `wasi:*@0.2` via `wasmtime_wasi::p2`, which the guest's Rust `std` still
 //!     lowers to, and
-//!   * `wasi:webrtc-data-channels/manual-signaling` (plus `data-channels` and
-//!     `types`) backed by `webrtc-rs`, provided by
-//!     [`wasmtime_wasi_webrtc_datachannels`], so the offer/answer exchange
+//!   * the demo-only `demo:webrtc-echo/manual-signaling` interface backed by
+//!     `webrtc-rs` (provided by this crate's [`manual`] module), plus the
+//!     reusable `data-channels`/`types` imports (provided by
+//!     [`wasmtime_wasi_webrtc_datachannels`]), so the offer/answer exchange
 //!     drives a real connection.
 //!
 //! Usage: `cli-signaling <component.wasm> [offerer|answerer]`.
@@ -18,9 +19,8 @@ use wasmtime::component::{Component, HasData, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Result, Store};
 use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
-use wasmtime_wasi_webrtc_datachannels::p3::{
-    self as webrtc, WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
-};
+use wasmtime_wasi_webrtc_datachannels::{WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView};
+use wasmtime_webrtc_host::manual;
 
 struct Ctx {
     wasi: WasiCtx,
@@ -57,6 +57,20 @@ fn engine() -> Result<Engine> {
     Engine::new(&config)
 }
 
+/// Build the WebRTC context, opting into loopback ICE candidates when the
+/// `WEBRTC_INCLUDE_LOOPBACK` environment variable is set. This env-driven tweak
+/// is demo-only glue (the reusable crate exposes it as a `SettingEngine` hook)
+/// and is useful when running an offerer and answerer on the same host.
+fn webrtc_ctx() -> WasiWebrtcCtx {
+    let mut ctx = WasiWebrtcCtx::new();
+    if std::env::var_os("WEBRTC_INCLUDE_LOOPBACK").is_some() {
+        ctx.set_setting_engine_hook(|engine| {
+            engine.set_include_loopback_candidate(true);
+        });
+    }
+    ctx
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = env_logger::try_init();
@@ -75,7 +89,10 @@ async fn main() -> Result<()> {
     let mut linker: Linker<Ctx> = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
-    webrtc::add_to_linker(&mut linker)?;
+    // Reusable `data-channels`/`types` imports, then the demo-only
+    // `manual-signaling` interface layered on top.
+    wasmtime_wasi_webrtc_datachannels::add_to_linker(&mut linker)?;
+    manual::add_to_linker(&mut linker)?;
 
     let mut wasi = WasiCtx::builder();
     wasi.inherit_stdio().inherit_env().args(&guest_args);
@@ -83,7 +100,7 @@ async fn main() -> Result<()> {
         &engine,
         Ctx {
             wasi: wasi.build(),
-            webrtc: WasiWebrtcCtx::new(),
+            webrtc: webrtc_ctx(),
             table: ResourceTable::new(),
         },
     );

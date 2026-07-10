@@ -68,29 +68,33 @@ impl DataChannel {
     }
 }
 
-/// Create a peer connection with a default configuration (host ICE candidates
-/// only — sufficient for two local processes). Shared by the echo endpoint and
-/// the manual-signaling peer.
+/// Create a peer connection, giving the caller a chance to customize the
+/// `webrtc-rs` [`SettingEngine`] first.
 ///
-/// When two peers run on the *same* host (as in the local demos and tests),
-/// their only mutually reachable addresses may be loopback. `webrtc-rs` omits
-/// loopback candidates by default, so opt in when the `WEBRTC_INCLUDE_LOOPBACK`
-/// environment variable is set. This is harmless for real cross-host use (the
-/// loopback pair simply never succeeds there).
-pub async fn new_peer_connection() -> Result<Arc<RTCPeerConnection>> {
+/// The crate deliberately does **not** hardcode any environment-driven ICE
+/// tweaks. Instead, `configure` is run against a fresh [`SettingEngine`] before
+/// the peer connection is built, mirroring the customization hook
+/// wasmtime-wasi-http exposes via its `WasiHttpHooks`. Demo and test hosts use
+/// this to, for example, opt into loopback ICE candidates when both peers share
+/// one host (see [`WasiWebrtcCtx::set_setting_engine_hook`]); passing a no-op
+/// closure yields host ICE candidates only.
+///
+/// [`SettingEngine`]: webrtc::api::setting_engine::SettingEngine
+/// [`WasiWebrtcCtx::set_setting_engine_hook`]: crate::WasiWebrtcCtx::set_setting_engine_hook
+pub async fn new_peer_connection(
+    configure: impl FnOnce(&mut SettingEngine),
+) -> Result<Arc<RTCPeerConnection>> {
     let media = MediaEngine::default();
     // Data channels don't need media codecs, but the API builder wants a media
     // engine; a default one is sufficient for SCTP.
     let registry = Registry::new();
-    let mut builder = APIBuilder::new()
+    let mut setting = SettingEngine::default();
+    configure(&mut setting);
+    let api = APIBuilder::new()
         .with_media_engine(media)
-        .with_interceptor_registry(registry);
-    if std::env::var_os("WEBRTC_INCLUDE_LOOPBACK").is_some() {
-        let mut setting = SettingEngine::default();
-        setting.set_include_loopback_candidate(true);
-        builder = builder.with_setting_engine(setting);
-    }
-    let api = builder.build();
+        .with_interceptor_registry(registry)
+        .with_setting_engine(setting)
+        .build();
     let config = RTCConfiguration::default();
     Ok(Arc::new(api.new_peer_connection(config).await?))
 }
@@ -100,14 +104,17 @@ pub async fn new_peer_connection() -> Result<Arc<RTCPeerConnection>> {
 /// Stands up two `RTCPeerConnection`s, trickles ICE between them directly,
 /// echoes every message received on the far side back on the same channel, and
 /// returns the near side (the channel the guest drives). Both peers live inside
-/// this process, so no external signaling is involved.
+/// this process, so no external signaling is involved. `configure` is applied to
+/// each peer's [`SettingEngine`] (see [`new_peer_connection`]); the two local
+/// peers usually need loopback ICE candidates enabled through it.
 pub async fn build_echo(
     label: &str,
     ordered: bool,
     max_retransmits: Option<u16>,
+    configure: impl Fn(&mut SettingEngine),
 ) -> Result<DataChannel> {
-    let near = new_peer_connection().await?;
-    let far = new_peer_connection().await?;
+    let near = new_peer_connection(&configure).await?;
+    let far = new_peer_connection(&configure).await?;
 
     // Trickle ICE candidates directly between the two local peers.
     let far_for_ice = far.clone();

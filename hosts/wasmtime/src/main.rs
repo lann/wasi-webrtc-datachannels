@@ -10,7 +10,7 @@
 
 use wasmtime::component::{Accessor, Component, HasData, Linker, Resource, ResourceTable};
 use wasmtime::{Config, Engine, Result, Store};
-use wasmtime_wasi_webrtc_datachannels::p3::{
+use wasmtime_wasi_webrtc_datachannels::{
     self as webrtc, build_echo, DataChannel, WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
 };
 
@@ -26,7 +26,7 @@ mod bindings {
         },
         with: {
             "wasi:webrtc-data-channels/data-channels.data-channel":
-                wasmtime_wasi_webrtc_datachannels::p3::DataChannel,
+                wasmtime_wasi_webrtc_datachannels::DataChannel,
         },
     });
 }
@@ -60,7 +60,22 @@ impl<T> bindings::demo::webrtc_echo::connect::HostWithStore<T> for Ctx {
         accessor: &Accessor<T, Self>,
         options: DataChannelOptions,
     ) -> Result<std::result::Result<Resource<DataChannel>, Error>> {
-        let echo = match build_echo(&options.label, options.ordered, options.max_retransmits).await
+        // The two echo peers live in this one process, so apply the store's
+        // `SettingEngine` hook (e.g. loopback ICE candidates) to each of them.
+        let hook = accessor.with(|mut access| {
+            Ok::<_, wasmtime::Error>(access.get().webrtc.setting_engine_hook())
+        })?;
+        let echo = match build_echo(
+            &options.label,
+            options.ordered,
+            options.max_retransmits,
+            |engine| {
+                if let Some(hook) = &hook {
+                    hook(engine);
+                }
+            },
+        )
+        .await
         {
             Ok(echo) => echo,
             Err(err) => return Ok(Err(Error::Other(err.to_string()))),
@@ -75,6 +90,20 @@ fn engine() -> Result<Engine> {
     config.wasm_component_model(true);
     config.wasm_component_model_async(true);
     Engine::new(&config)
+}
+
+/// Build the WebRTC context, opting into loopback ICE candidates when the
+/// `WEBRTC_INCLUDE_LOOPBACK` environment variable is set. `build_echo` stands up
+/// both peers in this one process, so on hosts without another mutually
+/// reachable address this is required for them to pair.
+fn webrtc_ctx() -> WasiWebrtcCtx {
+    let mut ctx = WasiWebrtcCtx::new();
+    if std::env::var_os("WEBRTC_INCLUDE_LOOPBACK").is_some() {
+        ctx.set_setting_engine_hook(|engine| {
+            engine.set_include_loopback_candidate(true);
+        });
+    }
+    ctx
 }
 
 #[tokio::main]
@@ -102,7 +131,7 @@ async fn main() -> Result<()> {
     let mut store = Store::new(
         &engine,
         Ctx {
-            webrtc: WasiWebrtcCtx::new(),
+            webrtc: webrtc_ctx(),
             table: ResourceTable::new(),
         },
     );

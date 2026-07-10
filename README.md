@@ -24,9 +24,9 @@ does it cost?"* — and the answer is **yes** (see [Findings](#findings)).
 | --- | --- |
 | [`wit/`](wit) | The reusable streaming **WIT interface**, the `wasi:webrtc-data-channels@0.1.0` package. Each demo component keeps its own demo-only WIT and symlinks this package in as a dependency. |
 | [`components/echo-demo`](components/echo-demo) | A **Rust example component** exercising a data channel entirely through streams. |
-| [`crates/wasmtime-wasi-webrtc-datachannels`](crates/wasmtime-wasi-webrtc-datachannels) | The **reusable Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `p3::add_to_linker` + `WasiWebrtcView` and carries the integration tests. |
+| [`crates/wasmtime-wasi-webrtc-datachannels`](crates/wasmtime-wasi-webrtc-datachannels) | The **reusable Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `add_to_linker` + `WasiWebrtcView` for the reusable `types` + `data-channels`. |
 | [`hosts/node`](hosts/node) | The **browser-first host** (Node stand-in for the browser). |
-| [`hosts/wasmtime`](hosts/wasmtime) | The **native Rust host** binaries (Wasmtime + webrtc-rs), built on the crate above. |
+| [`hosts/wasmtime`](hosts/wasmtime) | The **native Rust host** (Wasmtime + webrtc-rs): binaries plus a lib carrying the demo-only manual-signaling host and the integration test, built on the crate above. |
 | [`AGENTS.md`](AGENTS.md) | Orientation for agents/contributors, linking the `lann/wasm-component-starter` knowledge base. |
 
 The same `echo-demo.component.wasm` produced from `components/echo-demo` is
@@ -161,20 +161,21 @@ Notes and caveats (this is a spike):
 
 ```
 wit/                            # reusable wasi:webrtc-data-channels package
-  webrtc.wit                    #   types, data-channels, manual-signaling, signaling
+  webrtc.wit                    #   types, data-channels, signaling
 crates/wasmtime-wasi-webrtc-datachannels/  # reusable Wasmtime host crate (webrtc-rs),
-                                #   p3::add_to_linker + WasiWebrtcView + integration tests
+                                #   add_to_linker + WasiWebrtcView (types + data-channels)
 components/echo-demo/            # example guest component (Rust)
   wit/                          #   demo-only WIT for this component
     webrtc-echo-demo.wit        #     demo:webrtc-echo (connect, rendezvous, demo, world)
     deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
 components/cli-signaling/        # manual-signaling CLI guest component (Rust)
   wit/                          #   demo-only WIT for this component
-    webrtc-echo-demo.wit        #     demo:webrtc-echo (prompt, manual-demo, manual-signaling worlds)
+    webrtc-echo-demo.wit        #     demo:webrtc-echo (prompt, manual-demo, manual-signaling, worlds)
     deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
 hosts/node/                      # browser-first host (Node + jco + @roamhq/wrtc)
-hosts/wasmtime/                  # native host binaries (Wasmtime + webrtc-rs), built on
-                                 #   crates/wasmtime-wasi-webrtc-datachannels
+hosts/wasmtime/                  # native host (Wasmtime + webrtc-rs): lib (demo-only
+                                 #   manual-signaling host + integration test) + binaries,
+                                 #   built on crates/wasmtime-wasi-webrtc-datachannels
 ```
 
 The reusable `wasi:webrtc-data-channels` package is defined once at the root
@@ -182,5 +183,6 @@ The reusable `wasi:webrtc-data-channels` package is defined once at the root
 `wit/deps/wasi-webrtc-data-channels` and keeps its own demo-only WIT next to it.
 The Node host reads the WIT embedded in the built component, so it needs no
 `wit/` of its own; the Wasmtime host binaries bindgen the demo component wit
-dirs directly, and delegate the reusable `data-channels`/`manual-signaling`
-surface to `crates/wasmtime-wasi-webrtc-datachannels`.
+dirs directly, and delegate the reusable `types`/`data-channels` surface to
+`crates/wasmtime-wasi-webrtc-datachannels` (the demo-only `manual-signaling`
+host lives in `hosts/wasmtime` itself).

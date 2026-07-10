@@ -1,11 +1,13 @@
-//! Test guest: exercises the reusable `manual-signaling` + `data-channels`
-//! interfaces implemented by `wasmtime-wasi-webrtc-datachannels`.
+//! Test guest: exercises the demo-only `manual-signaling` interface together
+//! with the reusable `data-channels` interface implemented by
+//! `wasmtime-wasi-webrtc-datachannels`.
 //!
 //! It stands up an offerer and an answerer `peer-connection` entirely in-guest,
 //! performs the vanilla (non-trickle) offer/answer exchange the host satisfies,
 //! opens the negotiated data channel, then streams `count` messages of `size`
 //! bytes from the offerer and reads them all back on the answerer. This drives
-//! every method the crate implements for these two interfaces.
+//! every method the manual-signaling host and the crate's `data-channels` host
+//! implement for these two interfaces.
 
 wit_bindgen::generate!({
     path: "wit",
@@ -14,7 +16,7 @@ wit_bindgen::generate!({
 });
 
 use exports::test::webrtc_manual_signaling::runner::{Guest, Report};
-use wasi::webrtc_data_channels::manual_signaling::PeerConnection;
+use demo::webrtc_echo::manual_signaling::PeerConnection;
 use wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
 use wit_bindgen::StreamResult;
 

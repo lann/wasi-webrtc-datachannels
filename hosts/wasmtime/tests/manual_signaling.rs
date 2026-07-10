@@ -1,13 +1,16 @@
-//! Integration test for `wasmtime-wasi-webrtc-datachannels`.
+//! Integration test for the demo-only `manual-signaling` host implementation
+//! (`hosts/wasmtime` `manual` module) on top of the reusable
+//! `wasmtime-wasi-webrtc-datachannels` crate.
 //!
 //! It builds the `manual-signaling-test` guest component, instantiates it under
-//! Wasmtime with the crate's [`add_to_linker`] providing the
-//! `wasi:webrtc-data-channels` imports, and drives a full manual-signaling
-//! round trip over a real `webrtc-rs` data channel. This exercises the crate's
-//! `manual-signaling` (`create-offer`/`create-answer`/`accept-answer`/`connect`)
-//! and `data-channels` (`label`/`send`/`receive`) host implementations.
+//! Wasmtime with the reusable crate's `add_to_linker` providing `types` +
+//! `data-channels` and the demo [`manual::add_to_linker`] providing
+//! `manual-signaling`, and drives a full manual-signaling round trip over a real
+//! `webrtc-rs` data channel. This exercises `manual-signaling`
+//! (`create-offer`/`create-answer`/`accept-answer`/`connect`) and the crate's
+//! `data-channels` (`label`/`send`/`receive`) host implementation.
 //!
-//! [`add_to_linker`]: wasmtime_wasi_webrtc_datachannels::p3::add_to_linker
+//! [`manual::add_to_linker`]: wasmtime_webrtc_host::manual::add_to_linker
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -15,9 +18,8 @@ use std::sync::OnceLock;
 
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi_webrtc_datachannels::p3::{
-    add_to_linker, WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
-};
+use wasmtime_wasi_webrtc_datachannels::{WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView};
+use wasmtime_webrtc_host::manual;
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -25,16 +27,17 @@ mod bindings {
         world: "manual-signaling-test",
         imports: {
             default: async | store | trappable,
-            "wasi:webrtc-data-channels/manual-signaling@0.1.0.[constructor]peer-connection": trappable,
+            "demo:webrtc-echo/manual-signaling@0.1.0.[constructor]peer-connection": trappable,
+            "demo:webrtc-echo/manual-signaling@0.1.0.[method]peer-connection.close": trappable,
         },
         exports: {
             default: async,
         },
         with: {
             "wasi:webrtc-data-channels/data-channels.data-channel":
-                wasmtime_wasi_webrtc_datachannels::p3::DataChannel,
-            "wasi:webrtc-data-channels/manual-signaling.peer-connection":
-                wasmtime_wasi_webrtc_datachannels::p3::ManualPeer,
+                wasmtime_wasi_webrtc_datachannels::DataChannel,
+            "demo:webrtc-echo/manual-signaling.peer-connection":
+                wasmtime_webrtc_host::manual::ManualPeer,
         },
     });
 }
@@ -128,12 +131,22 @@ async fn run_round_trip(count: u32, size: u32) -> anyhow::Result<Report> {
     let component = Component::from_binary(&engine, guest_component())?;
 
     let mut linker: Linker<Ctx> = Linker::new(&engine);
-    add_to_linker(&mut linker)?;
+    // Reusable `types` + `data-channels`, then the demo-only `manual-signaling`.
+    wasmtime_wasi_webrtc_datachannels::add_to_linker(&mut linker)?;
+    manual::add_to_linker(&mut linker)?;
+
+    // Two peer connections share this process; enable loopback ICE candidates
+    // through the crate's `SettingEngine` hook so they can pair even when no
+    // other local address is mutually reachable.
+    let mut webrtc = WasiWebrtcCtx::new();
+    webrtc.set_setting_engine_hook(|engine| {
+        engine.set_include_loopback_candidate(true);
+    });
 
     let mut store = Store::new(
         &engine,
         Ctx {
-            webrtc: WasiWebrtcCtx::new(),
+            webrtc,
             table: ResourceTable::new(),
         },
     );
@@ -155,14 +168,6 @@ async fn run_round_trip(count: u32, size: u32) -> anyhow::Result<Report> {
 
 #[test]
 fn manual_signaling_round_trip() {
-    // Two peer connections share this process; allow loopback ICE candidates so
-    // they can pair even when no other local address is mutually reachable.
-    // SAFETY: set before any peer connection is built and the test is single
-    // threaded with respect to this variable.
-    unsafe {
-        std::env::set_var("WEBRTC_INCLUDE_LOOPBACK", "1");
-    }
-
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
