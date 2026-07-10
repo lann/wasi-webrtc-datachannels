@@ -106,6 +106,26 @@ updating the consumers that name them as strings:
 Prerequisites: Rust with the `wasm32-unknown-unknown` target, `wasm-tools`, and
 Node 22+ with JSPI (`--experimental-wasm-jspi`) for the Node host.
 
+### One-shot dependency setup: `scripts/setup.sh`
+
+[`scripts/setup.sh`](scripts/setup.sh) installs everything the build steps below
+need and is the single source of truth shared by local developers, CI
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), and the Copilot cloud
+agent ([`.github/workflows/copilot-setup-steps.yml`](.github/workflows/copilot-setup-steps.yml)).
+It is idempotent, so it is safe to re-run. Assuming a Rust toolchain (via
+`rustup`) and Node 22+ are already present, run it once from the repository root:
+
+```sh
+./scripts/setup.sh
+```
+
+It adds the `wasm32-unknown-unknown` and `wasm32-wasip2` Rust targets, installs
+`wasm-tools` (skipped if already on `PATH`; version pinned via
+`WASM_TOOLS_VERSION`), and runs `npm install` in `hosts/node`. Set `SKIP_NODE=1`
+to skip the Node dependencies when you only need the Rust/Wasmtime path. CI is
+kept in sync by calling this same script rather than duplicating the install
+steps.
+
 ```sh
 # Guest component (produces build/echo-demo.component.wasm):
 cd hosts/node && npm install && npm run build:component

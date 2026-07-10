@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install dependencies
+        run: ./scripts/setup.sh
+
+      - name: Validate WIT
+        run: |
+          wasm-tools component wit wit
+          wasm-tools component wit components/echo-demo/wit
+          wasm-tools component wit components/cli-signaling/wit
+
+      - name: Build reusable host crate
+        run: cargo build --manifest-path crates/wasmtime-wasi-webrtc-datachannels/Cargo.toml
+
+      - name: Build echo-demo guest component
+        working-directory: hosts/node
+        run: npm run build:component
+
+      - name: Transpile echo-demo component (Node host)
+        working-directory: hosts/node
+        run: npm run transpile
+
+      - name: Run Wasmtime host integration test
+        working-directory: hosts/wasmtime
+        run: cargo test
