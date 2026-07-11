@@ -16,7 +16,7 @@ use wasmtime_wasi_webrtc_datachannels::{
 
 mod bindings {
     wasmtime::component::bindgen!({
-        path: "../../components/echo-demo/wit",
+        path: "../echo-demo/wit",
         world: "webrtc-echo-demo",
         imports: {
             default: async | store | trappable,
@@ -110,7 +110,7 @@ fn webrtc_ctx() -> WasiWebrtcCtx {
 async fn main() -> Result<()> {
     let path = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "../../components/echo-demo/build/echo-demo.component.wasm".to_string());
+        .unwrap_or_else(|| "../echo-demo/build/echo-demo.component.wasm".to_string());
     let message_count: u32 = std::env::args()
         .nth(2)
         .and_then(|s| s.parse().ok())

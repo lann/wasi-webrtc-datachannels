@@ -41,24 +41,24 @@ jobs:
       - name: Validate WIT
         run: |
           wasm-tools component wit wit
-          wasm-tools component wit components/echo-demo/wit
-          wasm-tools component wit components/cli-signaling/wit
+          wasm-tools component wit examples/echo-demo/wit
+          wasm-tools component wit examples/cli-signaling/wit
 
       - name: Build reusable host crate
-        run: cargo build --manifest-path crates/wasmtime-wasi-webrtc-datachannels/Cargo.toml
+        run: cargo build --manifest-path wasmtime-impl/Cargo.toml
 
       - name: Build echo-demo guest component
-        working-directory: hosts/node
+        working-directory: jco-impl
         run: npm run build:component
 
       - name: Transpile echo-demo component (Node host)
-        working-directory: hosts/node
+        working-directory: jco-impl
         run: npm run transpile
 
       - name: Run browser host test (headless Chrome)
-        working-directory: hosts/node
+        working-directory: jco-impl
         run: npm run test:browser
 
       - name: Run Wasmtime host integration test
-        working-directory: hosts/wasmtime
+        working-directory: examples/wasmtime-demo
         run: cargo test

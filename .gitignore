@@ -6,4 +6,4 @@ node_modules/
 
 # Build artifacts
 build/
-hosts/node/generated/
+jco-impl/generated/
