@@ -27,8 +27,10 @@ validate-wit:
     wasm-tools component wit examples/cli-signaling/wit
 
 # Run the Rust / Wasmtime tests (includes the manual-signaling integration test).
+# nextest runs faster but does not execute doctests, so run those separately.
 test:
-    cargo test --workspace --exclude echo-demo --exclude cli-signaling
+    cargo nextest run --workspace --exclude echo-demo --exclude cli-signaling
+    cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling
 
 # Build the echo-demo guest component into examples/echo-demo/build/.
 build-component:

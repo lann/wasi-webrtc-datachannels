@@ -10,7 +10,54 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test:
+  # Native Rust checks (formatting, lints, WIT validation, and the Wasmtime
+  # tests). Runs in parallel with the browser-host job below. No Node host is
+  # needed here, so its npm dependencies are skipped.
+  rust-checks:
+    runs-on: ubuntu-latest
+    # WebRTC handshakes can hang; cap the job so a stuck run fails fast instead
+    # of waiting for the default 6h limit.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        # The toolchain version, wasm targets, and rustfmt/clippy components are
+        # pinned in rust-toolchain.toml; `rustup show` installs exactly those.
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo
+        # Caches the cargo registry, `~/.cargo/bin` (so cargo-binstall'd
+        # wasm-tools/just/nextest are reused), and the compiled `target/`
+        # artifacts, so clippy and test reuse prior builds.
+        uses: Swatinem/rust-cache@v2
+        with:
+          # The standalone manual-signaling test guest builds into a nested
+          # target dir under ./target; keep the whole tree so it is not pruned.
+          cache-all-crates: true
+
+      - name: Install dependencies
+        # This job never runs the Node host, so skip its npm dependencies.
+        run: SKIP_NODE=1 ./scripts/setup.sh
+
+      # Cheap checks first so an obvious formatting or WIT mistake fails the job
+      # before the slower clippy/test compilation.
+      - name: Check formatting
+        run: just fmt-check
+
+      - name: Validate WIT
+        run: just validate-wit
+
+      - name: Run clippy
+        run: just clippy
+
+      - name: Run tests
+        run: just test
+
+  # Guest component build + browser (jco) host test. Runs in parallel with the
+  # native Rust checks above.
+  browser:
     runs-on: ubuntu-latest
     # WebRTC handshakes can hang; cap the job so a stuck run fails fast instead
     # of waiting for the default 6h limit.
@@ -35,25 +82,14 @@ jobs:
 
       - name: Cache cargo
         # Caches the cargo registry, `~/.cargo/bin` (so cargo-binstall'd
-        # wasm-tools/just are reused), and — unlike a plain registry cache — the
-        # compiled `target/` artifacts, so clippy/test/build reuse prior builds.
+        # wasm-tools/just/nextest are reused), and the compiled `target/`
+        # artifacts, so the guest component build reuses prior builds.
         uses: Swatinem/rust-cache@v2
         with:
-          # The standalone manual-signaling test guest builds into a nested
-          # target dir under ./target; keep the whole tree so it is not pruned.
           cache-all-crates: true
 
       - name: Install dependencies
         run: ./scripts/setup.sh
-
-      - name: Check formatting
-        run: just fmt-check
-
-      - name: Run clippy
-        run: just clippy
-
-      - name: Validate WIT
-        run: just validate-wit
 
       - name: Build echo-demo guest component
         run: just build-component
@@ -63,6 +99,3 @@ jobs:
 
       - name: Run browser host test (headless Chrome)
         run: just test-browser
-
-      - name: Run tests
-        run: just test

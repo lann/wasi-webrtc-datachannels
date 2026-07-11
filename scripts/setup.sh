@@ -12,12 +12,13 @@
 #       * wasm32-wasip2          (cli-signaling)
 #   - wasm-tools, used to wrap guest modules into components and to validate WIT
 #   - just, the command runner used for development and CI recipes
+#   - cargo-nextest, the faster test runner used by `just test`
 #   - the Node host's npm dependencies (jco + @roamhq/wrtc)
 #
-# wasm-tools and just are installed with cargo-binstall, which downloads the
-# pinned prebuilt release binaries when available and automatically falls back to
-# `cargo install` (compiling from source) otherwise. cargo-binstall itself is
-# bootstrapped from its prebuilt release binary.
+# wasm-tools, just, and cargo-nextest are installed with cargo-binstall, which
+# downloads the pinned prebuilt release binaries when available and automatically
+# falls back to `cargo install` (compiling from source) otherwise. cargo-binstall
+# itself is bootstrapped from its prebuilt release binary.
 #
 # Prerequisites (not installed here): a Rust toolchain via rustup, and Node 22+
 # with npm. CI and copilot-setup-steps provision these before calling this
@@ -26,6 +27,7 @@
 # Environment overrides:
 #   WASM_TOOLS_VERSION   version of wasm-tools to install (default below)
 #   JUST_VERSION         version of just to install (default below)
+#   NEXTEST_VERSION      version of cargo-nextest to install (default below)
 #   SKIP_NODE=1          skip installing the Node host's npm dependencies
 
 set -euo pipefail
@@ -36,6 +38,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 WASM_TOOLS_VERSION="${WASM_TOOLS_VERSION:-1.247.0}"
 JUST_VERSION="${JUST_VERSION:-1.40.0}"
+NEXTEST_VERSION="${NEXTEST_VERSION:-0.9.140}"
 
 log() { printf '\n==> %s\n' "$1"; }
 
@@ -72,6 +75,13 @@ if command -v just >/dev/null 2>&1; then
   echo "just already present: $(just --version)"
 else
   binstall "just@${JUST_VERSION}"
+fi
+
+log "Ensuring cargo-nextest ${NEXTEST_VERSION} is installed"
+if command -v cargo-nextest >/dev/null 2>&1; then
+  echo "cargo-nextest already present: $(cargo-nextest --version)"
+else
+  binstall "cargo-nextest@${NEXTEST_VERSION}"
 fi
 
 if [ "${SKIP_NODE:-0}" = "1" ]; then
