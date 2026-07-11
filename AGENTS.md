@@ -128,34 +128,53 @@ kept in sync by calling this same script rather than duplicating the install
 steps.
 
 ```sh
-# Guest component (produces build/echo-demo.component.wasm):
-cd jco-impl && npm install && npm run build:component
+# Guest component (produces examples/echo-demo/build/echo-demo.component.wasm):
+just build-component
 
 # Node (browser-first) host:
-npm run transpile && node --experimental-wasm-jspi src/run.mjs
+just demo-node
 
 # Browser host test (headless Chrome 137+; the same webrtc.js + component as the
 # Node host, run through a real browser — this is the CI check for the browser
 # path). Requires a Chrome/Chromium binary (auto-detected, or set CHROME_PATH):
-npm run test:browser
+just test-browser
 
-# Wasmtime (native) host:
-cd ../examples/wasmtime-demo && cargo run --release --bin wasmtime-webrtc-host -- \
-  ../echo-demo/build/echo-demo.component.wasm 1000 4096
+# Wasmtime (native) host (defaults: 1000 messages of 4096 bytes):
+just demo-wasmtime          # or: just demo-wasmtime 1000 4096
 
 # Manual-signaling integration test (builds a guest, drives a real webrtc-rs
-# manual-signaling round trip through a test-only host under wasmtime-impl/tests):
-cargo test --manifest-path ../wasmtime-impl/Cargo.toml
+# manual-signaling round trip through a test-only host under wasmtime-impl/tests);
+# it is part of `just test`:
+just test
 ```
 
-Validate what you touch: `cargo build` the crate(s) you changed, `wasm-tools
-component wit` on each wit dir you edited (the root `wit/` and/or the affected
-`examples/<name>/wit/`) after WIT edits, and re-run the Node transpile when the
-component's interfaces change. When you touch the browser host (`jco-impl`),
-run `npm run test:browser`. When you touch the manual-signaling integration
-test host under `wasmtime-impl/tests`, run
-`cargo test --manifest-path wasmtime-impl/Cargo.toml`. Keep the two hosts
-producing the same result.
+The recipes above are the underlying npm/cargo invocations documented in
+[`README.md`](README.md); the [`justfile`](justfile) is the single entry point so
+humans, agents, and CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+all run the same commands. Run `just` with no arguments to list every recipe.
+
+### Checks to run before committing
+
+Run the check recipes that cover what you changed **before committing**, and fix
+anything they report. `just check` is the fast pre-commit gate; `just ci` mirrors
+CI exactly (it additionally builds the guest component, transpiles it, and runs
+the headless-browser test). Match the recipe to the change:
+
+| Recipe | Run it when you change… |
+| --- | --- |
+| `just fmt-check` | any Rust source (formatting). |
+| `just clippy` | any Rust source (lints all crates and both wasm targets). |
+| `just validate-wit` | any `.wit` file (root `wit/` or a demo `examples/<name>/wit/`). |
+| `just test` | any Rust host/guest code, or the manual-signaling test host. |
+| `just build-component` | the `echo-demo` guest or its WIT. |
+| `just transpile` | anything affecting the component's interfaces, or the `jco transpile` flags / `--map` targets in `jco-impl`. |
+| `just test-browser` | the browser host (`jco-impl`, e.g. `webrtc.js`) or the component it runs. |
+| `just check` | broad Rust/WIT changes — the quick gate for most commits. |
+| `just ci` | anything touching the guest, jco host, or WIT — reproduces the full CI run locally. |
+
+`just transpile` and `just test-browser` depend on `just build-component`, so
+running either rebuilds the component first. Keep the two hosts producing the
+same result.
 
 ## Code comments
 
