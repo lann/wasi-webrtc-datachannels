@@ -1,0 +1,14 @@
+[workspace]
+members = [
+    "wasmtime-impl",
+    "examples/wasmtime-demo",
+    "examples/echo-demo",
+    "examples/cli-signaling",
+]
+resolver = "2"
+
+# Size-optimized release profile; applies to all workspace members.  The wasm
+# guest crates need it to keep the .wasm blobs small.
+[profile.release]
+opt-level = "s"
+lto = true

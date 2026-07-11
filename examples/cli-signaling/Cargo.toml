@@ -18,7 +18,3 @@ wit-bindgen = { version = "0.57", features = ["async", "async-spawn"] }
 futures = { version = "0.3", default-features = false, features = ["async-await"] }
 # base64 keeps the copy/pasteable signaling blobs on a single line.
 base64 = "0.22"
-
-[profile.release]
-opt-level = "s"
-lto = true

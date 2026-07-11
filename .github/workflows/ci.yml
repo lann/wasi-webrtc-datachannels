@@ -42,18 +42,14 @@ jobs:
 
       - name: Check formatting
         run: |
-          cargo fmt --manifest-path wasmtime-impl/Cargo.toml -- --check
-          cargo fmt --manifest-path examples/wasmtime-demo/Cargo.toml -- --check
-          cargo fmt --manifest-path examples/echo-demo/Cargo.toml -- --check
-          cargo fmt --manifest-path examples/cli-signaling/Cargo.toml -- --check
+          cargo fmt --all -- --check
           cargo fmt --manifest-path wasmtime-impl/tests/manual-signaling-guest/Cargo.toml -- --check
 
       - name: Run clippy
         run: |
-          cargo clippy --manifest-path wasmtime-impl/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path examples/wasmtime-demo/Cargo.toml --all-targets -- -D warnings
-          cargo clippy --manifest-path examples/echo-demo/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
-          cargo clippy --manifest-path examples/cli-signaling/Cargo.toml --target wasm32-wasip2 -- -D warnings
+          cargo clippy --workspace --exclude echo-demo --exclude cli-signaling --all-targets -- -D warnings
+          cargo clippy -p echo-demo --target wasm32-unknown-unknown -- -D warnings
+          cargo clippy -p cli-signaling --target wasm32-wasip2 -- -D warnings
           cargo clippy --manifest-path wasmtime-impl/tests/manual-signaling-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
       - name: Validate WIT
@@ -74,5 +70,5 @@ jobs:
         working-directory: jco-impl
         run: npm run test:browser
 
-      - name: Run wasmtime-impl tests
-        run: cargo test --manifest-path wasmtime-impl/Cargo.toml
+      - name: Run tests
+        run: cargo test --workspace --exclude echo-demo --exclude cli-signaling
