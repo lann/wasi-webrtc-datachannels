@@ -80,11 +80,10 @@ impl<D: Send + 'static> StreamConsumer<D> for SendConsumer {
         // item (or when finish=true, which per the docs still provides an item).
         let item = &mut None;
         source.read(store, item)?;
-        let msg = item.take().expect("poll_consume called without item");
+        let msg = item.take().expect("source.read did not populate item");
 
         let channel = this.channel.clone();
-        let mut fut: Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> =
-            Box::pin(async move { channel.send(&Bytes::from(msg)).await.map(|_| ()).map_err(Into::into) });
+        let mut fut = Box::pin(async move { channel.send(&Bytes::from(msg)).await.map(|_| ()).map_err(Into::into) });
 
         match fut.as_mut().poll(cx) {
             Poll::Pending => {
