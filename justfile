@@ -32,10 +32,7 @@ test:
 
 # Build the echo-demo guest component into examples/echo-demo/build/.
 build-component:
-    cargo build --release --target wasm32-unknown-unknown -p echo-demo
-    mkdir -p examples/echo-demo/build
-    wasm-tools component new target/wasm32-unknown-unknown/release/echo_demo.wasm \
-        -o examples/echo-demo/build/echo-demo.component.wasm
+    cd jco-impl && npm run build:component
 
 # Transpile the echo-demo component for the Node host (runs build-component).
 transpile: build-component
