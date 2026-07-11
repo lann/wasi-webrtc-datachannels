@@ -31,7 +31,7 @@ use wasmtime_wasi_webrtc_datachannels::{
 
 mod bindings {
     wasmtime::component::bindgen!({
-        path: "../../components/cli-signaling/wit",
+        path: "../cli-signaling/wit",
         world: "manual-signaling-host",
         imports: {
             // The async signaling methods use the component-model async ABI and

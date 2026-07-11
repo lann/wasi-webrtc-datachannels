@@ -8,7 +8,7 @@ publish = false
 # The reusable `wasi:webrtc-data-channels` host implementation (data channels
 # and the stream/pipe plumbing) lives in this crate. Both binaries obtain their
 # `types`/`data-channels` imports from its `add_to_linker`.
-wasmtime-wasi-webrtc-datachannels = { path = "../../crates/wasmtime-wasi-webrtc-datachannels" }
+wasmtime-wasi-webrtc-datachannels = { path = "../../wasmtime-impl" }
 # Wasmtime with component-model async (streams/futures) support. The
 # `component-model-async` feature gates the `Config::wasm_component_model_async*`
 # switches and the host `StreamReader`/`StreamProducer` API used here.

@@ -43,8 +43,8 @@ fi
 if [ "${SKIP_NODE:-0}" = "1" ]; then
   log "Skipping Node host dependencies (SKIP_NODE=1)"
 else
-  log "Installing Node host dependencies (hosts/node)"
-  (cd "${REPO_ROOT}/hosts/node" && npm install)
+  log "Installing Node host dependencies (jco-impl)"
+  (cd "${REPO_ROOT}/jco-impl" && npm install)
 fi
 
 log "Setup complete"

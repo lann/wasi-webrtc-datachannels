@@ -41,30 +41,32 @@ starter's examples first.
 ```
 wit/                                   # reusable wasi:webrtc-data-channels package
   webrtc.wit                           #   types, data-channels, signaling
-crates/wasmtime-wasi-webrtc-datachannels/  # reusable Wasmtime host crate (webrtc-rs),
+wasmtime-impl/                         # reusable Wasmtime host crate (webrtc-rs),
                                        #   modeled after wasmtime_wasi_http::p3;
-                                       #   add_to_linker + WasiWebrtcView (types + data-channels)
-components/echo-demo/                   # example guest component (Rust)
-  wit/                                 #   demo-only WIT for this component
-    webrtc-echo-demo.wit               #     demo:webrtc-echo (connect, rendezvous, demo)
-    deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
-components/cli-signaling/               # manual-signaling CLI guest component (Rust)
-  wit/                                 #   demo-only WIT for this component
-    webrtc-echo-demo.wit               #     demo:webrtc-echo (prompt, manual-demo,
+                                       #   add_to_linker + WasiWebrtcView (types + data-channels);
+                                       #   crate name stays wasmtime-wasi-webrtc-datachannels
+jco-impl/                              # browser-first host (Node + jco + @roamhq/wrtc)
+examples/                              # guest components + the demo/manual-signaling driver
+  echo-demo/                           # example guest component (Rust)
+    wit/                               #   demo-only WIT for this component
+      webrtc-echo-demo.wit             #     demo:webrtc-echo (connect, rendezvous, demo)
+      deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
+  cli-signaling/                       # manual-signaling CLI guest component (Rust)
+    wit/                               #   demo-only WIT for this component
+      webrtc-echo-demo.wit             #     demo:webrtc-echo (prompt, manual-demo,
                                        #       manual-signaling, worlds)
-    deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
-hosts/node/                            # browser-first host (Node + jco + @roamhq/wrtc)
-hosts/wasmtime/                        # native host (Wasmtime + webrtc-rs): a lib carrying
+      deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
+  wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): a lib carrying
                                        #   the demo-only manual-signaling host + the
                                        #   integration test, plus binaries; the reusable
-                                       #   types/data-channels host lives in the crate above
+                                       #   types/data-channels host lives in wasmtime-impl above
 ```
 
 ### WIT is organized by ownership — one copy of the reusable package
 
 The reusable **`wasi:webrtc-data-channels`** package is defined exactly once, at
 the root [`wit/`](wit). Each demo component owns its **demo-only** WIT under its
-own `components/<name>/wit/` and pulls the reusable package in through a
+own `examples/<name>/wit/` and pulls the reusable package in through a
 `wit/deps/wasi-webrtc-data-channels` **symlink** back to the root, so there is a
 single copy of the shared surface to edit. Do **not** copy the root package into
 a component or replace those `deps` symlinks with real directories.
@@ -77,9 +79,9 @@ separate:
   target.
 - **`demo:webrtc-echo`** — the demo-only interfaces, split across the demo
   components that use them:
-  - `components/echo-demo/wit/webrtc-echo-demo.wit` — `connect`, `rendezvous`,
+  - `examples/echo-demo/wit/webrtc-echo-demo.wit` — `connect`, `rendezvous`,
     `demo`, and the `webrtc-echo-demo` world.
-  - `components/cli-signaling/wit/webrtc-echo-demo.wit` — `prompt`,
+  - `examples/cli-signaling/wit/webrtc-echo-demo.wit` — `prompt`,
     `manual-demo`, the vanilla `manual-signaling` surface, and the
     `browser-signaling-demo` / `manual-signaling-host` worlds.
 
@@ -89,17 +91,17 @@ Cross-package `use` must include the version, e.g.
 Changing an interface identifier (package, interface, or function name) means
 updating the consumers that name them as strings:
 
-- the guest bindings in `components/echo-demo/src/lib.rs` and
-  `components/cli-signaling/src/lib.rs`,
+- the guest bindings in `examples/echo-demo/src/lib.rs` and
+  `examples/cli-signaling/src/lib.rs`,
 - the reusable host bindings in
-  `crates/wasmtime-wasi-webrtc-datachannels/src/bindings.rs` (whose
+  `wasmtime-impl/src/bindings.rs` (whose
   `wit/world.wit` also pulls in the root package through a
   `deps/wasi-webrtc-data-channels` symlink), and the demo-only manual-signaling
-  host bindings in `hosts/wasmtime/src/manual.rs`,
-- the Wasmtime host bindings in `hosts/wasmtime/src/main.rs` and
-  `hosts/wasmtime/src/bin/cli-signaling.rs`, and
+  host bindings in `examples/wasmtime-demo/src/manual.rs`,
+- the Wasmtime host bindings in `examples/wasmtime-demo/src/main.rs` and
+  `examples/wasmtime-demo/src/bin/cli-signaling.rs`, and
 - the `jco transpile` `--async-exports` / `--async-imports` / `--map` flags in
-  `hosts/node/package.json`.
+  `jco-impl/package.json`.
 
 ## Build & run
 
@@ -121,14 +123,14 @@ It is idempotent, so it is safe to re-run. Assuming a Rust toolchain (via
 
 It adds the `wasm32-unknown-unknown` and `wasm32-wasip2` Rust targets, installs
 `wasm-tools` (skipped if already on `PATH`; version pinned via
-`WASM_TOOLS_VERSION`), and runs `npm install` in `hosts/node`. Set `SKIP_NODE=1`
+`WASM_TOOLS_VERSION`), and runs `npm install` in `jco-impl`. Set `SKIP_NODE=1`
 to skip the Node dependencies when you only need the Rust/Wasmtime path. CI is
 kept in sync by calling this same script rather than duplicating the install
 steps.
 
 ```sh
 # Guest component (produces build/echo-demo.component.wasm):
-cd hosts/node && npm install && npm run build:component
+cd jco-impl && npm install && npm run build:component
 
 # Node (browser-first) host:
 npm run transpile && node --experimental-wasm-jspi src/run.mjs
@@ -139,20 +141,20 @@ npm run transpile && node --experimental-wasm-jspi src/run.mjs
 npm run test:browser
 
 # Wasmtime (native) host:
-cd ../wasmtime && cargo run --release --bin wasmtime-webrtc-host -- \
-  ../../components/echo-demo/build/echo-demo.component.wasm 1000 4096
+cd ../examples/wasmtime-demo && cargo run --release --bin wasmtime-webrtc-host -- \
+  ../echo-demo/build/echo-demo.component.wasm 1000 4096
 
 # Manual-signaling integration test (builds a guest, drives a real webrtc-rs
-# manual-signaling round trip through the demo-only host in hosts/wasmtime):
-cd ../wasmtime && cargo test
+# manual-signaling round trip through the demo-only host in examples/wasmtime-demo):
+cd ../examples/wasmtime-demo && cargo test
 ```
 
 Validate what you touch: `cargo build` the crate(s) you changed, `wasm-tools
 component wit` on each wit dir you edited (the root `wit/` and/or the affected
-`components/<name>/wit/`) after WIT edits, and re-run the Node transpile when the
-component's interfaces change. When you touch the browser host (`hosts/node`),
+`examples/<name>/wit/`) after WIT edits, and re-run the Node transpile when the
+component's interfaces change. When you touch the browser host (`jco-impl`),
 run `npm run test:browser`. When you touch the demo-only manual-signaling host
-or its test, run `cargo test` in `hosts/wasmtime`. Keep the two hosts
+or its test, run `cargo test` in `examples/wasmtime-demo`. Keep the two hosts
 producing the same result.
 
 ## Real signaling (`rendezvous` + `wasi:http@0.3`) — direction

@@ -1,5 +1,5 @@
 //! Integration test for the demo-only `manual-signaling` host implementation
-//! (`hosts/wasmtime` `manual` module) on top of the reusable
+//! (`examples/wasmtime-demo` `manual` module) on top of the reusable
 //! `wasmtime-wasi-webrtc-datachannels` crate.
 //!
 //! It builds the `manual-signaling-test` guest component, instantiates it under
