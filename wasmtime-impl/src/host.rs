@@ -71,11 +71,25 @@ impl<D: Send + 'static> StreamConsumer<D> for SendConsumer {
             }
         }
 
-        // Read the next item.  poll_consume is only called when source has an
-        // item (or when finish=true, which per the docs still provides an item).
+        // Read the next item.  When finish=true this may be a stream-end signal
+        // with no trailing item (all prior items were already consumed).
         let item = &mut None;
         source.read(store, item)?;
-        let msg = item.take().expect("source.read did not populate item");
+        let Some(msg) = item.take() else {
+            // No item available.  When finish=true this is a normal end-of-stream
+            // signal with no trailing item; acknowledge with Cancelled (which is
+            // only valid when finish=true) and report success.
+            if let Some(tx) = this.done_tx.take() {
+                let _ = tx.send(Ok(()));
+            }
+            return Poll::Ready(Ok(if finish {
+                StreamResult::Cancelled
+            } else {
+                // finish=false with no item should not occur per the
+                // StreamConsumer contract; Completed is the safest fallback.
+                StreamResult::Completed
+            }));
+        };
 
         let channel = this.channel.clone();
         let mut fut = Box::pin(async move {
