@@ -23,7 +23,7 @@ wit_bindgen::generate!({
 
 use exports::demo::webrtc_echo::demo::{DemoConfig, DemoStats, Guest};
 use demo::webrtc_echo::connect;
-use wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
+use lann::webrtc_datachannels::types::{DataChannelOptions, Error};
 use wit_bindgen::StreamResult;
 
 struct Component;

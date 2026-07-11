@@ -30,7 +30,7 @@ wit_bindgen::generate!({
 });
 
 use demo::webrtc_echo::manual_signaling::PeerConnection;
-use wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
+use lann::webrtc_datachannels::types::{DataChannelOptions, Error};
 
 /// The label used for the negotiated data channel. Both peers observe it.
 const CHANNEL_LABEL: &str = "manual-signaling";
@@ -118,7 +118,10 @@ async fn drive(role: Role) -> Result<String, Error> {
 }
 
 /// Send one greeting and receive the peer's greeting over the data channel.
-async fn exchange(channel: &wasi::webrtc_data_channels::data_channels::DataChannel, role: Role) -> Result<String, Error> {
+async fn exchange(
+    channel: &lann::webrtc_datachannels::data_channels::DataChannel,
+    role: Role,
+) -> Result<String, Error> {
     // Read the inbound stream first so the peer's message cannot be missed.
     let mut incoming = channel.receive().await;
 

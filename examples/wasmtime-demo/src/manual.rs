@@ -53,7 +53,7 @@ mod bindings {
 use bindings::demo::webrtc_echo::manual_signaling::{
     self, HostPeerConnection, HostPeerConnectionWithStore,
 };
-use bindings::wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
+use bindings::lann::webrtc_datachannels::types::{DataChannelOptions, Error};
 
 /// [`HasData`] marker for the demo-only `manual-signaling` host bindings.
 struct ManualSignaling;

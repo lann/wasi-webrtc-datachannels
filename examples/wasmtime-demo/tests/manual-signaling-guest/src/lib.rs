@@ -17,7 +17,7 @@ wit_bindgen::generate!({
 
 use exports::test::webrtc_manual_signaling::runner::{Guest, Report};
 use demo::webrtc_echo::manual_signaling::PeerConnection;
-use wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
+use lann::webrtc_datachannels::types::{DataChannelOptions, Error};
 use wit_bindgen::StreamResult;
 
 const CHANNEL_LABEL: &str = "manual-signaling-test";

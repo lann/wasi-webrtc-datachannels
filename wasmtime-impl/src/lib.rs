@@ -170,8 +170,8 @@ pub fn add_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where
     T: WasiWebrtcView + 'static,
 {
-    bindings::webrtc_data_channels::types::add_to_linker::<_, WasiWebrtc>(linker, T::webrtc)?;
-    bindings::webrtc_data_channels::data_channels::add_to_linker::<_, WasiWebrtc>(
+    bindings::webrtc_datachannels::types::add_to_linker::<_, WasiWebrtc>(linker, T::webrtc)?;
+    bindings::webrtc_datachannels::data_channels::add_to_linker::<_, WasiWebrtc>(
         linker,
         T::webrtc,
     )?;

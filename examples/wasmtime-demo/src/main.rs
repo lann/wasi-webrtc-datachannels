@@ -31,7 +31,7 @@ mod bindings {
     });
 }
 
-use bindings::wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
+use bindings::lann::webrtc_datachannels::types::{DataChannelOptions, Error};
 
 struct Ctx {
     webrtc: WasiWebrtcCtx,

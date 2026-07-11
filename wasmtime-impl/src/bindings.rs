@@ -28,4 +28,4 @@ mod generated {
     });
 }
 
-pub use self::generated::wasi::*;
+pub use self::generated::lann::*;
