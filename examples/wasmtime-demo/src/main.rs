@@ -1,16 +1,16 @@
-//! Wasmtime host for `wasi:webrtc-data-channels`, backed by the
+//! Wasmtime host for `lann:webrtc-datachannels`, backed by the
 //! pure-Rust `webrtc-rs` stack.
 //!
 //! It is the non-browser counterpart to the Node host: it loads the same
 //! `echo-demo` component and invokes the component's exported async `run`. The
-//! `wasi:webrtc-data-channels` imports (`types`, `data-channels`) are
-//! satisfied by [`wasmtime_wasi_webrtc_datachannels`]; this binary only
+//! `lann:webrtc-datachannels` imports (`types`, `data-channels`) are
+//! satisfied by [`wasmtime_webrtc_datachannels`]; this binary only
 //! implements the demo-only `connect` convenience, which wires a channel to a
 //! host-provided echo endpoint via [`build_echo`].
 
 use wasmtime::component::{Accessor, Component, HasData, Linker, Resource, ResourceTable};
 use wasmtime::{Config, Engine, Result, Store};
-use wasmtime_wasi_webrtc_datachannels::{
+use wasmtime_webrtc_datachannels::{
     self as webrtc, build_echo, DataChannel, WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
 };
 
@@ -25,13 +25,13 @@ mod bindings {
             default: async,
         },
         with: {
-            "wasi:webrtc-data-channels/data-channels.data-channel":
-                wasmtime_wasi_webrtc_datachannels::DataChannel,
+            "lann:webrtc-datachannels/data-channels.data-channel":
+                wasmtime_webrtc_datachannels::DataChannel,
         },
     });
 }
 
-use bindings::wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
+use bindings::lann::webrtc_datachannels::types::{DataChannelOptions, Error};
 
 struct Ctx {
     webrtc: WasiWebrtcCtx,
@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
     let engine = engine()?;
     let component = Component::from_file(&engine, &path)?;
     let mut linker: Linker<Ctx> = Linker::new(&engine);
-    // Shared `wasi:webrtc-data-channels` imports.
+    // Shared `lann:webrtc-datachannels` imports.
     webrtc::add_to_linker(&mut linker)?;
     // Demo-only `connect` import.
     bindings::demo::webrtc_echo::connect::add_to_linker::<_, Ctx>(&mut linker, |c| c)?;

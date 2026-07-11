@@ -2,7 +2,7 @@
 //!
 //! `manual-signaling` is a demo-only interface (`demo:webrtc-echo`), so its host
 //! implementation lives here rather than in the
-//! `wasmtime-wasi-webrtc-datachannels` crate. It backs the `peer-connection`
+//! `wasmtime-webrtc-datachannels` crate. It backs the `peer-connection`
 //! resource with a real `webrtc-rs` [`RTCPeerConnection`], using *vanilla*
 //! (non-trickle) ICE: after applying a local description, we wait for ICE
 //! gathering to complete and read back the local description, which then already
@@ -25,7 +25,7 @@ use webrtc::data_channel::RTCDataChannel;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
-use wasmtime_wasi_webrtc_datachannels::{
+use wasmtime_webrtc_datachannels::{
     new_peer_connection, DataChannel, SettingEngineHook, WasiWebrtcCtxView, WasiWebrtcView,
 };
 
@@ -43,8 +43,8 @@ mod bindings {
             "demo:webrtc-echo/manual-signaling@0.1.0.[method]peer-connection.close": trappable,
         },
         with: {
-            "wasi:webrtc-data-channels/data-channels.data-channel":
-                wasmtime_wasi_webrtc_datachannels::DataChannel,
+            "lann:webrtc-datachannels/data-channels.data-channel":
+                wasmtime_webrtc_datachannels::DataChannel,
             "demo:webrtc-echo/manual-signaling.peer-connection": super::ManualPeer,
         },
     });
@@ -53,7 +53,7 @@ mod bindings {
 use bindings::demo::webrtc_echo::manual_signaling::{
     self, HostPeerConnection, HostPeerConnectionWithStore,
 };
-use bindings::wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
+use bindings::lann::webrtc_datachannels::types::{DataChannelOptions, Error};
 
 /// [`HasData`] marker for the demo-only `manual-signaling` host bindings.
 struct ManualSignaling;
@@ -65,7 +65,7 @@ impl HasData for ManualSignaling {
 /// Add the demo-only `demo:webrtc-echo/manual-signaling` interface to `linker`.
 ///
 /// The `data-channels`/`types` imports must be provided separately by
-/// [`wasmtime_wasi_webrtc_datachannels::add_to_linker`]; the channels this
+/// [`wasmtime_webrtc_datachannels::add_to_linker`]; the channels this
 /// interface returns are that crate's [`DataChannel`].
 pub fn add_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where

@@ -1,4 +1,4 @@
-//! Host trait implementations for the `wasi:webrtc-data-channels` imports.
+//! Host trait implementations for the `lann:webrtc-datachannels` imports.
 //!
 //! Following the split the generated bindings produce (and mirroring
 //! `wasmtime_wasi_http::p3`), the store-free traits are implemented for the
@@ -8,10 +8,10 @@
 use wasmtime::component::{Accessor, Resource, StreamReader};
 use wasmtime::Result;
 
-use crate::bindings::webrtc_data_channels::data_channels::{
+use crate::bindings::webrtc_datachannels::data_channels::{
     self, HostDataChannel, HostDataChannelWithStore,
 };
-use crate::bindings::webrtc_data_channels::types::{self, Error};
+use crate::bindings::webrtc_datachannels::types::{self, Error};
 use crate::pipe::{PipeConsumer, PipeProducer};
 use crate::{data_channel, DataChannel, WasiWebrtc, WasiWebrtcCtxView};
 

@@ -1,6 +1,6 @@
 //! Test guest: exercises the demo-only `manual-signaling` interface together
 //! with the `data-channels` interface implemented by
-//! `wasmtime-wasi-webrtc-datachannels`.
+//! `wasmtime-webrtc-datachannels`.
 //!
 //! It stands up an offerer and an answerer `peer-connection` entirely in-guest,
 //! performs the vanilla (non-trickle) offer/answer exchange the host satisfies,
@@ -17,7 +17,7 @@ wit_bindgen::generate!({
 
 use exports::test::webrtc_manual_signaling::runner::{Guest, Report};
 use demo::webrtc_echo::manual_signaling::PeerConnection;
-use wasi::webrtc_data_channels::types::{DataChannelOptions, Error};
+use lann::webrtc_datachannels::types::{DataChannelOptions, Error};
 use wit_bindgen::StreamResult;
 
 const CHANNEL_LABEL: &str = "manual-signaling-test";

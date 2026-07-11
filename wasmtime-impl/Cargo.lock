@@ -3048,7 +3048,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmtime-wasi-webrtc-datachannels"
+name = "wasmtime-webrtc-datachannels"
 version = "0.1.0"
 dependencies = [
  "anyhow",

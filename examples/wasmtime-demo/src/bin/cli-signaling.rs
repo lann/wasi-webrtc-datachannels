@@ -10,7 +10,7 @@
 //!   * the demo-only `demo:webrtc-echo/manual-signaling` interface backed by
 //!     `webrtc-rs` (provided by this crate's [`manual`] module), plus the
 //!     `data-channels`/`types` imports (provided by
-//!     [`wasmtime_wasi_webrtc_datachannels`]), so the offer/answer exchange
+//!     [`wasmtime_webrtc_datachannels`]), so the offer/answer exchange
 //!     drives a real connection.
 //!
 //! Usage: `cli-signaling <component.wasm> [offerer|answerer]`.
@@ -19,7 +19,7 @@ use wasmtime::component::{Component, HasData, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Result, Store};
 use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
-use wasmtime_wasi_webrtc_datachannels::{WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView};
+use wasmtime_webrtc_datachannels::{WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView};
 use wasmtime_webrtc_host::manual;
 
 struct Ctx {
@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
     // Shared `data-channels`/`types` imports, then the demo-only
     // `manual-signaling` interface layered on top.
-    wasmtime_wasi_webrtc_datachannels::add_to_linker(&mut linker)?;
+    wasmtime_webrtc_datachannels::add_to_linker(&mut linker)?;
     manual::add_to_linker(&mut linker)?;
 
     let mut wasi = WasiCtx::builder();

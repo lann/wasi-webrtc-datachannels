@@ -1,6 +1,6 @@
 //! Integration test for the demo-only `manual-signaling` host implementation
 //! (`examples/wasmtime-demo` `manual` module) on top of the
-//! `wasmtime-wasi-webrtc-datachannels` crate.
+//! `wasmtime-webrtc-datachannels` crate.
 //!
 //! It builds the `manual-signaling-test` guest component, instantiates it under
 //! Wasmtime with the crate's `add_to_linker` providing `types` +
@@ -18,7 +18,7 @@ use std::sync::OnceLock;
 
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
-use wasmtime_wasi_webrtc_datachannels::{WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView};
+use wasmtime_webrtc_datachannels::{WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView};
 use wasmtime_webrtc_host::manual;
 
 mod bindings {
@@ -34,8 +34,8 @@ mod bindings {
             default: async,
         },
         with: {
-            "wasi:webrtc-data-channels/data-channels.data-channel":
-                wasmtime_wasi_webrtc_datachannels::DataChannel,
+            "lann:webrtc-datachannels/data-channels.data-channel":
+                wasmtime_webrtc_datachannels::DataChannel,
             "demo:webrtc-echo/manual-signaling.peer-connection":
                 wasmtime_webrtc_host::manual::ManualPeer,
         },
@@ -132,7 +132,7 @@ async fn run_round_trip(count: u32, size: u32) -> anyhow::Result<Report> {
 
     let mut linker: Linker<Ctx> = Linker::new(&engine);
     // Shared `types` + `data-channels`, then the demo-only `manual-signaling`.
-    wasmtime_wasi_webrtc_datachannels::add_to_linker(&mut linker)?;
+    wasmtime_webrtc_datachannels::add_to_linker(&mut linker)?;
     manual::add_to_linker(&mut linker)?;
 
     // Two peer connections share this process; enable loopback ICE candidates

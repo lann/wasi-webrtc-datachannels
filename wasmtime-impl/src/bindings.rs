@@ -1,4 +1,4 @@
-//! Raw `bindgen!` output for the `wasi:webrtc-data-channels` package.
+//! Raw `bindgen!` output for the `lann:webrtc-datachannels` package.
 //!
 //! Only the interfaces this crate implements are wired up (`types` and
 //! `data-channels`); see [`crate`] for the public API built on top of these
@@ -20,12 +20,12 @@ mod generated {
             // `data-channel.label` is a synchronous function in the WIT and is
             // imported as such by guests, so it must be bound synchronously
             // (still `trappable`, but not `async`).
-            "wasi:webrtc-data-channels/data-channels@0.1.0.[method]data-channel.label": trappable,
+            "lann:webrtc-datachannels/data-channels@0.1.0.[method]data-channel.label": trappable,
         },
         with: {
-            "wasi:webrtc-data-channels/data-channels.data-channel": crate::DataChannel,
+            "lann:webrtc-datachannels/data-channels.data-channel": crate::DataChannel,
         },
     });
 }
 
-pub use self::generated::wasi::*;
+pub use self::generated::lann::*;

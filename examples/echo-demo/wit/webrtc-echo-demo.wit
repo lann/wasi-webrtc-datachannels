@@ -12,8 +12,8 @@ package demo:webrtc-echo@0.1.0;
 /// signaling is involved. See `rendezvous` for the interface that would carry
 /// signaling between two *separate* peers (the "real signaling" path).
 interface connect {
-    use wasi:webrtc-data-channels/types@0.1.0.{error, data-channel-options};
-    use wasi:webrtc-data-channels/data-channels@0.1.0.{data-channel};
+    use lann:webrtc-datachannels/types@0.1.0.{error, data-channel-options};
+    use lann:webrtc-datachannels/data-channels@0.1.0.{data-channel};
 
     /// Open a data channel connected to a host-provided echo endpoint. Every
     /// message the guest sends is echoed back verbatim.
@@ -21,7 +21,7 @@ interface connect {
 }
 
 /// Demo-only HTTP signaling rendezvous (a proposal, not yet wired into the
-/// runnable world — mirroring how `wasi:webrtc-data-channels/signaling` is
+/// runnable world — mirroring how `lann:webrtc-datachannels/signaling` is
 /// designed but not yet exercised).
 ///
 /// To connect two *separate* peers (offerer and answerer) they must exchange
@@ -33,13 +33,13 @@ interface connect {
 /// between them.
 ///
 /// The transport is deliberately unstandardized — it lives in the demo package,
-/// not in `wasi:webrtc-data-channels`. A host is expected to implement it by
+/// not in `lann:webrtc-datachannels`. A host is expected to implement it by
 /// relaying blobs to and from an existing HTTP signaling server over
 /// `wasi:http@0.3` (the guest itself does not need to speak HTTP). The blob
 /// payloads are opaque here; the guest chooses the encoding (for example, JSON
 /// produced from the `signaling` records).
 interface rendezvous {
-    use wasi:webrtc-data-channels/types@0.1.0.{error};
+    use lann:webrtc-datachannels/types@0.1.0.{error};
 
     /// Which half of the exchange this peer is driving. The offerer creates the
     /// SDP offer; the answerer waits for it and replies with an answer.
@@ -73,7 +73,7 @@ interface rendezvous {
 
 /// The exported demo entry point.
 interface demo {
-    use wasi:webrtc-data-channels/types@0.1.0.{error};
+    use lann:webrtc-datachannels/types@0.1.0.{error};
 
     /// Parameters for a single demo run.
     record demo-config {

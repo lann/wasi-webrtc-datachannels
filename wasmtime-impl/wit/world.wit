@@ -1,18 +1,18 @@
-// The `imports` world enumerates the `wasi:webrtc-data-channels` interfaces this
+// The `imports` world enumerates the `lann:webrtc-datachannels` interfaces this
 // crate implements on the host side, so `bindgen!` can generate the
 // corresponding `Host` traits and per-interface `add_to_linker` helpers.
 //
 // The package itself lives once at the repository root `wit/` and is pulled in
-// through the `deps/wasi-webrtc-data-channels` symlink, exactly like the demo
+// through the `deps/lann-webrtc-datachannels` symlink, exactly like the demo
 // components do.
-package wasmtime:webrtc-data-channels-host;
+package wasmtime:webrtc-datachannels-host;
 
-/// The set of `wasi:webrtc-data-channels` imports satisfied by this crate.
+/// The set of `lann:webrtc-datachannels` imports satisfied by this crate.
 ///
 /// `manual-signaling` (the vanilla copy/paste surface) and `signaling` (the full
 /// trickle-ICE design target) are intentionally omitted: `manual-signaling` is a
 /// demo-only interface implemented by the demo hosts, and `signaling` is
 /// designed but not yet implemented by any host.
 world imports {
-    import wasi:webrtc-data-channels/data-channels@0.1.0;
+    import lann:webrtc-datachannels/data-channels@0.1.0;
 }

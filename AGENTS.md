@@ -4,7 +4,7 @@ Guidance for automated agents (and humans) working in this repository.
 
 ## What this repository is
 
-`wasi:webrtc-data-channels`: a WIT interface plus two host implementations that
+`lann:webrtc-datachannels`: a WIT interface plus two host implementations that
 run the *same* guest component over a real WebRTC data channel. It is
 intentionally small — prefer clarity and correctness over features, and keep the
 two hosts behaviourally in sync. See [`README.md`](README.md) for the findings
@@ -39,23 +39,23 @@ starter's examples first.
 ## Repository layout
 
 ```
-wit/                                   # wasi:webrtc-data-channels package
+wit/                                   # lann:webrtc-datachannels package
   webrtc.wit                           #   types, data-channels, signaling
 wasmtime-impl/                         # Wasmtime host crate (webrtc-rs),
                                        #   modeled after wasmtime_wasi_http::p3;
                                        #   add_to_linker + WasiWebrtcView (types + data-channels);
-                                       #   crate name: wasmtime-wasi-webrtc-datachannels
+                                       #   crate name: wasmtime-webrtc-datachannels
 jco-impl/                              # browser-first host (Node + jco + @roamhq/wrtc)
 examples/                              # guest components + the demo/manual-signaling driver
   echo-demo/                           # example guest component (Rust)
     wit/                               #   demo-only WIT for this component
       webrtc-echo-demo.wit             #     demo:webrtc-echo (connect, rendezvous, demo)
-      deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
+      deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
   cli-signaling/                       # manual-signaling CLI guest component (Rust)
     wit/                               #   demo-only WIT for this component
       webrtc-echo-demo.wit             #     demo:webrtc-echo (prompt, manual-demo,
                                        #       manual-signaling, worlds)
-      deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
+      deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
   wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): a lib carrying
                                        #   the demo-only manual-signaling host + the
                                        #   integration test, plus binaries; the shared
@@ -64,17 +64,17 @@ examples/                              # guest components + the demo/manual-sign
 
 ### WIT is organized by ownership — one copy of the shared package
 
-The **`wasi:webrtc-data-channels`** package is defined exactly once, at the root
+The **`lann:webrtc-datachannels`** package is defined exactly once, at the root
 [`wit/`](wit). Each demo component owns its **demo-only** WIT under its own
 `examples/<name>/wit/` and pulls the package in through a
-`wit/deps/wasi-webrtc-data-channels` **symlink** back to the root, so there is a
+`wit/deps/lann-webrtc-datachannels` **symlink** back to the root, so there is a
 single copy of the shared surface to edit. Do **not** copy the root package into
 a component or replace those `deps` symlinks with real directories.
 
 The WIT is split into two packages, keeping the shared and demo-only surfaces
 separate:
 
-- **`wasi:webrtc-data-channels`** (`wit/webrtc.wit`) — the shared interfaces:
+- **`lann:webrtc-datachannels`** (`wit/webrtc.wit`) — the shared interfaces:
   `types`, `data-channels`, and the `RTCPeerConnection`-style `signaling` design
   target.
 - **`demo:webrtc-echo`** — the demo-only interfaces, split across the demo
@@ -86,7 +86,7 @@ separate:
     `browser-signaling-demo` / `manual-signaling-host` worlds.
 
 Cross-package `use` must include the version, e.g.
-`use wasi:webrtc-data-channels/types@0.1.0.{error}`.
+`use lann:webrtc-datachannels/types@0.1.0.{error}`.
 
 Changing an interface identifier (package, interface, or function name) means
 updating the consumers that name them as strings:
@@ -96,7 +96,7 @@ updating the consumers that name them as strings:
 - the host bindings in
   `wasmtime-impl/src/bindings.rs` (whose
   `wit/world.wit` also pulls in the root package through a
-  `deps/wasi-webrtc-data-channels` symlink), and the demo-only manual-signaling
+  `deps/lann-webrtc-datachannels` symlink), and the demo-only manual-signaling
   host bindings in `examples/wasmtime-demo/src/manual.rs`,
 - the Wasmtime host bindings in `examples/wasmtime-demo/src/main.rs` and
   `examples/wasmtime-demo/src/bin/cli-signaling.rs`, and
@@ -166,7 +166,7 @@ an answerer — must exchange SDP and trickled ICE out of band.
 
 The intended shape:
 
-- The guest drives the `wasi:webrtc-data-channels/signaling` `peer-connection`
+- The guest drives the `lann:webrtc-datachannels/signaling` `peer-connection`
   interface to produce/consume offers, answers, and ICE candidates.
 - Those opaque blobs travel between the two peers through the demo-only
   `demo:webrtc-echo/rendezvous` mailbox interface. It is deliberately **not**
