@@ -157,6 +157,14 @@ test host under `wasmtime-impl/tests`, run
 `cargo test --manifest-path wasmtime-impl/Cargo.toml`. Keep the two hosts
 producing the same result.
 
+## Code comments
+
+Code comments describe **what** something is or does, not the process by which
+it was arrived at.  Rationale such as "we removed X because Y" or "no bridge is
+needed because…" belongs in commit messages, PR descriptions, or chat — not in
+source files.  Keeping process reasoning out of comments avoids cluttering the
+codebase with context that quickly becomes stale and misleading.
+
 ## Real signaling (`rendezvous` + `wasi:http@0.3`) — direction
 
 The runnable demo uses the `connect` shortcut: the host builds *both* peers
