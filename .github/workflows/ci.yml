@@ -18,6 +18,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -38,11 +40,14 @@ jobs:
       - name: Install dependencies
         run: ./scripts/setup.sh
 
+      - name: Check formatting
+        run: just fmt-check
+
+      - name: Run clippy
+        run: just clippy
+
       - name: Validate WIT
-        run: |
-          wasm-tools component wit wit
-          wasm-tools component wit examples/echo-demo/wit
-          wasm-tools component wit examples/cli-signaling/wit
+        run: just validate-wit
 
       - name: Build echo-demo guest component
         working-directory: jco-impl
@@ -56,5 +61,5 @@ jobs:
         working-directory: jco-impl
         run: npm run test:browser
 
-      - name: Run wasmtime-impl tests
-        run: cargo test --manifest-path wasmtime-impl/Cargo.toml
+      - name: Run tests
+        run: just test

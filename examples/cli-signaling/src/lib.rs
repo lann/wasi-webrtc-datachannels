@@ -40,7 +40,10 @@ struct Component;
 impl wasip3::exports::cli::run::Guest for Component {
     async fn run() -> Result<(), ()> {
         // Role selection: `offerer` (default) or `answerer`.
-        let role = match wasip3::cli::environment::get_arguments().get(1).map(String::as_str) {
+        let role = match wasip3::cli::environment::get_arguments()
+            .get(1)
+            .map(String::as_str)
+        {
             Some("answerer") | Some("answer") => Role::Answerer,
             Some("offerer") | Some("offer") | None => Role::Offerer,
             Some(other) => {

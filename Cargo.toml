@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "wasmtime-impl",
+    "examples/wasmtime-demo",
+    "examples/echo-demo",
+    "examples/cli-signaling",
+]
+resolver = "2"

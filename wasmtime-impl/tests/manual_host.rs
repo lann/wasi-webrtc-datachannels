@@ -364,6 +364,9 @@ impl<T> HostPeerConnectionWithStore<T> for ManualSignaling {
 
 /// Clone the cheaply-`Arc`-backed [`ManualPeer`] out of the table so its async
 /// methods can run without holding the store borrow across `.await`.
-fn clone_peer(view: WasiWebrtcCtxView<'_>, self_: &Resource<ManualPeer>) -> wasmtime::Result<ManualPeer> {
+fn clone_peer(
+    view: WasiWebrtcCtxView<'_>,
+    self_: &Resource<ManualPeer>,
+) -> wasmtime::Result<ManualPeer> {
     Ok(view.table.get(self_)?.clone())
 }

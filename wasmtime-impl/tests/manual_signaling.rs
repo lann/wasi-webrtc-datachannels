@@ -177,8 +177,11 @@ fn manual_signaling_round_trip() {
     let size = 1024;
     let report = runtime
         .block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(60), run_round_trip(count, size))
-                .await
+            tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                run_round_trip(count, size),
+            )
+            .await
         })
         .expect("manual-signaling round trip timed out")
         .expect("manual-signaling round trip failed");

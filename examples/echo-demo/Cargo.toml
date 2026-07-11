@@ -15,7 +15,3 @@ wit-bindgen = { version = "0.57", features = ["async", "async-spawn"] }
 # `join!` lets the component send and receive concurrently on the same channel
 # within a single cooperative task (no OS threads).
 futures = { version = "0.3", default-features = false, features = ["async-await"] }
-
-[profile.release]
-opt-level = "s"
-lto = true
