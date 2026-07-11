@@ -41,9 +41,10 @@ impl<T> HostDataChannelWithStore<T> for WasiWebrtc {
         let channel = accessor
             .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.channel()))?;
 
-        // Drain the guest's outbound stream into an mpsc sink, then forward each
-        // message to the WebRTC data channel, awaiting the transport.
-        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
+        // Forward each message from the guest's outbound stream to the WebRTC
+        // data channel.  A buffer-0 mpsc acts as the bridge between
+        // wasmtime's synchronous StreamConsumer API and this async loop.
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(0);
         accessor.with(move |access| messages.pipe(access, PipeConsumer::new(tx)))?;
 
         while let Some(message) = rx.next().await {
