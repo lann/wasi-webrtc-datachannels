@@ -44,7 +44,7 @@ jobs:
           wasm-tools component wit examples/echo-demo/wit
           wasm-tools component wit examples/cli-signaling/wit
 
-      - name: Build reusable host crate
+      - name: Build host crate
         run: cargo build --manifest-path wasmtime-impl/Cargo.toml
 
       - name: Build echo-demo guest component

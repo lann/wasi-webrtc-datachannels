@@ -9,7 +9,7 @@
 //!     lowers to, and
 //!   * the demo-only `demo:webrtc-echo/manual-signaling` interface backed by
 //!     `webrtc-rs` (provided by this crate's [`manual`] module), plus the
-//!     reusable `data-channels`/`types` imports (provided by
+//!     `data-channels`/`types` imports (provided by
 //!     [`wasmtime_wasi_webrtc_datachannels`]), so the offer/answer exchange
 //!     drives a real connection.
 //!
@@ -59,7 +59,7 @@ fn engine() -> Result<Engine> {
 
 /// Build the WebRTC context, opting into loopback ICE candidates when the
 /// `WEBRTC_INCLUDE_LOOPBACK` environment variable is set. This env-driven tweak
-/// is demo-only glue (the reusable crate exposes it as a `SettingEngine` hook)
+/// is demo-only glue (the crate exposes it as a `SettingEngine` hook)
 /// and is useful when running an offerer and answerer on the same host.
 fn webrtc_ctx() -> WasiWebrtcCtx {
     let mut ctx = WasiWebrtcCtx::new();
@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
     let mut linker: Linker<Ctx> = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
-    // Reusable `data-channels`/`types` imports, then the demo-only
+    // Shared `data-channels`/`types` imports, then the demo-only
     // `manual-signaling` interface layered on top.
     wasmtime_wasi_webrtc_datachannels::add_to_linker(&mut linker)?;
     manual::add_to_linker(&mut linker)?;

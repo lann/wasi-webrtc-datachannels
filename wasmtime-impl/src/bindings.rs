@@ -1,4 +1,4 @@
-//! Raw `bindgen!` output for the reusable `wasi:webrtc-data-channels` package.
+//! Raw `bindgen!` output for the `wasi:webrtc-data-channels` package.
 //!
 //! Only the interfaces this crate implements are wired up (`types` and
 //! `data-channels`); see [`crate`] for the public API built on top of these

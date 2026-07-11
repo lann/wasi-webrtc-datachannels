@@ -21,9 +21,9 @@ genuine WebRTC/SCTP data channel.
 
 | Path | Deliverable |
 | --- | --- |
-| [`wit/`](wit) | The reusable streaming **WIT interface**, the `wasi:webrtc-data-channels@0.1.0` package. Each demo component keeps its own demo-only WIT and symlinks this package in as a dependency. |
+| [`wit/`](wit) | The streaming **WIT interface**, the `wasi:webrtc-data-channels@0.1.0` package. Each demo component keeps its own demo-only WIT and symlinks this package in as a dependency. |
 | [`examples/echo-demo`](examples/echo-demo) | A **Rust example component** exercising a data channel entirely through streams. |
-| [`wasmtime-impl`](wasmtime-impl) | The **reusable Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `add_to_linker` + `WasiWebrtcView` for the reusable `types` + `data-channels`. Crate name: `wasmtime-wasi-webrtc-datachannels`. |
+| [`wasmtime-impl`](wasmtime-impl) | The **Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `add_to_linker` + `WasiWebrtcView` for the `types` + `data-channels` interfaces. Crate name: `wasmtime-wasi-webrtc-datachannels`. |
 | [`jco-impl`](jco-impl) | The **browser-first host** (Node stand-in for the browser, jco + @roamhq/wrtc). |
 | [`examples/wasmtime-demo`](examples/wasmtime-demo) | The **native Rust host** (Wasmtime + webrtc-rs): binaries plus a lib carrying the demo-only manual-signaling host and the integration test, built on `wasmtime-impl`. |
 | [`examples/cli-signaling`](examples/cli-signaling) | The **manual-signaling CLI guest component** (Rust). |
@@ -31,12 +31,12 @@ genuine WebRTC/SCTP data channel.
 
 ## The interface
 
-The reusable interface lives at the root [`wit/`](wit) as the
+The interface lives at the root [`wit/`](wit) as the
 `wasi:webrtc-data-channels` package. Each demo component keeps its own demo-only
-WIT alongside it and pulls the reusable package in as a `deps` symlink, so there
-is still a single copy of the shared surface to edit:
+WIT alongside it and pulls the package in as a `deps` symlink, so there is still
+a single copy of the shared surface to edit:
 
-**`wasi:webrtc-data-channels`** — the reusable interfaces:
+**`wasi:webrtc-data-channels`** — the shared interfaces:
 
 - **`types`** — shared `error` variant and `data-channel-options`.
 - **`data-channels`** — the high-throughput surface. A `data-channel` resource

@@ -1,9 +1,9 @@
 //! Integration test for the demo-only `manual-signaling` host implementation
-//! (`examples/wasmtime-demo` `manual` module) on top of the reusable
+//! (`examples/wasmtime-demo` `manual` module) on top of the
 //! `wasmtime-wasi-webrtc-datachannels` crate.
 //!
 //! It builds the `manual-signaling-test` guest component, instantiates it under
-//! Wasmtime with the reusable crate's `add_to_linker` providing `types` +
+//! Wasmtime with the crate's `add_to_linker` providing `types` +
 //! `data-channels` and the demo [`manual::add_to_linker`] providing
 //! `manual-signaling`, and drives a full manual-signaling round trip over a real
 //! `webrtc-rs` data channel. This exercises `manual-signaling`
@@ -131,7 +131,7 @@ async fn run_round_trip(count: u32, size: u32) -> anyhow::Result<Report> {
     let component = Component::from_binary(&engine, guest_component())?;
 
     let mut linker: Linker<Ctx> = Linker::new(&engine);
-    // Reusable `types` + `data-channels`, then the demo-only `manual-signaling`.
+    // Shared `types` + `data-channels`, then the demo-only `manual-signaling`.
     wasmtime_wasi_webrtc_datachannels::add_to_linker(&mut linker)?;
     manual::add_to_linker(&mut linker)?;
 

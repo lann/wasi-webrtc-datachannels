@@ -3,7 +3,7 @@
 //!
 //! It is the non-browser counterpart to the Node host: it loads the same
 //! `echo-demo` component and invokes the component's exported async `run`. The
-//! reusable `wasi:webrtc-data-channels` imports (`types`, `data-channels`) are
+//! `wasi:webrtc-data-channels` imports (`types`, `data-channels`) are
 //! satisfied by [`wasmtime_wasi_webrtc_datachannels`]; this binary only
 //! implements the demo-only `connect` convenience, which wires a channel to a
 //! host-provided echo endpoint via [`build_echo`].
@@ -51,7 +51,7 @@ impl WasiWebrtcView for Ctx {
     }
 }
 
-// The demo-only `connect` convenience is implemented here; the reusable
+// The demo-only `connect` convenience is implemented here; the
 // `data-channels`/`types` imports come from the crate's `add_to_linker`.
 impl bindings::demo::webrtc_echo::connect::Host for Ctx {}
 
@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
     let engine = engine()?;
     let component = Component::from_file(&engine, &path)?;
     let mut linker: Linker<Ctx> = Linker::new(&engine);
-    // Reusable `wasi:webrtc-data-channels` imports.
+    // Shared `wasi:webrtc-data-channels` imports.
     webrtc::add_to_linker(&mut linker)?;
     // Demo-only `connect` import.
     bindings::demo::webrtc_echo::connect::add_to_linker::<_, Ctx>(&mut linker, |c| c)?;
