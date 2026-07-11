@@ -18,8 +18,7 @@ mod data_channel;
 mod host;
 mod pipe;
 
-pub use data_channel::{build_echo, new_peer_connection, send_message, DataChannel};
-pub use pipe::{PipeConsumer, PipeProducer};
+pub use data_channel::{new_peer_connection, send_message, DataChannel};
 
 use std::sync::Arc;
 
