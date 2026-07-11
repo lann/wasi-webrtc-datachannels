@@ -1,17 +1,16 @@
-# wasi:webrtc-data-channels — feasibility spike
+# wasi:webrtc-data-channels
 
-An exploratory **spike** validating that high-performance WebRTC data-channel
-communication can be expressed with the **WebAssembly Component Model's async
-features** (`stream`, `future`, async imports/exports), and that a *single*
-guest component binary can run unchanged against two very different host
-stacks:
+A WIT interface and two host implementations showing that high-performance
+WebRTC data-channel communication can be expressed with the **WebAssembly
+Component Model's async features** (`stream`, `future`, async imports/exports),
+with a *single* guest component binary running unchanged against two very
+different host stacks:
 
 - a **browser-first** host (Node.js + [`jco`] + [`@roamhq/wrtc`]), and
 - a **native Rust** host ([Wasmtime] + [`webrtc-rs`]).
 
-This is a spike, not a product: the interface and implementations are meant to
-be iterated on. The goal was to answer *"is this technically feasible, and what
-does it cost?"* — and the answer is **yes** (see [Findings](#findings)).
+Both hosts run the identical component and round-trip every message through a
+genuine WebRTC/SCTP data channel (see [Findings](#findings)).
 
 [`jco`]: https://github.com/bytecodealliance/jco
 [`@roamhq/wrtc`]: https://github.com/WonderInventions/node-webrtc
@@ -24,14 +23,14 @@ does it cost?"* — and the answer is **yes** (see [Findings](#findings)).
 | --- | --- |
 | [`wit/`](wit) | The reusable streaming **WIT interface**, the `wasi:webrtc-data-channels@0.1.0` package. Each demo component keeps its own demo-only WIT and symlinks this package in as a dependency. |
 | [`examples/echo-demo`](examples/echo-demo) | A **Rust example component** exercising a data channel entirely through streams. |
-| [`wasmtime-impl`](wasmtime-impl) | The **reusable Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `add_to_linker` + `WasiWebrtcView` for the reusable `types` + `data-channels`. (Crate name stays `wasmtime-wasi-webrtc-datachannels`.) |
+| [`wasmtime-impl`](wasmtime-impl) | The **reusable Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `add_to_linker` + `WasiWebrtcView` for the reusable `types` + `data-channels`. Crate name: `wasmtime-wasi-webrtc-datachannels`. |
 | [`jco-impl`](jco-impl) | The **browser-first host** (Node stand-in for the browser, jco + @roamhq/wrtc). |
 | [`examples/wasmtime-demo`](examples/wasmtime-demo) | The **native Rust host** (Wasmtime + webrtc-rs): binaries plus a lib carrying the demo-only manual-signaling host and the integration test, built on `wasmtime-impl`. |
 | [`examples/cli-signaling`](examples/cli-signaling) | The **manual-signaling CLI guest component** (Rust). |
 | [`AGENTS.md`](AGENTS.md) | Orientation for agents/contributors, linking the `lann/wasm-component-starter` knowledge base. |
 
 The same `echo-demo.component.wasm` produced from `examples/echo-demo` is
-loaded by **both** hosts. That is the core compatibility result of the spike.
+loaded by **both** hosts. That is the core compatibility result.
 
 ## The interface
 
@@ -56,10 +55,10 @@ is still a single copy of the shared surface to edit:
   + trickle ICE) that documents where a *guest-driven* connection API is
   headed. It is the design target and is **not** required by the runnable demo.
 
-**`demo:webrtc-echo`** — the demo-only interfaces, which now live with the demo
+**`demo:webrtc-echo`** — the demo-only interfaces, which live with the demo
 components that use them ([`examples/echo-demo/wit`](examples/echo-demo/wit)
 for the echo demo, [`examples/cli-signaling/wit`](examples/cli-signaling/wit)
-for the manual-signaling demos) rather than at the root:
+for the manual-signaling demos):
 
 - **`connect`** — a convenience used by the demo: `open-echo` returns a channel
   wired to a host-provided echo endpoint, so the example can focus on the
@@ -114,9 +113,9 @@ node --experimental-wasm-jspi src/run.mjs
 The host builds two `RTCPeerConnection`s with `@roamhq/wrtc`, performs a real
 SDP/ICE handshake, and echoes on the far side.
 
-The same `webrtc.js` host module also runs unchanged in a real browser: it now
-resolves `RTCPeerConnection` from the browser global when present and only falls
-back to `@roamhq/wrtc` under Node. A headless-Chrome test drives the *identical*
+The same `webrtc.js` host module runs unchanged in a real browser: it resolves
+`RTCPeerConnection` from the browser global when present and falls back to
+`@roamhq/wrtc` under Node. A headless-Chrome test drives the *identical*
 transpiled component through that browser path and is what runs in CI:
 
 ```sh
@@ -139,7 +138,7 @@ manually, to produce the `.wasm`.)
 
 ## Findings
 
-**Feasibility: confirmed.** Both hosts run the identical component and
+**Both hosts work.** Both run the identical component and
 round-trip every message through a genuine WebRTC/SCTP data channel:
 
 | Host | Stack | 1000 × 4096-byte round trip |
@@ -147,7 +146,7 @@ round-trip every message through a genuine WebRTC/SCTP data channel:
 | Node | `jco` (JSPI) + `@roamhq/wrtc` | ✅ correct, ~0.2 MiB/s |
 | Wasmtime | Wasmtime 46 async + `webrtc-rs` | ✅ correct, ~10 MiB/s |
 
-Notes and caveats (this is a spike):
+Notes and caveats:
 
 - **The Component Model async ABI is a good fit for data channels.** Modeling
   each direction as `stream<list<u8>>` maps cleanly onto WebRTC's
@@ -162,12 +161,12 @@ Notes and caveats (this is a spike):
   `receive` returns a `ReadableStream`; the host code accommodates both.
 - **The Wasmtime host uses the current (Wasmtime 46) component-model async host
   API** — `StreamReader`/`StreamProducer`/`StreamConsumer` with the `Accessor`
-  concurrency model. This API is young; the `pipe.rs` adapters are adapted from
-  Wasmtime's own test utilities.
+  concurrency model. The `pipe.rs` adapters are adapted from Wasmtime's own test
+  utilities.
 - **The browser-first host really does run in a browser — and in CI.** The same
   `webrtc.js` and the same transpiled component drive a genuine WebRTC data
-  channel inside headless Chrome. Two headless-specific gotchas had to be
-  solved: JSPI must be available (it is, by default, in Chrome 137+), and
+  channel inside headless Chrome. Two headless-specific gotchas apply: JSPI must
+  be available (it is, by default, in Chrome 137+), and
   Chrome's `FilteringNetworkManager` silently *discards* all host ICE candidates
   until the page holds a media permission — so the loopback handshake never
   completes. The fix is to serve the page from `http://127.0.0.1` (a secure

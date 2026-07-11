@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Install the toolchain and dependencies needed to build, run, and test this
-# spike. Safe to run repeatedly (idempotent) and shared by local developers, the
+# repository. Safe to run repeatedly (idempotent) and shared by local developers, the
 # CI workflow (.github/workflows/ci.yml), and the Copilot cloud agent
 # (.github/workflows/copilot-setup-steps.yml).
 #

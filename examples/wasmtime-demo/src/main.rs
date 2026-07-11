@@ -1,4 +1,4 @@
-//! Wasmtime host for the `wasi:webrtc-data-channels` spike, backed by the
+//! Wasmtime host for `wasi:webrtc-data-channels`, backed by the
 //! pure-Rust `webrtc-rs` stack.
 //!
 //! It is the non-browser counterpart to the Node host: it loads the same
