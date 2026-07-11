@@ -1,5 +1,5 @@
-// Test-only guest world exercising the reusable `manual-signaling` and
-// `data-channels` interfaces implemented by the crate under test.
+// Test-only guest world exercising the `manual-signaling` and `data-channels`
+// interfaces implemented by the crate under test.
 package test:webrtc-manual-signaling;
 
 /// The exported test entry point.

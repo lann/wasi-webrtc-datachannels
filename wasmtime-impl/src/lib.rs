@@ -1,15 +1,15 @@
-//! Reusable Wasmtime host implementation of the `wasi:webrtc-data-channels`
+//! Wasmtime host implementation of the `wasi:webrtc-data-channels`
 //! interfaces, backed by the pure-Rust
 //! [`webrtc-rs`](https://github.com/webrtc-rs/webrtc) stack.
 //!
-//! This crate factors the reusable part of the Wasmtime WebRTC host out of the
-//! demo binaries so any host can satisfy the `wasi:webrtc-data-channels` imports
-//! with one call to [`add_to_linker`]. It is a wasip3 (component-model async)
-//! implementation modeled after [`wasmtime_wasi_http::p3`]: a host embeds a
-//! [`WasiWebrtcCtx`] in its store state, implements [`WasiWebrtcView`] to expose
-//! it alongside the store's [`ResourceTable`], and calls [`add_to_linker`] to
-//! satisfy the `types` and `data-channels` imports with a real WebRTC/SCTP data
-//! channel.
+//! This crate factors the host-agnostic part of the Wasmtime WebRTC host out of
+//! the demo binaries so any host can satisfy the `wasi:webrtc-data-channels`
+//! imports with one call to [`add_to_linker`]. It is a wasip3 (component-model
+//! async) implementation modeled after [`wasmtime_wasi_http::p3`]: a host embeds
+//! a [`WasiWebrtcCtx`] in its store state, implements [`WasiWebrtcView`] to
+//! expose it alongside the store's [`ResourceTable`], and calls
+//! [`add_to_linker`] to satisfy the `types` and `data-channels` imports with a
+//! real WebRTC/SCTP data channel.
 //!
 //! [`wasmtime_wasi_http::p3`]: https://docs.rs/wasmtime-wasi-http
 
@@ -111,7 +111,7 @@ pub struct WasiWebrtcCtxView<'a> {
     pub table: &'a mut ResourceTable,
 }
 
-/// A trait which provides access to the [`WasiWebrtcCtx`] host state.
+/// A trait that provides access to the [`WasiWebrtcCtx`] host state.
 ///
 /// Implement this for your store's data type so [`add_to_linker`] can wire the
 /// `wasi:webrtc-data-channels` imports onto your linker.

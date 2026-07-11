@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# The reusable `wasi:webrtc-data-channels` host implementation (data channels
+# The `wasi:webrtc-data-channels` host implementation (data channels
 # and the stream/pipe plumbing) lives in this crate. Both binaries obtain their
 # `types`/`data-channels` imports from its `add_to_linker`.
 wasmtime-wasi-webrtc-datachannels = { path = "../../wasmtime-impl" }
@@ -15,7 +15,7 @@ wasmtime-wasi-webrtc-datachannels = { path = "../../wasmtime-impl" }
 wasmtime = { version = "46", features = ["component-model", "component-model-async", "async", "cranelift", "runtime"] }
 wasmtime-wasi = { version = "46", features = ["p3"] }
 # `webrtc-rs` backs the demo-only `manual-signaling` host implementation (the
-# `ManualPeer` in `src/manual.rs`), which lives here rather than in the reusable
+# `ManualPeer` in `src/manual.rs`), which lives here rather than in the shared
 # crate.
 webrtc = "0.17"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

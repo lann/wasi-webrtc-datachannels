@@ -50,7 +50,7 @@ interface manual-demo {
 /// A minimal, *vanilla* (non-trickle) signaling surface for manual copy/paste
 /// connection setup.
 ///
-/// This is a **demo-only** interface (it is not part of the reusable
+/// This is a **demo-only** interface (it is not part of the
 /// `wasi:webrtc-data-channels` package). Unlike that package's `signaling` (the
 /// full trickle-ICE design target), this interface gathers ICE candidates up
 /// front so a whole connection needs just **two** messages: the offerer sends

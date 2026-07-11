@@ -3,7 +3,7 @@ name = "wasmtime-wasi-webrtc-datachannels"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Reusable Wasmtime host implementation of the wasi:webrtc-data-channels interfaces, backed by webrtc-rs."
+description = "Wasmtime host implementation of the wasi:webrtc-data-channels interfaces, backed by webrtc-rs."
 
 [dependencies]
 # Wasmtime with component-model async (streams/futures) support. The

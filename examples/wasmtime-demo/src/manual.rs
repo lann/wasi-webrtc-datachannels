@@ -1,7 +1,7 @@
 //! Demo-only `manual-signaling` host implementation, backed by `webrtc-rs`.
 //!
 //! `manual-signaling` is a demo-only interface (`demo:webrtc-echo`), so its host
-//! implementation lives here rather than in the reusable
+//! implementation lives here rather than in the
 //! `wasmtime-wasi-webrtc-datachannels` crate. It backs the `peer-connection`
 //! resource with a real `webrtc-rs` [`RTCPeerConnection`], using *vanilla*
 //! (non-trickle) ICE: after applying a local description, we wait for ICE
@@ -9,7 +9,7 @@
 //! contains every gathered candidate. That is what lets the whole exchange be
 //! just two complete SDP blobs (offer, answer).
 //!
-//! Data channels it hands back are the reusable crate's [`DataChannel`], so the
+//! Data channels it hands back are the crate's [`DataChannel`], so the
 //! same crate `add_to_linker` that satisfies `data-channels` also drives the
 //! `send`/`receive` on channels this interface produces.
 
@@ -64,7 +64,7 @@ impl HasData for ManualSignaling {
 
 /// Add the demo-only `demo:webrtc-echo/manual-signaling` interface to `linker`.
 ///
-/// The reusable `data-channels`/`types` imports must be provided separately by
+/// The `data-channels`/`types` imports must be provided separately by
 /// [`wasmtime_wasi_webrtc_datachannels::add_to_linker`]; the channels this
 /// interface returns are that crate's [`DataChannel`].
 pub fn add_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
