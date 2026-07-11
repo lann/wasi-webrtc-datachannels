@@ -38,7 +38,7 @@
 import { chromium } from "playwright-core";
 import http from "node:http";
 import { access, readFile } from "node:fs/promises";
-import { dirname, extname, join, normalize, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HOST_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -93,13 +93,19 @@ function startServer() {
       res.end();
       return;
     }
-    // Confine served files to HOST_DIR.
-    const file = normalize(join(HOST_DIR, pathname));
-    if (file !== HOST_DIR && !file.startsWith(HOST_DIR + "/")) {
-      res.statusCode = 403;
-      res.end("forbidden");
+    // Strict allowlist: only the transpiled bundle under /generated/ and the
+    // browser host module are served, and each request path must be a single,
+    // dot-segment-free file name. This both scopes the server to what the test
+    // needs and rules out path traversal (no "/" or ".." can reach the join).
+    const match = /^\/(generated)\/([A-Za-z0-9._-]+)$|^\/(webrtc\.js)$/.exec(pathname);
+    if (!match || pathname.includes("..")) {
+      res.statusCode = 404;
+      res.end("not found");
       return;
     }
+    const file = match[3]
+      ? join(HOST_DIR, "webrtc.js")
+      : join(HOST_DIR, "generated", match[2]);
     try {
       const body = await readFile(file);
       res.setHeader("content-type", MIME[extname(file)] ?? "application/octet-stream");
