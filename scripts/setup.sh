@@ -10,6 +10,7 @@
 #       * wasm32-unknown-unknown (echo-demo + the manual-signaling test guest)
 #       * wasm32-wasip2          (cli-signaling)
 #   - wasm-tools, used to wrap guest modules into components and to validate WIT
+#   - just, the command runner used for development and CI recipes
 #   - the Node host's npm dependencies (jco + @roamhq/wrtc)
 #
 # Prerequisites (not installed here): a Rust toolchain via rustup, and Node 22+
@@ -18,6 +19,7 @@
 #
 # Environment overrides:
 #   WASM_TOOLS_VERSION   version of wasm-tools to `cargo install` (default below)
+#   JUST_VERSION         version of just to `cargo install` (default below)
 #   SKIP_NODE=1          skip installing the Node host's npm dependencies
 
 set -euo pipefail
@@ -27,6 +29,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 WASM_TOOLS_VERSION="${WASM_TOOLS_VERSION:-1.247.0}"
+JUST_VERSION="${JUST_VERSION:-1.40.0}"
 
 log() { printf '\n==> %s\n' "$1"; }
 
@@ -38,6 +41,13 @@ if command -v wasm-tools >/dev/null 2>&1; then
   echo "wasm-tools already present: $(wasm-tools --version)"
 else
   cargo install --locked wasm-tools --version "${WASM_TOOLS_VERSION}"
+fi
+
+log "Ensuring just is installed"
+if command -v just >/dev/null 2>&1; then
+  echo "just already present: $(just --version)"
+else
+  cargo install --locked just --version "${JUST_VERSION}"
 fi
 
 if [ "${SKIP_NODE:-0}" = "1" ]; then

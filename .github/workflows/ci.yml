@@ -41,22 +41,13 @@ jobs:
         run: ./scripts/setup.sh
 
       - name: Check formatting
-        run: |
-          cargo fmt --all -- --check
-          cargo fmt --manifest-path wasmtime-impl/tests/manual-signaling-guest/Cargo.toml -- --check
+        run: just fmt-check
 
       - name: Run clippy
-        run: |
-          cargo clippy --workspace --exclude echo-demo --exclude cli-signaling --all-targets -- -D warnings
-          cargo clippy -p echo-demo --target wasm32-unknown-unknown -- -D warnings
-          cargo clippy -p cli-signaling --target wasm32-wasip2 -- -D warnings
-          cargo clippy --manifest-path wasmtime-impl/tests/manual-signaling-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+        run: just clippy
 
       - name: Validate WIT
-        run: |
-          wasm-tools component wit wit
-          wasm-tools component wit examples/echo-demo/wit
-          wasm-tools component wit examples/cli-signaling/wit
+        run: just validate-wit
 
       - name: Build echo-demo guest component
         working-directory: jco-impl
@@ -71,4 +62,4 @@ jobs:
         run: npm run test:browser
 
       - name: Run tests
-        run: cargo test --workspace --exclude echo-demo --exclude cli-signaling
+        run: just test
