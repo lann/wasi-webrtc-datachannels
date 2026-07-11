@@ -12,14 +12,17 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # WebRTC handshakes can hang; cap the job so a stuck run fails fast instead
+    # of waiting for the default 6h limit.
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+        # The toolchain version, wasm targets, and rustfmt/clippy components are
+        # pinned in rust-toolchain.toml; `rustup show` installs exactly those.
+        run: rustup show active-toolchain || rustup toolchain install
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

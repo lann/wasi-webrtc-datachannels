@@ -206,24 +206,6 @@ guest-component build living inside `jco-impl/package.json`'s
 `build:component` (a cd into `../examples/echo-demo`) is surprising — the root
 justfile is its natural home.
 
-### 21. Speed up setup: `cargo install wasm-tools`/`just` compiles from source on cold caches
-
-`scripts/setup.sh` builds `wasm-tools` and `just` from source when
-`~/.cargo/bin` isn't cached (minutes of agent/CI time). Use prebuilt binaries
-(`cargo-binstall`, `taiki-e/install-action`, or direct release-artifact
-download pinned to `WASM_TOOLS_VERSION`/`JUST_VERSION`) with the cargo-install
-path as fallback.
-
-### 22. Pin the Rust toolchain and add CI job timeout
-
-No `rust-toolchain.toml`; CI uses floating `stable`, so a stable release can
-break the build differently for CI vs. contributors, and wasm target
-availability isn't pinned. Add `rust-toolchain.toml` (with
-`wasm32-unknown-unknown`, `wasm32-wasip2` targets and `rustfmt`/`clippy`
-components — this also lets `setup.sh` shrink). Also add `timeout-minutes` to
-the CI job: WebRTC handshakes are the kind of thing that hangs, and only the
-Rust integration test has an internal 60 s timeout.
-
 ### 23. Keeping `jco transpile` flags in sync with WIT is manual and error-prone
 
 AGENTS.md documents that any interface rename must be mirrored in the
@@ -286,4 +268,4 @@ against both hosts in CI, asserting identical observable results.
 
 Correctness first (9, 10, 11, 1), then interface-stabilizing decisions (2–7),
 then the strategic items (8, 27, 28); the rest are cheap hygiene wins
-(14, 15, 19–23, 24–26).
+(14, 15, 19, 20, 23, 24–26).
