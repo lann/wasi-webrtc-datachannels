@@ -2,14 +2,14 @@
 //!
 //! [`DataChannel`] is the concrete host type mapped onto the
 //! `lann:webrtc-datachannels/data-channels.data-channel` resource. It wraps an
-//! open `webrtc-rs` [`RTCDataChannel`], its inbound-message stream, and the peer
-//! connection(s) that must outlive it.
+//! open `webrtc-rs` [`RTCDataChannel`] and the peer connection(s) that must
+//! outlive it. The channel's inbound-message stream is produced once at
+//! construction (see [`crate::inbound_stream`]) rather than stored here.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
-use futures::channel::mpsc::UnboundedReceiver;
 use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
@@ -20,27 +20,21 @@ use webrtc::peer_connection::RTCPeerConnection;
 
 /// Host state behind a `data-channel` resource.
 ///
-/// A connected, bidirectional WebRTC data channel plus the inbound-message
-/// stream consumed once by `receive`.
+/// A connected, bidirectional WebRTC data channel. The inbound-message stream
+/// is handed back alongside the channel at construction time, so it is not
+/// retained here.
 pub struct DataChannel {
     channel: Arc<RTCDataChannel>,
-    /// Inbound messages, taken once by `receive`.
-    incoming: Mutex<Option<UnboundedReceiver<Vec<u8>>>>,
     /// Keep the backing peer connection(s) alive for the channel's lifetime.
     _keep_alive: Vec<Arc<RTCPeerConnection>>,
 }
 
 impl DataChannel {
-    /// Wrap an open data channel and its inbound-message receiver, retaining the
-    /// given peer connections so they outlive the channel.
-    pub fn new(
-        channel: Arc<RTCDataChannel>,
-        incoming: UnboundedReceiver<Vec<u8>>,
-        keep_alive: Vec<Arc<RTCPeerConnection>>,
-    ) -> Self {
+    /// Wrap an open data channel, retaining the given peer connections so they
+    /// outlive the channel.
+    pub fn new(channel: Arc<RTCDataChannel>, keep_alive: Vec<Arc<RTCPeerConnection>>) -> Self {
         Self {
             channel,
-            incoming: Mutex::new(Some(incoming)),
             _keep_alive: keep_alive,
         }
     }
@@ -53,11 +47,6 @@ impl DataChannel {
     /// A cheap clone of the underlying `webrtc-rs` data channel.
     pub fn channel(&self) -> Arc<RTCDataChannel> {
         self.channel.clone()
-    }
-
-    /// Take the inbound-message receiver. Returns `None` after the first call.
-    pub fn take_incoming(&self) -> Option<UnboundedReceiver<Vec<u8>>> {
-        self.incoming.lock().unwrap().take()
     }
 }
 

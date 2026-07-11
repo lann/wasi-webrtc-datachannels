@@ -12,9 +12,9 @@ interface runner {
         label: string,
         /// Number of messages the guest pushed into the offerer's `send` stream.
         sent: u32,
-        /// Number of messages read back from the answerer's `receive` stream.
+        /// Number of messages read back from the answerer's inbound stream.
         received: u32,
-        /// Total bytes read back from the answerer's `receive` stream.
+        /// Total bytes read back from the answerer's inbound stream.
         bytes: u64,
     }
 

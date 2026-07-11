@@ -11,14 +11,15 @@
 //!
 //! Data channels it hands back are the crate's [`DataChannel`], so the
 //! same crate `add_to_linker` that satisfies `data-channels` also drives the
-//! `send`/`receive` on channels this interface produces.
+//! `send` on channels this interface produces. The inbound stream is returned
+//! by `connect` alongside the channel.
 
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
 use futures::channel::mpsc::{self, UnboundedReceiver};
 use futures::channel::oneshot;
-use wasmtime::component::{Accessor, HasData, Linker, Resource};
+use wasmtime::component::{Accessor, HasData, Linker, Resource, StreamReader};
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
 use webrtc::data_channel::RTCDataChannel;
@@ -26,7 +27,8 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
 use wasmtime_webrtc_datachannels::{
-    new_peer_connection, DataChannel, SettingEngineHook, WasiWebrtcCtxView, WasiWebrtcView,
+    inbound_stream, new_peer_connection, DataChannel, SettingEngineHook, WasiWebrtcCtxView,
+    WasiWebrtcView,
 };
 
 mod bindings {
@@ -221,8 +223,8 @@ impl ManualPeer {
     }
 
     /// Wait until the data channel is open and return it as a `data-channel`
-    /// host resource.
-    pub async fn connect(&self) -> Result<DataChannel> {
+    /// host resource paired with its inbound-message receiver.
+    pub async fn connect(&self) -> Result<(DataChannel, UnboundedReceiver<Vec<u8>>)> {
         // (Answerer) wait until `on_data_channel` has delivered the channel.
         let arrived = self.channel_arrived.lock().unwrap().take();
         if let Some(arrived) = arrived {
@@ -250,7 +252,7 @@ impl ManualPeer {
             .incoming
             .take()
             .ok_or_else(|| anyhow!("data channel has no inbound stream"))?;
-        Ok(DataChannel::new(channel, incoming, vec![self.pc()?]))
+        Ok((DataChannel::new(channel, vec![self.pc()?]), incoming))
     }
 
     /// Block until ICE gathering has completed so the local description carries
@@ -355,12 +357,14 @@ impl<T> HostPeerConnectionWithStore<T> for ManualSignaling {
     async fn connect(
         accessor: &Accessor<T, Self>,
         self_: Resource<ManualPeer>,
-    ) -> wasmtime::Result<std::result::Result<Resource<DataChannel>, Error>> {
+    ) -> wasmtime::Result<std::result::Result<(Resource<DataChannel>, StreamReader<Vec<u8>>), Error>>
+    {
         let peer = accessor.with(|mut access| clone_peer(access.get(), &self_))?;
         match peer.connect().await {
-            Ok(channel) => {
+            Ok((channel, incoming)) => {
                 let resource = accessor.with(|mut access| access.get().table.push(channel))?;
-                Ok(Ok(resource))
+                let stream = inbound_stream(accessor, incoming)?;
+                Ok(Ok((resource, stream)))
             }
             Err(err) => Ok(Err(Error::Other(err.to_string()))),
         }

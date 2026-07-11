@@ -35,10 +35,21 @@ interface types {
 /// `stream`s so the host and guest can pipeline messages and let the async ABI
 /// apply backpressure. Each `list<u8>` element is exactly one data-channel
 /// message, preserving WebRTC message boundaries.
+///
+/// The inbound stream is not exposed as a method on the resource; it is handed
+/// back alongside the channel by whatever constructs it (see
+/// `signaling.create-data-channel`/`incoming-data-channels` here, or the demo
+/// `connect.open-echo`). Producing it once at construction means there is no
+/// callable-once method to define semantics for, and both directions of the
+/// channel are available the moment the guest owns it.
 interface data-channels {
     use types.{error, data-channel-options};
 
     /// A connected, bidirectional WebRTC data channel.
+    ///
+    /// The matching inbound stream (a `stream<list<u8>>`, one `list<u8>` per
+    /// received message, ending when the channel closes) is returned together
+    /// with the channel by its constructor rather than fetched from here.
     resource data-channel {
         /// The negotiated channel label.
         label: func() -> string;
@@ -48,10 +59,6 @@ interface data-channels {
         /// stream is exhausted and every message has been handed to the
         /// transport, or with an `error` if the channel closed early.
         send: async func(messages: stream<list<u8>>) -> result<_, error>;
-
-        /// A stream of inbound messages, one `list<u8>` per received message.
-        /// The stream ends (its reader is dropped) when the channel closes.
-        receive: async func() -> stream<list<u8>>;
     }
 }
 
@@ -94,10 +101,14 @@ interface signaling {
         constructor();
 
         /// Create a data channel that will be negotiated in-band with the peer.
-        create-data-channel: func(options: data-channel-options) -> result<data-channel, error>;
+        /// Returns the channel together with its inbound-message stream (one
+        /// `list<u8>` per received message), so there is no separate call to
+        /// take the receive side.
+        create-data-channel: func(options: data-channel-options) -> result<tuple<data-channel, stream<list<u8>>>, error>;
 
-        /// A stream of data channels opened by the remote peer.
-        incoming-data-channels: func() -> stream<data-channel>;
+        /// A stream of data channels opened by the remote peer, each paired with
+        /// its own inbound-message stream.
+        incoming-data-channels: func() -> stream<tuple<data-channel, stream<list<u8>>>>;
 
         /// Produce an SDP offer describing the local peer.
         create-offer: async func() -> result<session-description, error>;

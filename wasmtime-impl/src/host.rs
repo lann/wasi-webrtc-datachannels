@@ -11,8 +11,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
+use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot;
-use wasmtime::component::{Accessor, Resource, Source, StreamConsumer, StreamReader, StreamResult};
+use wasmtime::component::{
+    Accessor, HasData, Resource, Source, StreamConsumer, StreamReader, StreamResult,
+};
 use wasmtime::{Result, StoreContextMut};
 
 use crate::bindings::webrtc_datachannels::data_channels::{
@@ -31,6 +34,22 @@ impl types::Host for WasiWebrtcCtxView<'_> {}
 // --- data-channels ---------------------------------------------------------
 
 impl data_channels::Host for WasiWebrtcCtxView<'_> {}
+
+/// Build the inbound-message [`StreamReader`] for a data channel from its
+/// `webrtc-rs` message receiver.
+///
+/// The inbound stream is produced once, at channel construction, and handed
+/// back to the guest alongside the [`DataChannel`] resource (rather than being
+/// fetched from a callable-once method on the resource). Host implementations of
+/// the channel-constructing functions (for example the demo `connect.open-echo`
+/// or `manual-signaling.connect`) call this with the receiver they wired to the
+/// channel's `on_message` handler.
+pub fn inbound_stream<T, D: HasData>(
+    accessor: &Accessor<T, D>,
+    incoming: UnboundedReceiver<Vec<u8>>,
+) -> Result<StreamReader<Vec<u8>>> {
+    accessor.with(|access| StreamReader::new(access, PipeProducer::new(incoming)))
+}
 
 /// A [`StreamConsumer`] that forwards each item directly to a WebRTC data
 /// channel by polling a `send` future inside `poll_consume`.  Completion or
@@ -164,18 +183,6 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
         })?;
 
         Ok(done_rx.await.unwrap_or(Ok(())))
-    }
-
-    async fn receive(
-        accessor: &Accessor<T, Self>,
-        self_: Resource<DataChannel>,
-    ) -> Result<StreamReader<Vec<u8>>> {
-        let incoming = accessor.with(|mut access| {
-            Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.take_incoming())
-        })?;
-        let incoming = incoming
-            .ok_or_else(|| wasmtime::Error::msg("receive() may only be called once per channel"))?;
-        accessor.with(|access| StreamReader::new(access, PipeProducer::new(incoming)))
     }
 
     async fn drop(accessor: &Accessor<T, Self>, rep: Resource<DataChannel>) -> Result<()> {

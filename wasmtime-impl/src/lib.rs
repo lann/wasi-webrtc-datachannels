@@ -19,6 +19,7 @@ mod host;
 mod pipe;
 
 pub use data_channel::{new_peer_connection, send_message, DataChannel};
+pub use host::inbound_stream;
 
 use std::sync::Arc;
 
@@ -132,7 +133,7 @@ impl HasData for WasiWebrtc {
 ///
 /// The store's data type `T` must implement [`WasiWebrtcView`]. The engine's
 /// [`Config`](wasmtime::Config) must have `wasm_component_model_async` enabled,
-/// since the `send`/`receive` methods use the component-model async ABI.
+/// since the `send` method uses the component-model async ABI.
 ///
 /// The `manual-signaling` interface is **not** wired here: it is a demo-only
 /// surface implemented by the demo hosts on top of [`new_peer_connection`] and

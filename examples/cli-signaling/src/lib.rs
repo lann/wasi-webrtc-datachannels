@@ -91,7 +91,7 @@ async fn drive(role: Role) -> Result<String, Error> {
     let pc = PeerConnection::new();
     let mut stdin = Stdin::new();
 
-    let channel = match role {
+    let (channel, incoming) = match role {
         Role::Offerer => {
             let options = DataChannelOptions {
                 label: CHANNEL_LABEL.to_string(),
@@ -117,17 +117,15 @@ async fn drive(role: Role) -> Result<String, Error> {
         }
     };
 
-    exchange(&channel, role).await
+    exchange(&channel, incoming, role).await
 }
 
 /// Send one greeting and receive the peer's greeting over the data channel.
 async fn exchange(
     channel: &lann::webrtc_datachannels::data_channels::DataChannel,
+    mut incoming: wit_bindgen::StreamReader<Vec<u8>>,
     role: Role,
 ) -> Result<String, Error> {
-    // Read the inbound stream first so the peer's message cannot be missed.
-    let mut incoming = channel.receive().await;
-
     let greeting = format!("hello from the {}", role.name());
     let (mut tx, rx) = wit_stream::new::<Vec<u8>>();
     wit_bindgen::spawn(async move {

@@ -6,29 +6,6 @@ repository root.
 
 ## A. WIT interface design
 
-### 1. `data-channel.receive` is callable-once but the WIT doesn't encode that (host traps on second call)
-
-`wit/webrtc.wit` declares `receive: async func() -> stream<list<u8>>` with no
-hint that it may only be called once. The Wasmtime host enforces once-only by
-returning a host error (`wasmtime-impl/src/host.rs:169-179`), which **traps the
-guest**; the jco host returns the *same* `ReadableStream` again
-(`jco-impl/webrtc.js:61-63`) — two different behaviors for the same WIT. Either
-(a) encode the semantics in WIT (e.g.
-`receive: func() -> result<stream<list<u8>>, error>` with a documented
-`closed`/already-taken error), (b) move the inbound stream to channel
-construction so there's nothing to call twice, or (c) allow multiple calls with
-defined semantics. Acceptance: WIT doc + both hosts agree, covered by a test.
-
-### 2. `receive` should probably not be `async`
-
-`receive: async func() -> stream<list<u8>>` does no waiting in either host (it
-just hands back a stream), and the design-target
-`signaling.incoming-data-channels: func() -> stream<data-channel>` is sync.
-Making `receive` sync removes an async ABI round trip and an inconsistency.
-Touches: `wit/webrtc.wit:54`, host bindgen config
-(`wasmtime-impl/src/bindings.rs`), jco `--async-imports` flags
-(`jco-impl/package.json`), guests.
-
 ### 3. `data-channel` resource has no `close`, state, or buffering observability
 
 Guests can only abandon a channel by dropping the resource; there's no explicit
@@ -75,9 +52,11 @@ questions worth settling before any host implements it: (a) how
 end-of-candidates is signaled on `local-ice-candidates` (browser uses a null
 candidate); (b) no connection-state observability beyond a one-shot
 `wait-connected` (no `disconnected`/`failed` transitions, no re-await
-semantics); (c) `incoming-data-channels`/`local-ice-candidates` presumably
-share the callable-once problem of item 1; (d) `close: func()` sync vs the
-async rest. Output: revised WIT + doc comments.
+semantics); (c) `incoming-data-channels`/`local-ice-candidates` are themselves
+callable-once `stream`-returning methods with undefined second-call semantics
+(the same class of problem the old `data-channel.receive` had, now resolved for
+data channels by returning the inbound stream at construction); (d)
+`close: func()` sync vs the async rest. Output: revised WIT + doc comments.
 
 ### 8. Implement `signaling` in the Wasmtime host (tracking)
 
@@ -248,13 +227,13 @@ replacing the existing examples.
 ### 28. No cross-host conformance story for edge-case behavior
 
 The echo demo proves the happy path on both hosts, but divergences already
-exist (item 1's receive-twice; typed errors, items 5/16; close semantics,
-item 3). Define a small conformance guest (call `receive` twice, send after
-close, zero-length message, oversized message, label round-trip) and run it
-against both hosts in CI, asserting identical observable results.
+exist (typed errors, items 5/16; close semantics, item 3). Define a small
+conformance guest (send after close, zero-length message, oversized message,
+label round-trip) and run it against both hosts in CI, asserting identical
+observable results.
 
 ## Suggested priority
 
-Correctness first (9, 10, 11, 1), then interface-stabilizing decisions (2–7),
+Correctness first (9, 10, 11), then interface-stabilizing decisions (3–7),
 then the strategic items (8, 27, 28); the rest are cheap hygiene wins
 (14, 15, 19, 23, 24–26).

@@ -12,11 +12,13 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::anyhow;
 use futures::channel::{mpsc, oneshot};
-use wasmtime::component::{Accessor, Component, HasData, Linker, Resource, ResourceTable};
+use wasmtime::component::{
+    Accessor, Component, HasData, Linker, Resource, ResourceTable, StreamReader,
+};
 use wasmtime::{Config, Engine, Result, Store};
 use wasmtime_webrtc_datachannels::{
-    self as webrtc_host, new_peer_connection, DataChannel, WasiWebrtcCtx, WasiWebrtcCtxView,
-    WasiWebrtcView,
+    self as webrtc_host, inbound_stream, new_peer_connection, DataChannel, WasiWebrtcCtx,
+    WasiWebrtcCtxView, WasiWebrtcView,
 };
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
@@ -68,13 +70,13 @@ impl<T> bindings::demo::webrtc_echo::connect::HostWithStore<T> for Ctx {
     async fn open_echo(
         accessor: &Accessor<T, Self>,
         options: DataChannelOptions,
-    ) -> Result<std::result::Result<Resource<DataChannel>, Error>> {
+    ) -> Result<std::result::Result<(Resource<DataChannel>, StreamReader<Vec<u8>>), Error>> {
         // The two echo peers live in this one process, so apply the store's
         // `SettingEngine` hook (e.g. loopback ICE candidates) to each of them.
         let hook = accessor.with(|mut access| {
             Ok::<_, wasmtime::Error>(access.get().webrtc.setting_engine_hook())
         })?;
-        let echo = match build_echo(
+        let (echo, incoming) = match build_echo(
             &options.label,
             options.ordered,
             options.max_retransmits,
@@ -90,7 +92,10 @@ impl<T> bindings::demo::webrtc_echo::connect::HostWithStore<T> for Ctx {
             Err(err) => return Ok(Err(Error::Other(err.to_string()))),
         };
         let resource = accessor.with(|mut access| access.get().table.push(echo))?;
-        Ok(Ok(resource))
+        // Produce the inbound stream once, at construction, and hand it back
+        // alongside the channel resource.
+        let stream = inbound_stream(accessor, incoming)?;
+        Ok(Ok((resource, stream)))
     }
 }
 
@@ -99,7 +104,7 @@ async fn build_echo(
     ordered: bool,
     max_retransmits: Option<u16>,
     configure: impl Fn(&mut SettingEngine),
-) -> anyhow::Result<DataChannel> {
+) -> anyhow::Result<(DataChannel, mpsc::UnboundedReceiver<Vec<u8>>)> {
     let near = new_peer_connection(&configure).await?;
     let far = new_peer_connection(&configure).await?;
 
@@ -175,7 +180,7 @@ async fn build_echo(
         .await
         .map_err(|_| anyhow!("data channel closed before opening"))?;
 
-    Ok(DataChannel::new(channel, in_rx, vec![near, far]))
+    Ok((DataChannel::new(channel, vec![near, far]), in_rx))
 }
 
 fn engine() -> Result<Engine> {

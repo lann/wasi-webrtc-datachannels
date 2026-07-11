@@ -40,9 +40,12 @@ a single copy of the shared surface to edit:
 
 - **`types`** — shared `error` variant and `data-channel-options`.
 - **`data-channels`** — the high-throughput surface. A `data-channel` resource
-  carries both directions as component-model **streams**:
+  carries outbound messages as a component-model **stream**, and its inbound
+  **stream** is handed back alongside the channel by whatever constructs it
+  (for example `connect.open-echo`), so there is no callable-once receive
+  method:
   - `send: async func(messages: stream<list<u8>>) -> result<_, error>`
-  - `receive: async func() -> stream<list<u8>>`
+  - the constructor returns `tuple<data-channel, stream<list<u8>>>`
 
   Each `list<u8>` element is exactly **one** data-channel message, so WebRTC
   message boundaries are preserved end to end. Streaming (rather than one host
@@ -82,11 +85,11 @@ world webrtc-echo-demo {
 (`wit-bindgen`, `wasm32-unknown-unknown` + `wasm-tools component new`). Its
 `run`:
 
-1. calls `connect::open-echo` to get a channel,
+1. calls `connect::open-echo` to get a channel and its inbound stream,
 2. spawns a producer that writes `message-count` messages into an outbound
    `stream<list<u8>>`,
 3. hands that stream to `data-channel.send`, and **concurrently** reads the
-   inbound stream from `data-channel.receive` (both under `futures::join!`),
+   inbound stream returned by `open-echo` (both under `futures::join!`),
 4. returns counts so the host can assert a complete round trip.
 
 ## Running it

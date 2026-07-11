@@ -10,10 +10,11 @@
 //   import { openEcho } from '.../connect'      -> openEcho here
 //   import { DataChannel } from '.../data-channels' -> DataChannel class here
 //
-// The component sees a channel already connected to an echo endpoint. Under the
-// hood `openEcho` performs a genuine SDP offer/answer + ICE handshake between
-// two peer connections and echoes every message on the far side, so a real
-// WebRTC/SCTP data channel carries the traffic.
+// The component sees a channel already connected to an echo endpoint, paired
+// with its inbound-message stream. Under the hood `openEcho` performs a genuine
+// SDP offer/answer + ICE handshake between two peer connections and echoes every
+// message on the far side, so a real WebRTC/SCTP data channel carries the
+// traffic.
 
 // Resolve `RTCPeerConnection` isomorphically so this exact module runs both in a
 // real browser and under Node. In a browser (including headless Chromium in CI)
@@ -29,13 +30,11 @@ const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;
 /** The `data-channel` resource, implemented over an `RTCDataChannel`. */
 export class DataChannel {
   #channel;
-  #incoming;
   // Retain the peer connections so they are not garbage-collected while in use.
   #keepAlive;
 
-  constructor(channel, incoming, keepAlive) {
+  constructor(channel, keepAlive) {
     this.#channel = channel;
-    this.#incoming = incoming;
     this.#keepAlive = keepAlive;
   }
 
@@ -57,11 +56,6 @@ export class DataChannel {
     }
   }
 
-  /** A stream of inbound messages, one chunk per received message. */
-  async receive() {
-    return this.#incoming;
-  }
-
   /** Apply backpressure so a fast producer cannot overrun the SCTP buffer. */
   #waitForDrain() {
     const channel = this.#channel;
@@ -80,7 +74,8 @@ export class DataChannel {
 /**
  * Open a data channel connected to an internal echo endpoint.
  * @param {{ label: string, ordered: boolean, maxRetransmits?: number }} options
- * @returns {Promise<DataChannel>}
+ * @returns {Promise<[DataChannel, ReadableStream<Uint8Array>]>} the channel and
+ *   its inbound-message stream (one `Uint8Array` per received message).
  */
 export async function openEcho(options) {
   const near = new RTCPeerConnection();
@@ -115,7 +110,9 @@ export async function openEcho(options) {
   await near.setRemoteDescription(answer);
 
   await opened;
-  return new DataChannel(channel, incoming, { near, far });
+  // Hand the channel back paired with its inbound stream, so there is nothing
+  // to fetch again from the resource.
+  return [new DataChannel(channel, { near, far }), incoming];
 }
 
 /** Build a ReadableStream that yields one Uint8Array per inbound message. */

@@ -8,7 +8,8 @@
 //!      `stream<list<u8>>`,
 //!   2. hands that stream to `data-channel.send` (the async streaming import),
 //!   3. concurrently reads the inbound `stream<list<u8>>` returned by
-//!      `data-channel.receive`, counting the echoed messages/bytes,
+//!      `connect.open-echo` alongside the channel, counting the echoed
+//!      messages/bytes,
 //!
 //! all within a single cooperative async task (steps 2 and 3 run under
 //! `futures::join!`). The same component binary runs unchanged under the Node
@@ -33,8 +34,9 @@ impl Guest for Component {
         let count = config.message_count;
         let size = config.message_size as usize;
 
-        // Ask the host for a channel connected to its echo endpoint.
-        let channel = connect::open_echo(DataChannelOptions {
+        // Ask the host for a channel connected to its echo endpoint. The host
+        // hands back the inbound-message stream alongside the channel.
+        let (channel, mut incoming) = connect::open_echo(DataChannelOptions {
             label: "echo".to_string(),
             ordered: true,
             max_retransmits: None,
@@ -57,10 +59,6 @@ impl Guest for Component {
             }
             drop(tx);
         });
-
-        // Inbound message stream. Created before `send` starts so no echoed
-        // message can be missed.
-        let mut incoming = channel.receive().await;
 
         // Drive send and receive concurrently on this single task.
         let send_fut = channel.send(rx);

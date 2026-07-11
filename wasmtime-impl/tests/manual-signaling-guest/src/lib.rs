@@ -40,15 +40,13 @@ impl Guest for Component {
         offerer.accept_answer(answer).await?;
 
         // Both sides block until the channel opens; drive them concurrently.
+        // Each side receives its channel paired with its inbound-message stream.
         let (offerer_channel, answerer_channel) =
             futures::join!(offerer.connect(), answerer.connect());
-        let offerer_channel = offerer_channel?;
-        let answerer_channel = answerer_channel?;
+        let (offerer_channel, _offerer_incoming) = offerer_channel?;
+        let (_answerer_channel, mut incoming) = answerer_channel?;
 
         let label = offerer_channel.label();
-
-        // Read the inbound stream on the answerer first so no message is missed.
-        let mut incoming = answerer_channel.receive().await;
 
         // Outbound pipeline on the offerer: a detached producer writes each
         // message into `tx`; `send` drains `rx` into the transport.

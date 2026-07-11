@@ -16,8 +16,10 @@ interface connect {
     use lann:webrtc-datachannels/data-channels@0.1.0.{data-channel};
 
     /// Open a data channel connected to a host-provided echo endpoint. Every
-    /// message the guest sends is echoed back verbatim.
-    open-echo: async func(options: data-channel-options) -> result<data-channel, error>;
+    /// message the guest sends is echoed back verbatim. Returns the channel
+    /// together with its inbound-message stream (one `list<u8>` per received
+    /// message).
+    open-echo: async func(options: data-channel-options) -> result<tuple<data-channel, stream<list<u8>>>, error>;
 }
 
 /// Demo-only HTTP signaling rendezvous (a proposal, not yet wired into the

@@ -6,7 +6,7 @@
   "description": "Browser-first (Node) host for lann:webrtc-datachannels, using jco + @roamhq/wrtc.",
   "scripts": {
     "build:component": "cd ../examples/echo-demo && cargo build --release --target wasm32-unknown-unknown && mkdir -p build && wasm-tools component new ../../target/wasm32-unknown-unknown/release/echo_demo.wasm -o build/echo-demo.component.wasm",
-    "transpile": "jco transpile ../examples/echo-demo/build/echo-demo.component.wasm --name echo-demo --async-mode jspi --async-exports 'demo:webrtc-echo/demo@0.1.0#run' --async-imports 'demo:webrtc-echo/connect@0.1.0#open-echo' --async-imports 'lann:webrtc-datachannels/data-channels@0.1.0#[method]data-channel.send' --async-imports 'lann:webrtc-datachannels/data-channels@0.1.0#[method]data-channel.receive' --map 'demo:webrtc-echo/connect@0.1.0=../webrtc.js' --map 'lann:webrtc-datachannels/data-channels@0.1.0=../webrtc.js' -o generated",
+    "transpile": "jco transpile ../examples/echo-demo/build/echo-demo.component.wasm --name echo-demo --async-mode jspi --async-exports 'demo:webrtc-echo/demo@0.1.0#run' --async-imports 'demo:webrtc-echo/connect@0.1.0#open-echo' --async-imports 'lann:webrtc-datachannels/data-channels@0.1.0#[method]data-channel.send' --map 'demo:webrtc-echo/connect@0.1.0=../webrtc.js' --map 'lann:webrtc-datachannels/data-channels@0.1.0=../webrtc.js' -o generated",
     "start": "node src/run.mjs",
     "test": "node src/run.mjs",
     "test:browser": "node test/browser.mjs"

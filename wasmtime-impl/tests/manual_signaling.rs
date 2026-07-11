@@ -6,7 +6,7 @@
 //! `manual-signaling`, and drives a full manual-signaling round trip over a real
 //! `webrtc-rs` data channel. This exercises `manual-signaling`
 //! (`create-offer`/`create-answer`/`accept-answer`/`connect`) and the crate's
-//! `data-channels` (`label`/`send`/`receive`) host implementation.
+//! `data-channels` (`label`/`send`) host implementation.
 //!
 //! [`manual::add_to_linker`]: crate::manual_host::add_to_linker
 

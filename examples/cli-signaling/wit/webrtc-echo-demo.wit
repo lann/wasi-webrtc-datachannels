@@ -93,8 +93,10 @@ interface manual-signaling {
         create-answer: async func(offer: string) -> result<string, error>;
 
         /// Resolve once the connection is established, yielding the negotiated
-        /// data channel (the one the offerer created and the answerer received).
-        connect: async func() -> result<data-channel, error>;
+        /// data channel (the one the offerer created and the answerer received)
+        /// together with its inbound-message stream (one `list<u8>` per received
+        /// message).
+        connect: async func() -> result<tuple<data-channel, stream<list<u8>>>, error>;
 
         /// Close the peer connection and its data channel.
         close: func();
