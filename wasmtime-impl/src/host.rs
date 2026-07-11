@@ -33,13 +33,8 @@ impl types::Host for WasiWebrtcCtxView<'_> {}
 impl data_channels::Host for WasiWebrtcCtxView<'_> {}
 
 /// A [`StreamConsumer`] that forwards each item directly to a WebRTC data
-/// channel by polling a `send` future inside `poll_consume`.
-///
-/// Because `poll_consume` already returns `Poll<_>`, no mpsc bridge is needed:
-/// the consumer holds the in-flight future in `pending` and keeps returning
-/// `Poll::Pending` (without reading the next item) until the current send
-/// completes.  Once done, it reads and sends the next item.  Completion or any
-/// send error is reported back to the `send` host function via `done_tx`.
+/// channel by polling a `send` future inside `poll_consume`.  Completion or
+/// any send error is reported back to the `send` host function via `done_tx`.
 struct SendConsumer {
     channel: Arc<RTCDataChannel>,
     /// A send future for the most-recently-read item, if still in flight.
