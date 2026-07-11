@@ -55,6 +55,10 @@ jobs:
         working-directory: hosts/node
         run: npm run transpile
 
+      - name: Run browser host test (headless Chrome)
+        working-directory: hosts/node
+        run: npm run test:browser
+
       - name: Run Wasmtime host integration test
         working-directory: hosts/wasmtime
         run: cargo test

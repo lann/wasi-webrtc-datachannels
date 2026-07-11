@@ -113,6 +113,18 @@ node --experimental-wasm-jspi src/run.mjs
 The host builds two `RTCPeerConnection`s with `@roamhq/wrtc`, performs a real
 SDP/ICE handshake, and echoes on the far side.
 
+The same `webrtc.js` host module also runs unchanged in a real browser: it now
+resolves `RTCPeerConnection` from the browser global when present and only falls
+back to `@roamhq/wrtc` under Node. A headless-Chrome test drives the *identical*
+transpiled component through that browser path and is what runs in CI:
+
+```sh
+cd hosts/node
+npm run build:component && npm run transpile
+npm run test:browser     # headless Chrome (137+); set CHROME_PATH to override
+```
+
+
 ### Wasmtime (native Rust) host
 
 ```sh
@@ -151,6 +163,16 @@ Notes and caveats (this is a spike):
   API** — `StreamReader`/`StreamProducer`/`StreamConsumer` with the `Accessor`
   concurrency model. This API is young; the `pipe.rs` adapters are adapted from
   Wasmtime's own test utilities.
+- **The browser-first host really does run in a browser — and in CI.** The same
+  `webrtc.js` and the same transpiled component drive a genuine WebRTC data
+  channel inside headless Chrome. Two headless-specific gotchas had to be
+  solved: JSPI must be available (it is, by default, in Chrome 137+), and
+  Chrome's `FilteringNetworkManager` silently *discards* all host ICE candidates
+  until the page holds a media permission — so the loopback handshake never
+  completes. The fix is to serve the page from `http://127.0.0.1` (a secure
+  context), launch with fake media devices, grant microphone/camera, and call
+  `getUserMedia` before opening the peer connection; only then do real host
+  candidates flow. See [`hosts/node/test/browser.mjs`](hosts/node/test/browser.mjs).
 - **`signaling` is designed but not yet exercised.** The demo uses the
   `connect` shortcut. A natural next step is a guest that drives the full
   `peer-connection` signaling interface against a real remote peer, exchanging
