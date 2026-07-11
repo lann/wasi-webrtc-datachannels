@@ -10,7 +10,7 @@ different host stacks:
 - a **native Rust** host ([Wasmtime] + [`webrtc-rs`]).
 
 Both hosts run the identical component and round-trip every message through a
-genuine WebRTC/SCTP data channel (see [Findings](#findings)).
+genuine WebRTC/SCTP data channel.
 
 [`jco`]: https://github.com/bytecodealliance/jco
 [`@roamhq/wrtc`]: https://github.com/WonderInventions/node-webrtc
@@ -28,9 +28,6 @@ genuine WebRTC/SCTP data channel (see [Findings](#findings)).
 | [`examples/wasmtime-demo`](examples/wasmtime-demo) | The **native Rust host** (Wasmtime + webrtc-rs): binaries plus a lib carrying the demo-only manual-signaling host and the integration test, built on `wasmtime-impl`. |
 | [`examples/cli-signaling`](examples/cli-signaling) | The **manual-signaling CLI guest component** (Rust). |
 | [`AGENTS.md`](AGENTS.md) | Orientation for agents/contributors, linking the `lann/wasm-component-starter` knowledge base. |
-
-The same `echo-demo.component.wasm` produced from `examples/echo-demo` is
-loaded by **both** hosts. That is the core compatibility result.
 
 ## The interface
 
@@ -124,7 +121,6 @@ npm run build:component && npm run transpile
 npm run test:browser     # headless Chrome (137+); set CHROME_PATH to override
 ```
 
-
 ### Wasmtime (native Rust) host
 
 ```sh
@@ -135,78 +131,3 @@ cargo run --release --bin wasmtime-webrtc-host -- ../echo-demo/build/echo-demo.c
 
 (Run the Node `build:component` step once first, or build the component
 manually, to produce the `.wasm`.)
-
-## Findings
-
-**Both hosts work.** Both run the identical component and
-round-trip every message through a genuine WebRTC/SCTP data channel:
-
-| Host | Stack | 1000 × 4096-byte round trip |
-| --- | --- | --- |
-| Node | `jco` (JSPI) + `@roamhq/wrtc` | ✅ correct, ~0.2 MiB/s |
-| Wasmtime | Wasmtime 46 async + `webrtc-rs` | ✅ correct, ~10 MiB/s |
-
-Notes and caveats:
-
-- **The Component Model async ABI is a good fit for data channels.** Modeling
-  each direction as `stream<list<u8>>` maps cleanly onto WebRTC's
-  message-oriented channels and onto both `ReadableStream` (browser/`jco`) and
-  `futures::Stream` (Rust). Backpressure and pipelining fall out of the ABI.
-- **The Node/`jco` path is correct but slow.** Throughput is dominated by
-  per-message JSPI stack-switch overhead, not by WebRTC. It is fine for
-  development/testing (the browser-first goal) but is not the performance
-  story; the native host is. Optimizing the JS path (e.g. batching across the
-  JSPI boundary) is future work.
-- **`jco` delivers a `send` stream argument as an async-iterable**, while
-  `receive` returns a `ReadableStream`; the host code accommodates both.
-- **The Wasmtime host uses the current (Wasmtime 46) component-model async host
-  API** — `StreamReader`/`StreamProducer`/`StreamConsumer` with the `Accessor`
-  concurrency model. The `pipe.rs` adapters are adapted from Wasmtime's own test
-  utilities.
-- **The browser-first host really does run in a browser — and in CI.** The same
-  `webrtc.js` and the same transpiled component drive a genuine WebRTC data
-  channel inside headless Chrome. Two headless-specific gotchas apply: JSPI must
-  be available (it is, by default, in Chrome 137+), and
-  Chrome's `FilteringNetworkManager` silently *discards* all host ICE candidates
-  until the page holds a media permission — so the loopback handshake never
-  completes. The fix is to serve the page from `http://127.0.0.1` (a secure
-  context), launch with fake media devices, grant microphone/camera, and call
-  `getUserMedia` before opening the peer connection; only then do real host
-  candidates flow. See [`jco-impl/test/browser.mjs`](jco-impl/test/browser.mjs).
-- **`signaling` is designed but not yet exercised.** The demo uses the
-  `connect` shortcut. A natural next step is a guest that drives the full
-  `peer-connection` signaling interface against a real remote peer, exchanging
-  SDP/ICE through the demo `rendezvous` mailbox over `wasi:http@0.3` and an
-  existing signaling server (see [`AGENTS.md`](AGENTS.md)).
-
-## Layout
-
-```
-wit/                            # reusable wasi:webrtc-data-channels package
-  webrtc.wit                    #   types, data-channels, signaling
-wasmtime-impl/                  # reusable Wasmtime host crate (webrtc-rs),
-                                #   add_to_linker + WasiWebrtcView (types + data-channels)
-                                #   (crate name: wasmtime-wasi-webrtc-datachannels)
-jco-impl/                        # browser-first host (Node + jco + @roamhq/wrtc)
-examples/
-  echo-demo/                     # example guest component (Rust)
-    wit/                         #   demo-only WIT for this component
-      webrtc-echo-demo.wit       #     demo:webrtc-echo (connect, rendezvous, demo, world)
-      deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
-  cli-signaling/                 # manual-signaling CLI guest component (Rust)
-    wit/                         #   demo-only WIT for this component
-      webrtc-echo-demo.wit       #     demo:webrtc-echo (prompt, manual-demo, manual-signaling, worlds)
-      deps/wasi-webrtc-data-channels -> ../../../../wit   # symlink to the root package
-  wasmtime-demo/                 # native host (Wasmtime + webrtc-rs): lib (demo-only
-                                 #   manual-signaling host + integration test) + binaries,
-                                 #   built on wasmtime-impl
-```
-
-The reusable `wasi:webrtc-data-channels` package is defined once at the root
-[`wit/`](wit); each demo component symlinks it in under
-`wit/deps/wasi-webrtc-data-channels` and keeps its own demo-only WIT next to it.
-The Node host reads the WIT embedded in the built component, so it needs no
-`wit/` of its own; the Wasmtime host binaries bindgen the demo component wit
-dirs directly, and delegate the reusable `types`/`data-channels` surface to
-`wasmtime-impl` (the demo-only `manual-signaling`
-host lives in `examples/wasmtime-demo` itself).
