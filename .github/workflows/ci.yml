@@ -53,16 +53,13 @@ jobs:
         run: just validate-wit
 
       - name: Build echo-demo guest component
-        working-directory: jco-impl
-        run: npm run build:component
+        run: just build-component
 
       - name: Transpile echo-demo component (Node host)
-        working-directory: jco-impl
-        run: npm run transpile
+        run: just transpile
 
       - name: Run browser host test (headless Chrome)
-        working-directory: jco-impl
-        run: npm run test:browser
+        run: just test-browser
 
       - name: Run tests
         run: just test

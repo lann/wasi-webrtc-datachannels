@@ -195,17 +195,6 @@ from Rust via `wasm-tools`; nothing in the repo invokes it. Dropping it shrinks
 
 ## D. Development environment
 
-### 20. `just ci` doesn't match CI: component build, transpile, and browser test are missing from the justfile
-
-`justfile` says "Run all CI checks locally" but `ci.yml` additionally runs
-`npm run build:component`, `npm run transpile`, and `npm run test:browser`. Add
-`build-component`, `transpile`, `test-browser` (and
-`demo-wasmtime`/`demo-node`) recipes and have CI call `just` for everything, so
-humans and agents have a single entry point and CI can't drift. Relatedly, the
-guest-component build living inside `jco-impl/package.json`'s
-`build:component` (a cd into `../examples/echo-demo`) is surprising — the root
-justfile is its natural home.
-
 ### 23. Keeping `jco transpile` flags in sync with WIT is manual and error-prone
 
 AGENTS.md documents that any interface rename must be mirrored in the
@@ -268,4 +257,4 @@ against both hosts in CI, asserting identical observable results.
 
 Correctness first (9, 10, 11, 1), then interface-stabilizing decisions (2–7),
 then the strategic items (8, 27, 28); the rest are cheap hygiene wins
-(14, 15, 19, 20, 23, 24–26).
+(14, 15, 19, 23, 24–26).
