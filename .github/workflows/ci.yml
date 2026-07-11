@@ -28,17 +28,20 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          # Cache the Node host's npm downloads so `npm install` in setup.sh
+          # restores from cache instead of refetching every run.
+          cache: npm
+          cache-dependency-path: jco-impl/package-lock.json
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        # Caches the cargo registry, `~/.cargo/bin` (so cargo-binstall'd
+        # wasm-tools/just are reused), and — unlike a plain registry cache — the
+        # compiled `target/` artifacts, so clippy/test/build reuse prior builds.
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          # The standalone manual-signaling test guest builds into a nested
+          # target dir under ./target; keep the whole tree so it is not pruned.
+          cache-all-crates: true
 
       - name: Install dependencies
         run: ./scripts/setup.sh
