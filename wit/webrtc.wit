@@ -1,4 +1,4 @@
-package wasi:webrtc-data-channels@0.1.0;
+package lann:webrtc-datachannels@0.1.0;
 
 /// Shared types for the WebRTC data-channel interfaces.
 interface types {

@@ -4,7 +4,7 @@ package test:webrtc-manual-signaling;
 
 /// The exported test entry point.
 interface runner {
-    use wasi:webrtc-data-channels/types@0.1.0.{error};
+    use lann:webrtc-datachannels/types@0.1.0.{error};
 
     /// The outcome of one manual-signaling round trip.
     record report {

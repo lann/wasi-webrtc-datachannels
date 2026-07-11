@@ -1,9 +1,9 @@
-//! Wasmtime host implementation of the `wasi:webrtc-data-channels`
+//! Wasmtime host implementation of the `lann:webrtc-datachannels`
 //! interfaces, backed by the pure-Rust
 //! [`webrtc-rs`](https://github.com/webrtc-rs/webrtc) stack.
 //!
 //! This crate factors the host-agnostic part of the Wasmtime WebRTC host out of
-//! the demo binaries so any host can satisfy the `wasi:webrtc-data-channels`
+//! the demo binaries so any host can satisfy the `lann:webrtc-datachannels`
 //! imports with one call to [`add_to_linker`]. It is a wasip3 (component-model
 //! async) implementation modeled after [`wasmtime_wasi_http::p3`]: a host embeds
 //! a [`WasiWebrtcCtx`] in its store state, implements [`WasiWebrtcView`] to
@@ -114,13 +114,13 @@ pub struct WasiWebrtcCtxView<'a> {
 /// A trait that provides access to the [`WasiWebrtcCtx`] host state.
 ///
 /// Implement this for your store's data type so [`add_to_linker`] can wire the
-/// `wasi:webrtc-data-channels` imports onto your linker.
+/// `lann:webrtc-datachannels` imports onto your linker.
 pub trait WasiWebrtcView: Send {
     /// Return a [`WasiWebrtcCtxView`] from a mutable reference to `self`.
     fn webrtc(&mut self) -> WasiWebrtcCtxView<'_>;
 }
 
-/// The type for which this crate implements the `wasi:webrtc-data-channels`
+/// The type for which this crate implements the `lann:webrtc-datachannels`
 /// interfaces. Used as the [`HasData`] marker for the generated bindings.
 pub struct WasiWebrtc;
 
@@ -128,7 +128,7 @@ impl HasData for WasiWebrtc {
     type Data<'a> = WasiWebrtcCtxView<'a>;
 }
 
-/// Add the `wasi:webrtc-data-channels` interfaces implemented by this crate
+/// Add the `lann:webrtc-datachannels` interfaces implemented by this crate
 /// (`types` and `data-channels`) to the provided [`Linker`].
 ///
 /// The store's data type `T` must implement [`WasiWebrtcView`]. The engine's

@@ -24,7 +24,7 @@ interface prompt {
 
 /// The exported entry point for the manual-signaling demo components.
 interface manual-demo {
-    use wasi:webrtc-data-channels/types@0.1.0.{error};
+    use lann:webrtc-datachannels/types@0.1.0.{error};
 
     /// Which half of the exchange this peer drives. The offerer produces the
     /// SDP offer first; the answerer waits for it and replies with an answer.
@@ -51,7 +51,7 @@ interface manual-demo {
 /// connection setup.
 ///
 /// This is a **demo-only** interface (it is not part of the
-/// `wasi:webrtc-data-channels` package). Unlike that package's `signaling` (the
+/// `lann:webrtc-datachannels` package). Unlike that package's `signaling` (the
 /// full trickle-ICE design target), this interface gathers ICE candidates up
 /// front so a whole connection needs just **two** messages: the offerer sends
 /// one complete SDP offer (with every candidate already embedded), and the
@@ -64,8 +64,8 @@ interface manual-demo {
 /// human copy/paste (for example base64) is the guest's concern; the demo
 /// components base64-encode these blobs before showing them to the user.
 interface manual-signaling {
-    use wasi:webrtc-data-channels/types@0.1.0.{error, data-channel-options};
-    use wasi:webrtc-data-channels/data-channels@0.1.0.{data-channel};
+    use lann:webrtc-datachannels/types@0.1.0.{error, data-channel-options};
+    use lann:webrtc-datachannels/data-channels@0.1.0.{data-channel};
 
     /// A peer connection driven with vanilla (non-trickle) ICE.
     ///

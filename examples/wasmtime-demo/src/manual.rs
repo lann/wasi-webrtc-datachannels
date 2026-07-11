@@ -2,7 +2,7 @@
 //!
 //! `manual-signaling` is a demo-only interface (`demo:webrtc-echo`), so its host
 //! implementation lives here rather than in the
-//! `wasmtime-wasi-webrtc-datachannels` crate. It backs the `peer-connection`
+//! `wasmtime-webrtc-datachannels` crate. It backs the `peer-connection`
 //! resource with a real `webrtc-rs` [`RTCPeerConnection`], using *vanilla*
 //! (non-trickle) ICE: after applying a local description, we wait for ICE
 //! gathering to complete and read back the local description, which then already
@@ -43,7 +43,7 @@ mod bindings {
             "demo:webrtc-echo/manual-signaling@0.1.0.[method]peer-connection.close": trappable,
         },
         with: {
-            "wasi:webrtc-data-channels/data-channels.data-channel":
+            "lann:webrtc-datachannels/data-channels.data-channel":
                 wasmtime_wasi_webrtc_datachannels::DataChannel,
             "demo:webrtc-echo/manual-signaling.peer-connection": super::ManualPeer,
         },

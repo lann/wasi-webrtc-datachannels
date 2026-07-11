@@ -1,6 +1,6 @@
 //! Integration test for the demo-only `manual-signaling` host implementation
 //! (`examples/wasmtime-demo` `manual` module) on top of the
-//! `wasmtime-wasi-webrtc-datachannels` crate.
+//! `wasmtime-webrtc-datachannels` crate.
 //!
 //! It builds the `manual-signaling-test` guest component, instantiates it under
 //! Wasmtime with the crate's `add_to_linker` providing `types` +
@@ -34,7 +34,7 @@ mod bindings {
             default: async,
         },
         with: {
-            "wasi:webrtc-data-channels/data-channels.data-channel":
+            "lann:webrtc-datachannels/data-channels.data-channel":
                 wasmtime_wasi_webrtc_datachannels::DataChannel,
             "demo:webrtc-echo/manual-signaling.peer-connection":
                 wasmtime_webrtc_host::manual::ManualPeer,

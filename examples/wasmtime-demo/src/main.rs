@@ -1,9 +1,9 @@
-//! Wasmtime host for `wasi:webrtc-data-channels`, backed by the
+//! Wasmtime host for `lann:webrtc-datachannels`, backed by the
 //! pure-Rust `webrtc-rs` stack.
 //!
 //! It is the non-browser counterpart to the Node host: it loads the same
 //! `echo-demo` component and invokes the component's exported async `run`. The
-//! `wasi:webrtc-data-channels` imports (`types`, `data-channels`) are
+//! `lann:webrtc-datachannels` imports (`types`, `data-channels`) are
 //! satisfied by [`wasmtime_wasi_webrtc_datachannels`]; this binary only
 //! implements the demo-only `connect` convenience, which wires a channel to a
 //! host-provided echo endpoint via [`build_echo`].
@@ -25,7 +25,7 @@ mod bindings {
             default: async,
         },
         with: {
-            "wasi:webrtc-data-channels/data-channels.data-channel":
+            "lann:webrtc-datachannels/data-channels.data-channel":
                 wasmtime_wasi_webrtc_datachannels::DataChannel,
         },
     });
@@ -123,7 +123,7 @@ async fn main() -> Result<()> {
     let engine = engine()?;
     let component = Component::from_file(&engine, &path)?;
     let mut linker: Linker<Ctx> = Linker::new(&engine);
-    // Shared `wasi:webrtc-data-channels` imports.
+    // Shared `lann:webrtc-datachannels` imports.
     webrtc::add_to_linker(&mut linker)?;
     // Demo-only `connect` import.
     bindings::demo::webrtc_echo::connect::add_to_linker::<_, Ctx>(&mut linker, |c| c)?;

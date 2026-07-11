@@ -1,6 +1,6 @@
 //! Test guest: exercises the demo-only `manual-signaling` interface together
 //! with the `data-channels` interface implemented by
-//! `wasmtime-wasi-webrtc-datachannels`.
+//! `wasmtime-webrtc-datachannels`.
 //!
 //! It stands up an offerer and an answerer `peer-connection` entirely in-guest,
 //! performs the vanilla (non-trickle) offer/answer exchange the host satisfies,

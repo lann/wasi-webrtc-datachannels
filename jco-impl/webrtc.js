@@ -1,4 +1,4 @@
-// Host implementation of the `wasi:webrtc-data-channels` imports for Node.
+// Host implementation of the `lann:webrtc-datachannels` imports for Node.
 //
 // This is the "browser-first" host: it is written against the standard W3C
 // WebRTC API (`RTCPeerConnection` / `RTCDataChannel`) and the WHATWG Streams
