@@ -44,9 +44,6 @@ jobs:
           wasm-tools component wit examples/echo-demo/wit
           wasm-tools component wit examples/cli-signaling/wit
 
-      - name: Build host crate
-        run: cargo build --manifest-path wasmtime-impl/Cargo.toml
-
       - name: Build echo-demo guest component
         working-directory: jco-impl
         run: npm run build:component
@@ -59,6 +56,5 @@ jobs:
         working-directory: jco-impl
         run: npm run test:browser
 
-      - name: Run Wasmtime host integration test
-        working-directory: examples/wasmtime-demo
-        run: cargo test
+      - name: Run wasmtime-impl tests
+        run: cargo test --manifest-path wasmtime-impl/Cargo.toml

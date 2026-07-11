@@ -22,11 +22,3 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"
 futures = "0.3"
 anyhow = "1"
 env_logger = "0.11.11"
-
-[dev-dependencies]
-# The integration test instantiates the manual-signaling guest component under
-# Wasmtime, so it needs a tokio runtime and the in-process component encoder.
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
-wit-component = "0.247"
-anyhow = "1"
-

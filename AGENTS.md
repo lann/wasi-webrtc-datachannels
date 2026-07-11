@@ -56,10 +56,9 @@ examples/                              # guest components + the demo/manual-sign
       webrtc-echo-demo.wit             #     demo:webrtc-echo (prompt, manual-demo,
                                        #       manual-signaling, worlds)
       deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
-  wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): a lib carrying
-                                       #   the demo-only manual-signaling host + the
-                                       #   integration test, plus binaries; the shared
-                                       #   types/data-channels host lives in wasmtime-impl above
+  wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): demo binaries;
+                                       #   the shared types/data-channels host lives in
+                                       #   wasmtime-impl above
 ```
 
 ### WIT is organized by ownership — one copy of the shared package
@@ -96,8 +95,8 @@ updating the consumers that name them as strings:
 - the host bindings in
   `wasmtime-impl/src/bindings.rs` (whose
   `wit/world.wit` also pulls in the root package through a
-  `deps/lann-webrtc-datachannels` symlink), and the demo-only manual-signaling
-  host bindings in `examples/wasmtime-demo/src/manual.rs`,
+  `deps/lann-webrtc-datachannels` symlink), and the manual-signaling test host
+  bindings in `wasmtime-impl/tests/manual_host.rs`,
 - the Wasmtime host bindings in `examples/wasmtime-demo/src/main.rs` and
   `examples/wasmtime-demo/src/bin/cli-signaling.rs`, and
 - the `jco transpile` `--async-exports` / `--async-imports` / `--map` flags in
@@ -145,16 +144,17 @@ cd ../examples/wasmtime-demo && cargo run --release --bin wasmtime-webrtc-host -
   ../echo-demo/build/echo-demo.component.wasm 1000 4096
 
 # Manual-signaling integration test (builds a guest, drives a real webrtc-rs
-# manual-signaling round trip through the demo-only host in examples/wasmtime-demo):
-cd ../examples/wasmtime-demo && cargo test
+# manual-signaling round trip through a test-only host under wasmtime-impl/tests):
+cargo test --manifest-path ../wasmtime-impl/Cargo.toml
 ```
 
 Validate what you touch: `cargo build` the crate(s) you changed, `wasm-tools
 component wit` on each wit dir you edited (the root `wit/` and/or the affected
 `examples/<name>/wit/`) after WIT edits, and re-run the Node transpile when the
 component's interfaces change. When you touch the browser host (`jco-impl`),
-run `npm run test:browser`. When you touch the demo-only manual-signaling host
-or its test, run `cargo test` in `examples/wasmtime-demo`. Keep the two hosts
+run `npm run test:browser`. When you touch the manual-signaling integration
+test host under `wasmtime-impl/tests`, run
+`cargo test --manifest-path wasmtime-impl/Cargo.toml`. Keep the two hosts
 producing the same result.
 
 ## Real signaling (`rendezvous` + `wasi:http@0.3`) — direction

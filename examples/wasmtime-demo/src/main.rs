@@ -6,13 +6,22 @@
 //! `lann:webrtc-datachannels` imports (`types`, `data-channels`) are
 //! satisfied by [`wasmtime_webrtc_datachannels`]; this binary only
 //! implements the demo-only `connect` convenience, which wires a channel to a
-//! host-provided echo endpoint via [`build_echo`].
+//! host-provided echo endpoint via a local helper.
 
+use std::sync::{Arc, Mutex};
+
+use anyhow::anyhow;
+use futures::channel::{mpsc, oneshot};
 use wasmtime::component::{Accessor, Component, HasData, Linker, Resource, ResourceTable};
 use wasmtime::{Config, Engine, Result, Store};
 use wasmtime_webrtc_datachannels::{
-    self as webrtc, build_echo, DataChannel, WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
+    self as webrtc_host, new_peer_connection, DataChannel, WasiWebrtcCtx, WasiWebrtcCtxView,
+    WasiWebrtcView,
 };
+use webrtc::api::setting_engine::SettingEngine;
+use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
+use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::data_channel::RTCDataChannel;
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -85,6 +94,90 @@ impl<T> bindings::demo::webrtc_echo::connect::HostWithStore<T> for Ctx {
     }
 }
 
+async fn build_echo(
+    label: &str,
+    ordered: bool,
+    max_retransmits: Option<u16>,
+    configure: impl Fn(&mut SettingEngine),
+) -> anyhow::Result<DataChannel> {
+    let near = new_peer_connection(&configure).await?;
+    let far = new_peer_connection(&configure).await?;
+
+    let far_for_ice = far.clone();
+    near.on_ice_candidate(Box::new(move |candidate| {
+        let far = far_for_ice.clone();
+        Box::pin(async move {
+            if let Some(candidate) = candidate {
+                if let Ok(init) = candidate.to_json() {
+                    let _ = far.add_ice_candidate(init).await;
+                }
+            }
+        })
+    }));
+    let near_for_ice = near.clone();
+    far.on_ice_candidate(Box::new(move |candidate| {
+        let near = near_for_ice.clone();
+        Box::pin(async move {
+            if let Some(candidate) = candidate {
+                if let Ok(init) = candidate.to_json() {
+                    let _ = near.add_ice_candidate(init).await;
+                }
+            }
+        })
+    }));
+
+    far.on_data_channel(Box::new(move |channel: Arc<RTCDataChannel>| {
+        Box::pin(async move {
+            let echo_channel = channel.clone();
+            channel.on_message(Box::new(move |message: DataChannelMessage| {
+                let echo_channel = echo_channel.clone();
+                Box::pin(async move {
+                    let _ = echo_channel.send(&message.data).await;
+                })
+            }));
+        })
+    }));
+
+    let init = RTCDataChannelInit {
+        ordered: Some(ordered),
+        max_retransmits,
+        ..Default::default()
+    };
+    let channel = near.create_data_channel(label, Some(init)).await?;
+
+    let (in_tx, in_rx) = mpsc::unbounded::<Vec<u8>>();
+    channel.on_message(Box::new(move |message: DataChannelMessage| {
+        let in_tx = in_tx.clone();
+        Box::pin(async move {
+            let _ = in_tx.unbounded_send(message.data.to_vec());
+        })
+    }));
+
+    let (open_tx, open_rx) = oneshot::channel::<()>();
+    let open_tx = Arc::new(Mutex::new(Some(open_tx)));
+    channel.on_open(Box::new(move || {
+        let open_tx = open_tx.clone();
+        Box::pin(async move {
+            if let Some(tx) = open_tx.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        })
+    }));
+
+    let offer = near.create_offer(None).await?;
+    near.set_local_description(offer.clone()).await?;
+    far.set_remote_description(offer).await?;
+    let answer = far.create_answer(None).await?;
+    far.set_local_description(answer.clone()).await?;
+    near.set_remote_description(answer).await?;
+
+    open_rx
+        .await
+        .map_err(|_| anyhow!("data channel closed before opening"))?;
+
+    Ok(DataChannel::new(channel, in_rx, vec![near, far]))
+}
+
 fn engine() -> Result<Engine> {
     let mut config = Config::new();
     config.wasm_component_model(true);
@@ -124,7 +217,7 @@ async fn main() -> Result<()> {
     let component = Component::from_file(&engine, &path)?;
     let mut linker: Linker<Ctx> = Linker::new(&engine);
     // Shared `lann:webrtc-datachannels` imports.
-    webrtc::add_to_linker(&mut linker)?;
+    webrtc_host::add_to_linker(&mut linker)?;
     // Demo-only `connect` import.
     bindings::demo::webrtc_echo::connect::add_to_linker::<_, Ctx>(&mut linker, |c| c)?;
 
@@ -173,7 +266,11 @@ async fn main() -> Result<()> {
             }
             println!("\nOK: every message round-tripped through the WebRTC data channel.");
         }
-        Err(err) => return Err(wasmtime::Error::msg(format!("demo returned error: {err:?}"))),
+        Err(err) => {
+            return Err(wasmtime::Error::msg(format!(
+                "demo returned error: {err:?}"
+            )))
+        }
     }
 
     Ok(())
