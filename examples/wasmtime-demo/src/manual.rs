@@ -25,7 +25,7 @@ use webrtc::data_channel::RTCDataChannel;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
-use wasmtime_wasi_webrtc_datachannels::{
+use wasmtime_webrtc_datachannels::{
     new_peer_connection, DataChannel, SettingEngineHook, WasiWebrtcCtxView, WasiWebrtcView,
 };
 
@@ -44,7 +44,7 @@ mod bindings {
         },
         with: {
             "lann:webrtc-datachannels/data-channels.data-channel":
-                wasmtime_wasi_webrtc_datachannels::DataChannel,
+                wasmtime_webrtc_datachannels::DataChannel,
             "demo:webrtc-echo/manual-signaling.peer-connection": super::ManualPeer,
         },
     });
@@ -65,7 +65,7 @@ impl HasData for ManualSignaling {
 /// Add the demo-only `demo:webrtc-echo/manual-signaling` interface to `linker`.
 ///
 /// The `data-channels`/`types` imports must be provided separately by
-/// [`wasmtime_wasi_webrtc_datachannels::add_to_linker`]; the channels this
+/// [`wasmtime_webrtc_datachannels::add_to_linker`]; the channels this
 /// interface returns are that crate's [`DataChannel`].
 pub fn add_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
 where

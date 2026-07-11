@@ -4,13 +4,13 @@
 //! It is the non-browser counterpart to the Node host: it loads the same
 //! `echo-demo` component and invokes the component's exported async `run`. The
 //! `lann:webrtc-datachannels` imports (`types`, `data-channels`) are
-//! satisfied by [`wasmtime_wasi_webrtc_datachannels`]; this binary only
+//! satisfied by [`wasmtime_webrtc_datachannels`]; this binary only
 //! implements the demo-only `connect` convenience, which wires a channel to a
 //! host-provided echo endpoint via [`build_echo`].
 
 use wasmtime::component::{Accessor, Component, HasData, Linker, Resource, ResourceTable};
 use wasmtime::{Config, Engine, Result, Store};
-use wasmtime_wasi_webrtc_datachannels::{
+use wasmtime_webrtc_datachannels::{
     self as webrtc, build_echo, DataChannel, WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
 };
 
@@ -26,7 +26,7 @@ mod bindings {
         },
         with: {
             "lann:webrtc-datachannels/data-channels.data-channel":
-                wasmtime_wasi_webrtc_datachannels::DataChannel,
+                wasmtime_webrtc_datachannels::DataChannel,
         },
     });
 }

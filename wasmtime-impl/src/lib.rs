@@ -73,7 +73,7 @@ impl WasiWebrtcCtx {
     /// loopback, so a demo/test host can enable loopback ICE candidates:
     ///
     /// ```
-    /// # use wasmtime_wasi_webrtc_datachannels::WasiWebrtcCtx;
+    /// # use wasmtime_webrtc_datachannels::WasiWebrtcCtx;
     /// let mut ctx = WasiWebrtcCtx::new();
     /// ctx.set_setting_engine_hook(|engine| {
     ///     engine.set_include_loopback_candidate(true);
@@ -144,7 +144,7 @@ impl HasData for WasiWebrtc {
 /// ```no_run
 /// use wasmtime::component::{Linker, ResourceTable};
 /// use wasmtime::{Engine, Result};
-/// use wasmtime_wasi_webrtc_datachannels::{
+/// use wasmtime_webrtc_datachannels::{
 ///     add_to_linker, WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
 /// };
 ///
