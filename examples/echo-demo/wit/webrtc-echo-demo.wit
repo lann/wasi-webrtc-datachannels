@@ -1,6 +1,6 @@
 package demo:webrtc-echo@0.1.0;
 
-/// A convenience used by the spike demo.
+/// A convenience used by the demo.
 ///
 /// The host connects a data channel to an internal "echo" endpoint, performing
 /// a genuine SDP/ICE handshake between two peer connections under the hood, and

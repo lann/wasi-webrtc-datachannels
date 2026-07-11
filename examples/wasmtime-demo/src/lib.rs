@@ -1,4 +1,4 @@
-//! Demo-only host glue for the Wasmtime WebRTC spike.
+//! Demo-only host glue for the Wasmtime WebRTC host.
 //!
 //! The reusable `wasi:webrtc-data-channels` host implementation (`types`,
 //! `data-channels`, and the stream/pipe plumbing) lives in the

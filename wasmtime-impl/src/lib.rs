@@ -32,7 +32,7 @@ pub type SettingEngineHook = Arc<dyn Fn(&mut SettingEngine) + Send + Sync>;
 
 /// Configuration and per-store state for the WebRTC data-channel host.
 ///
-/// This is intentionally minimal for the spike (mirroring `wasmtime_wasi_http`'s
+/// This is intentionally minimal (mirroring `wasmtime_wasi_http`'s
 /// `WasiHttpCtx`); it exists so hosts have a stable place to grow configuration
 /// without changing the [`WasiWebrtcView`] shape.
 ///

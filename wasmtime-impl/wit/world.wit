@@ -12,7 +12,7 @@ package wasmtime:webrtc-data-channels-host;
 /// `manual-signaling` (the vanilla copy/paste surface) and `signaling` (the full
 /// trickle-ICE design target) are intentionally omitted: `manual-signaling` is a
 /// demo-only interface implemented by the demo hosts, and `signaling` is
-/// designed but not yet implemented by any host in this spike.
+/// designed but not yet implemented by any host.
 world imports {
     import wasi:webrtc-data-channels/data-channels@0.1.0;
 }

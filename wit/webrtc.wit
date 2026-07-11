@@ -60,7 +60,7 @@ interface data-channels {
 /// This is the design target for the interface and is intended to be iterated
 /// on in parallel with the host implementations. It mirrors enough of
 /// `RTCPeerConnection` to drive a real SDP offer/answer exchange and trickle
-/// ICE. The spike's runnable demo does not drive signaling directly (it uses
+/// ICE. The runnable demo does not drive signaling directly (it uses
 /// the demo `connect` convenience), but this interface documents the shape a
 /// full guest-driven connection would take. See the demo `rendezvous` interface
 /// for the transport that would carry these blobs between remote peers.

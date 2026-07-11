@@ -4,11 +4,11 @@ Guidance for automated agents (and humans) working in this repository.
 
 ## What this repository is
 
-A **feasibility spike** for `wasi:webrtc-data-channels`: a WIT interface plus two
-host implementations that run the *same* guest component over a real WebRTC data
-channel. It is intentionally small and exploratory — prefer clarity and
-correctness over features, and keep the two hosts behaviourally in sync. See
-[`README.md`](README.md) for the findings and the big picture.
+`wasi:webrtc-data-channels`: a WIT interface plus two host implementations that
+run the *same* guest component over a real WebRTC data channel. It is
+intentionally small — prefer clarity and correctness over features, and keep the
+two hosts behaviourally in sync. See [`README.md`](README.md) for the findings
+and the big picture.
 
 ## Living knowledge base: `lann/wasm-component-starter`
 
@@ -44,7 +44,7 @@ wit/                                   # reusable wasi:webrtc-data-channels pack
 wasmtime-impl/                         # reusable Wasmtime host crate (webrtc-rs),
                                        #   modeled after wasmtime_wasi_http::p3;
                                        #   add_to_linker + WasiWebrtcView (types + data-channels);
-                                       #   crate name stays wasmtime-wasi-webrtc-datachannels
+                                       #   crate name: wasmtime-wasi-webrtc-datachannels
 jco-impl/                              # browser-first host (Node + jco + @roamhq/wrtc)
 examples/                              # guest components + the demo/manual-signaling driver
   echo-demo/                           # example guest component (Rust)
