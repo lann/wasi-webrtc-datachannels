@@ -78,7 +78,13 @@ impl<D: Send + 'static> StreamConsumer<D> for SendConsumer {
         let msg = item.take().expect("source.read did not populate item");
 
         let channel = this.channel.clone();
-        let mut fut = Box::pin(async move { channel.send(&Bytes::from(msg)).await.map(|_| ()).map_err(Into::into) });
+        let mut fut = Box::pin(async move {
+            channel
+                .send(&Bytes::from(msg))
+                .await
+                .map(|_| ())
+                .map_err(Into::into)
+        });
 
         match fut.as_mut().poll(cx) {
             Poll::Pending => {
@@ -127,8 +133,9 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
         self_: Resource<DataChannel>,
         messages: StreamReader<Vec<u8>>,
     ) -> Result<std::result::Result<(), Error>> {
-        let channel = accessor
-            .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.channel()))?;
+        let channel = accessor.with(|mut access| {
+            Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.channel())
+        })?;
 
         let (done_tx, done_rx) = oneshot::channel();
         accessor.with(move |access| {

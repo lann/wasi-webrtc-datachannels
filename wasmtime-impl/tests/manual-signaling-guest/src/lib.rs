@@ -15,8 +15,8 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use exports::test::webrtc_manual_signaling::runner::{Guest, Report};
 use demo::webrtc_echo::manual_signaling::PeerConnection;
+use exports::test::webrtc_manual_signaling::runner::{Guest, Report};
 use lann::webrtc_datachannels::types::{DataChannelOptions, Error};
 use wit_bindgen::StreamResult;
 

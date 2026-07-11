@@ -18,6 +18,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -37,6 +39,22 @@ jobs:
 
       - name: Install dependencies
         run: ./scripts/setup.sh
+
+      - name: Check formatting
+        run: |
+          cargo fmt --manifest-path wasmtime-impl/Cargo.toml -- --check
+          cargo fmt --manifest-path examples/wasmtime-demo/Cargo.toml -- --check
+          cargo fmt --manifest-path examples/echo-demo/Cargo.toml -- --check
+          cargo fmt --manifest-path examples/cli-signaling/Cargo.toml -- --check
+          cargo fmt --manifest-path wasmtime-impl/tests/manual-signaling-guest/Cargo.toml -- --check
+
+      - name: Run clippy
+        run: |
+          cargo clippy --manifest-path wasmtime-impl/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path examples/wasmtime-demo/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path examples/echo-demo/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
+          cargo clippy --manifest-path examples/cli-signaling/Cargo.toml --target wasm32-wasip2 -- -D warnings
+          cargo clippy --manifest-path wasmtime-impl/tests/manual-signaling-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
       - name: Validate WIT
         run: |
