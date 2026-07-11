@@ -15,8 +15,13 @@
 // two peer connections and echoes every message on the far side, so a real
 // WebRTC/SCTP data channel carries the traffic.
 
-import pkg from "@roamhq/wrtc";
-const { RTCPeerConnection } = pkg;
+// Resolve `RTCPeerConnection` isomorphically so this exact module runs both in a
+// real browser and under Node. In a browser (including headless Chromium in CI)
+// the W3C class is a global; under Node it is provided by `@roamhq/wrtc`, which
+// is imported lazily so the bare specifier never has to resolve in the browser.
+const RTCPeerConnection =
+  globalThis.RTCPeerConnection ??
+  (await import("@roamhq/wrtc")).default.RTCPeerConnection;
 
 // Keep the SCTP send buffer bounded; pause the producer when it fills.
 const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;

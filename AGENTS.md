@@ -133,6 +133,11 @@ cd hosts/node && npm install && npm run build:component
 # Node (browser-first) host:
 npm run transpile && node --experimental-wasm-jspi src/run.mjs
 
+# Browser host test (headless Chrome 137+; the same webrtc.js + component as the
+# Node host, run through a real browser — this is the CI check for the browser
+# path). Requires a Chrome/Chromium binary (auto-detected, or set CHROME_PATH):
+npm run test:browser
+
 # Wasmtime (native) host:
 cd ../wasmtime && cargo run --release --bin wasmtime-webrtc-host -- \
   ../../components/echo-demo/build/echo-demo.component.wasm 1000 4096
@@ -145,7 +150,8 @@ cd ../wasmtime && cargo test
 Validate what you touch: `cargo build` the crate(s) you changed, `wasm-tools
 component wit` on each wit dir you edited (the root `wit/` and/or the affected
 `components/<name>/wit/`) after WIT edits, and re-run the Node transpile when the
-component's interfaces change. When you touch the demo-only manual-signaling host
+component's interfaces change. When you touch the browser host (`hosts/node`),
+run `npm run test:browser`. When you touch the demo-only manual-signaling host
 or its test, run `cargo test` in `hosts/wasmtime`. Keep the two hosts
 producing the same result.
 
