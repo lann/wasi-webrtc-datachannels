@@ -25,7 +25,7 @@ genuine WebRTC/SCTP data channel.
 | [`examples/echo-demo`](examples/echo-demo) | A **Rust example component** exercising a data channel entirely through streams. |
 | [`wasmtime-impl`](wasmtime-impl) | The **Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `add_to_linker` + `WasiWebrtcView` for the `types` + `data-channels` interfaces. Crate name: `wasmtime-webrtc-datachannels`. |
 | [`jco-impl`](jco-impl) | The **browser-first host** (Node stand-in for the browser, jco + @roamhq/wrtc). |
-| [`examples/wasmtime-demo`](examples/wasmtime-demo) | The **native Rust host** (Wasmtime + webrtc-rs): binaries plus a lib carrying the demo-only manual-signaling host and the integration test, built on `wasmtime-impl`. |
+| [`examples/wasmtime-demo`](examples/wasmtime-demo) | The **native Rust host** (Wasmtime + webrtc-rs): demo binaries built on `wasmtime-impl`. |
 | [`examples/cli-signaling`](examples/cli-signaling) | The **manual-signaling CLI guest component** (Rust). |
 | [`AGENTS.md`](AGENTS.md) | Orientation for agents/contributors, linking the `lann/wasm-component-starter` knowledge base. |
 
