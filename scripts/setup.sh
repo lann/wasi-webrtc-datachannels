@@ -91,4 +91,12 @@ else
   (cd "${REPO_ROOT}/jco-impl" && npm install)
 fi
 
+# In GitHub Actions, $GITHUB_PATH is a file; appending a path to it makes that
+# directory available in PATH for all subsequent steps in the job.  Without this,
+# wasm-tools / just / cargo-nextest (installed to ~/.cargo/bin above) are not
+# found by later `run:` steps even though they exist on disk.
+if [ -n "${GITHUB_PATH:-}" ]; then
+  echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+fi
+
 log "Setup complete"
