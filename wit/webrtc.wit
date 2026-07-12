@@ -55,8 +55,8 @@ interface data-channels {
     enum message-kind {
         /// A binary message.
         binary,
-        /// A text message. When `kind` is `string`, the payload `data` must be
-        /// valid UTF-8.
+        /// A text message. The corresponding `stream-message.data` payload must
+        /// be valid UTF-8.
         %string,
     }
 
