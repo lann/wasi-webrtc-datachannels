@@ -30,28 +30,91 @@ interface types {
 
 /// The high-throughput data-channel surface.
 ///
-/// A data channel is bidirectional and message-oriented. Rather than making one
-/// host call per message, both directions are carried by component-model
-/// `stream`s so the host and guest can pipeline messages and let the async ABI
-/// apply backpressure. Each `list<u8>` element is exactly one data-channel
-/// message, preserving WebRTC message boundaries.
+/// A data channel is bidirectional and message-oriented. Each `send`/`receive`
+/// carries exactly one data-channel message, preserving WebRTC message
+/// boundaries. Concurrent calls are supported so the host and guest can
+/// pipeline messages and let the async ABI apply backpressure. A message may be
+/// carried as a whole `message` value or, to bound in-memory buffering, as a
+/// `stream-message` whose payload flows through a byte `stream`.
 interface data-channels {
     use types.{error, data-channel-options};
+
+    /// A single data-channel message.
+    ///
+    /// Each message preserves a WebRTC message boundary. A message is either
+    /// binary or text; a text message is carried as a `string`, whose bytes are
+    /// valid UTF-8.
+    variant message {
+        /// A binary message, carried verbatim.
+        binary(list<u8>),
+        /// A text message. The `string` is valid UTF-8.
+        %string(string),
+    }
+
+    /// The kind of a `stream-message`.
+    enum message-kind {
+        /// A binary message.
+        binary,
+        /// A text message. When `kind` is `string`, the payload `data` must be
+        /// valid UTF-8.
+        %string,
+    }
+
+    /// A single data-channel message whose payload is carried as a byte
+    /// `stream` rather than materialized as a `list<u8>` or `string`.
+    ///
+    /// The bytes streamed through `data` MUST match `kind` (valid UTF-8 when
+    /// `kind` is `string`) and MUST total exactly `length` bytes.
+    record stream-message {
+        /// Whether the payload is binary or UTF-8 text.
+        kind: message-kind,
+        /// The total length, in bytes, of the payload carried by `data`.
+        length: u32,
+        /// The message payload.
+        data: stream<u8>,
+    }
 
     /// A connected, bidirectional WebRTC data channel.
     resource data-channel {
         /// The negotiated channel label.
         label: func() -> string;
 
-        /// Stream outbound messages into the channel. Each `list<u8>` element is
-        /// sent as one message. The returned future resolves once the input
-        /// stream is exhausted and every message has been handed to the
-        /// transport, or with an `error` if the channel closed early.
-        send: async func(messages: stream<list<u8>>) -> result<_, error>;
+        /// Send a single message on the channel. The returned future resolves
+        /// once the message has been handed to the transport, or with an
+        /// `error` if the channel closed early.
+        ///
+        /// Concurrent calls to `send` must be supported; concurrently sent
+        /// messages are handed to the transport in an implementation-defined
+        /// order.
+        send: async func(message: message) -> result<_, error>;
 
-        /// A stream of inbound messages, one `list<u8>` per received message.
-        /// The stream ends (its reader is dropped) when the channel closes.
-        receive: async func() -> stream<list<u8>>;
+        /// Receive a single message from the channel. The returned future
+        /// resolves with the next inbound message, or with an `error` (such as
+        /// `closed`) when the channel closes.
+        ///
+        /// Concurrent calls to `receive` must be supported; concurrently
+        /// pending receivers are each handed a message in an
+        /// implementation-defined order.
+        receive: async func() -> result<message, error>;
+
+        /// Send a single message whose payload is streamed as bytes. The bytes
+        /// written to `message.data` MUST match `message.kind` (valid UTF-8 when
+        /// `kind` is `string`) and MUST total exactly `message.length` bytes.
+        /// The returned future resolves once the message has been handed to the
+        /// transport, or with an `error` if the channel closed early.
+        ///
+        /// Concurrent calls must be supported; concurrently sent messages are
+        /// handed to the transport in an implementation-defined order.
+        send-via-stream: async func(message: stream-message) -> result<_, error>;
+
+        /// Receive a single message whose payload is delivered as a byte
+        /// `stream`. The returned future resolves with the next inbound
+        /// message, or with an `error` (such as `closed`) when the channel
+        /// closes.
+        ///
+        /// Concurrent calls must be supported; concurrently pending receivers
+        /// are each handed a message in an implementation-defined order.
+        receive-via-stream: async func() -> result<stream-message, error>;
     }
 }
 
