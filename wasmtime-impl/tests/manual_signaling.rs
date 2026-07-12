@@ -193,4 +193,12 @@ fn manual_signaling_round_trip() {
         "every message should round-trip through the data channel"
     );
     assert_eq!(report.bytes, u64::from(count) * u64::from(size));
+    assert_eq!(
+        report.stream_sent, count,
+        "closing the send-via-stream write end must still send every queued message"
+    );
+    assert_eq!(
+        report.stream_received, count,
+        "every send-via-stream message should round-trip through the data channel"
+    );
 }

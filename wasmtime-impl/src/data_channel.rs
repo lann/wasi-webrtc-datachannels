@@ -74,7 +74,9 @@ pub struct DataChannel {
     /// can be woken and fail with `receiving-via-stream`.
     stream_started: Shared<oneshot::Receiver<()>>,
     /// Keep the backing peer connection(s) alive for the channel's lifetime.
-    _keep_alive: Vec<Arc<RTCPeerConnection>>,
+    /// Dropped in `Drop`, which also closes each connection so `webrtc-rs` tears
+    /// down its ICE/DTLS/SCTP background tasks instead of leaking them.
+    keep_alive: Vec<Arc<RTCPeerConnection>>,
 }
 
 impl DataChannel {
@@ -92,7 +94,7 @@ impl DataChannel {
             stream_receiving: Arc::new(AtomicBool::new(false)),
             stream_started_tx: Arc::new(Mutex::new(Some(started_tx))),
             stream_started: started_rx.shared(),
-            _keep_alive: keep_alive,
+            keep_alive,
         }
     }
 
@@ -139,6 +141,32 @@ impl DataChannel {
     /// pending `receive` calls.
     pub fn stream_started(&self) -> Shared<oneshot::Receiver<()>> {
         self.stream_started.clone()
+    }
+}
+
+impl Drop for DataChannel {
+    fn drop(&mut self) {
+        close_peer_connections(std::mem::take(&mut self.keep_alive));
+    }
+}
+
+/// Close each peer connection so `webrtc-rs` tears down its ICE/DTLS/SCTP
+/// background tasks.
+///
+/// `RTCPeerConnection::close` is async, so the closes are spawned onto the
+/// current Tokio runtime; dropping the `Arc`s alone would leak those tasks for
+/// the process lifetime. Called from `Drop` impls, where awaiting is not
+/// possible; if no runtime is running the connections are simply dropped.
+pub fn close_peer_connections(connections: Vec<Arc<RTCPeerConnection>>) {
+    if connections.is_empty() {
+        return;
+    }
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(async move {
+            for connection in connections {
+                let _ = connection.close().await;
+            }
+        });
     }
 }
 

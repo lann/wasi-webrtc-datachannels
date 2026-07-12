@@ -17,8 +17,9 @@ wit_bindgen::generate!({
 
 use demo::webrtc_echo::manual_signaling::PeerConnection;
 use exports::test::webrtc_manual_signaling::runner::{Guest, Report};
-use lann::webrtc_datachannels::data_channels::Message;
+use lann::webrtc_datachannels::data_channels::{Message, MessageKind, StreamMessage};
 use lann::webrtc_datachannels::types::{DataChannelOptions, Error};
+use wit_bindgen::spawn;
 
 const CHANNEL_LABEL: &str = "manual-signaling-test";
 
@@ -75,11 +76,57 @@ impl Guest for Component {
         let (send_result, (received, bytes)) = futures::join!(send_fut, recv_fut);
         send_result?;
 
+        // Second pass: send another `count` messages through `send-via-stream`,
+        // closing the stream's write end while messages are still queued, and
+        // read them back with `receive`. This exercises the streaming send path
+        // and its finish semantics (every queued message must still be sent).
+        let stream_send_fut = async {
+            let (mut messages_tx, messages_rx) = wit_stream::new::<StreamMessage>();
+            // Produce every message on a spawned task, feeding each message's
+            // payload through its own byte stream, then drop `messages_tx` to
+            // close the write end while the host may still be draining messages.
+            spawn(async move {
+                for i in 0..count {
+                    let payload = make_message(size as usize, i);
+                    let (mut data_tx, data_rx) = wit_stream::new::<u8>();
+                    spawn(async move {
+                        let _ = data_tx.write_all(payload).await;
+                    });
+                    let _ = messages_tx
+                        .write_one(StreamMessage {
+                            kind: MessageKind::Binary,
+                            length: size,
+                            data: data_rx,
+                        })
+                        .await;
+                }
+            });
+            offerer_channel.send_via_stream(messages_rx).await
+        };
+        let stream_recv_fut = async {
+            let mut received: u32 = 0;
+            while received < count {
+                match answerer_channel.receive().await {
+                    Ok(_) => received += 1,
+                    Err(_) => break,
+                }
+            }
+            received
+        };
+        let (stream_send_result, stream_received) =
+            futures::join!(stream_send_fut, stream_recv_fut);
+        let stream_sent = match stream_send_result {
+            Ok(()) => count,
+            Err(err) => err.sent as u32,
+        };
+
         Ok(Report {
             label,
             sent: count,
             received,
             bytes,
+            stream_sent,
+            stream_received,
         })
     }
 }
