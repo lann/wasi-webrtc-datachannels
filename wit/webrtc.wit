@@ -11,6 +11,11 @@ interface types {
         /// A supplied session description or ICE candidate was malformed. The
         /// string carries a human-readable reason.
         invalid-signaling(string),
+        /// The channel's inbound messages are being consumed by
+        /// `data-channels.data-channel.receive-via-stream`. Once that method has
+        /// been called on a data channel, any further call to it or to `receive`
+        /// fails with this error.
+        receiving-via-stream,
         /// An implementation-specific failure. The string is human-readable.
         other(string),
     }
@@ -74,6 +79,17 @@ interface data-channels {
         data: stream<u8>,
     }
 
+    /// The failure returned by `data-channel.send-via-stream`.
+    ///
+    /// `sent` reports how many complete messages were handed to the transport
+    /// before `error` occurred, so the caller can tell where the stream stopped.
+    record send-via-stream-error {
+        /// The failure that stopped the stream.
+        error: error,
+        /// The number of messages sent before `error` occurred.
+        sent: u64,
+    }
+
     /// A connected, bidirectional WebRTC data channel.
     resource data-channel {
         /// The negotiated channel label.
@@ -103,20 +119,25 @@ interface data-channels {
         /// MUST match its `kind` (valid UTF-8 when `kind` is `string`) and MUST
         /// total exactly its `length` bytes. The returned future resolves once
         /// the input stream is exhausted and every message has been handed to
-        /// the transport, or with an `error` if the channel closed early.
+        /// the transport, or with a `send-via-stream-error` if the channel
+        /// closed early. The error's `sent` field reports how many messages were
+        /// handed to the transport before the failure.
         ///
         /// Concurrent calls must be supported; concurrently sent messages are
         /// handed to the transport in an implementation-defined order.
-        send-via-stream: async func(messages: stream<stream-message>) -> result<_, error>;
+        send-via-stream: async func(messages: stream<stream-message>) -> result<_, send-via-stream-error>;
 
-        /// Receive a stream of inbound messages whose payloads are each
-        /// delivered as a byte `stream`. One `stream-message` is produced per
-        /// received data-channel message; the returned stream ends (its reader
-        /// is dropped) when the channel closes.
+        /// Take over the channel's inbound messages, delivering each as a
+        /// `stream-message` whose payload is a byte `stream`. One `stream-message`
+        /// is produced per received data-channel message; the returned stream
+        /// ends (its reader is dropped) when the channel closes.
         ///
-        /// Concurrent calls must be supported; concurrently pending receivers
-        /// are each handed messages in an implementation-defined order.
-        receive-via-stream: async func() -> stream<stream-message>;
+        /// This method may only be called once per channel. Once it has been
+        /// called, any further call to it or to `receive` returns
+        /// `error.receiving-via-stream`. Any calls to `receive` that are pending
+        /// when this method is called are resolved (with
+        /// `error.receiving-via-stream`) before this method returns.
+        receive-via-stream: func() -> result<stream<stream-message>, error>;
     }
 }
 

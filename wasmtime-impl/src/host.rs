@@ -22,7 +22,8 @@ use wasmtime::component::{
 use wasmtime::{AsContextMut, Result, StoreContextMut};
 
 use crate::bindings::webrtc_datachannels::data_channels::{
-    self, HostDataChannel, HostDataChannelWithStore, Message, MessageKind, StreamMessage,
+    self, HostDataChannel, HostDataChannelWithStore, Message, MessageKind, SendViaStreamError,
+    StreamMessage,
 };
 use crate::bindings::webrtc_datachannels::types::{self, Error};
 use crate::{DataChannel, InboundMessage, WasiWebrtc, WasiWebrtcCtxView};
@@ -273,12 +274,39 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
         accessor: &Accessor<T, Self>,
         self_: Resource<DataChannel>,
     ) -> Result<std::result::Result<Message, Error>> {
-        let incoming = accessor.with(|mut access| {
-            Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.incoming())
+        let (incoming, stream_started, stream_receiving) = accessor.with(|mut access| {
+            let channel = access.get().table.get(&self_)?;
+            Ok::<_, wasmtime::Error>((
+                channel.incoming(),
+                channel.stream_started(),
+                channel.is_stream_receiving(),
+            ))
         })?;
-        Ok(match next_inbound(incoming).await {
-            Ok(inbound) => to_message(inbound),
-            Err(err) => Err(err),
+
+        // `receive-via-stream` has already taken over the inbound messages.
+        if stream_receiving {
+            return Ok(Err(Error::ReceivingViaStream));
+        }
+
+        // Race the next inbound message against `receive-via-stream` being called:
+        // whichever resolves first wins, so a pending receiver is woken and fails
+        // with `receiving-via-stream` the moment the stream is claimed.
+        let receive = std::pin::pin!(next_inbound(incoming));
+        let started = std::pin::pin!(stream_started);
+        Ok(match futures::future::select(receive, started).await {
+            futures::future::Either::Left((result, _)) => match result {
+                Ok(inbound) => to_message(inbound),
+                Err(err) => Err(err),
+            },
+            // The stream-started signal fired; when it was actually sent (rather
+            // than cancelled by the channel being dropped) report the takeover.
+            futures::future::Either::Right((signal, _)) => {
+                if signal.is_ok() {
+                    Err(Error::ReceivingViaStream)
+                } else {
+                    Err(Error::Closed)
+                }
+            }
         })
     }
 
@@ -286,7 +314,7 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
         accessor: &Accessor<T, Self>,
         self_: Resource<DataChannel>,
         messages: StreamReader<StreamMessage>,
-    ) -> Result<std::result::Result<(), Error>> {
+    ) -> Result<std::result::Result<(), SendViaStreamError>> {
         let channel = accessor.with(|mut access| {
             Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.channel())
         })?;
@@ -297,38 +325,48 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
         let (tx, mut rx) = mpsc::unbounded::<PendingSend>();
         accessor.with(|access| messages.pipe(access, OutboundStreamMessages { tx }))?;
 
+        let mut sent: u64 = 0;
         while let Some(pending) = rx.next().await {
             let data = pending.done_rx.await.unwrap_or_default();
             if data.len() != pending.length {
-                return Ok(Err(Error::Other(format!(
-                    "stream-message payload was {} bytes but length declared {}",
-                    data.len(),
-                    pending.length
-                ))));
+                return Ok(Err(SendViaStreamError {
+                    error: Error::Other(format!(
+                        "stream-message payload was {} bytes but length declared {}",
+                        data.len(),
+                        pending.length
+                    )),
+                    sent,
+                }));
             }
-            if let Err(err) = send_channel_message(&channel, pending.is_string, data).await {
-                return Ok(Err(err));
+            if let Err(error) = send_channel_message(&channel, pending.is_string, data).await {
+                return Ok(Err(SendViaStreamError { error, sent }));
             }
+            sent += 1;
         }
         Ok(Ok(()))
     }
 
-    async fn receive_via_stream(
-        accessor: &Accessor<T, Self>,
+    fn receive_via_stream(
+        mut access: wasmtime::component::Access<'_, T, Self>,
         self_: Resource<DataChannel>,
-    ) -> Result<StreamReader<StreamMessage>> {
-        let incoming = accessor.with(|mut access| {
-            Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.incoming())
-        })?;
-        accessor.with(|access| {
-            StreamReader::new(
-                access,
-                InboundStreamMessages {
-                    incoming,
-                    pending: None,
-                },
-            )
-        })
+    ) -> Result<std::result::Result<StreamReader<StreamMessage>, Error>> {
+        // Claim the inbound messages for this stream. A second call (or any
+        // concurrent `receive`) observes the claim and fails.
+        let (claimed, incoming) = {
+            let channel = access.get().table.get(&self_)?;
+            (channel.begin_stream_receiving(), channel.incoming())
+        };
+        if !claimed {
+            return Ok(Err(Error::ReceivingViaStream));
+        }
+        let reader = StreamReader::new(
+            access,
+            InboundStreamMessages {
+                incoming,
+                pending: None,
+            },
+        )?;
+        Ok(Ok(reader))
     }
 
     async fn drop(accessor: &Accessor<T, Self>, rep: Resource<DataChannel>) -> Result<()> {

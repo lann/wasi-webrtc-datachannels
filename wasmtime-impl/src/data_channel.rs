@@ -5,12 +5,16 @@
 //! open `webrtc-rs` [`RTCDataChannel`], its inbound-message stream, and the peer
 //! connection(s) that must outlive it.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use bytes::Bytes;
 use futures::channel::mpsc::UnboundedReceiver;
+use futures::channel::oneshot;
+use futures::future::Shared;
 use futures::lock::Mutex as AsyncMutex;
+use futures::FutureExt;
 use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
@@ -59,6 +63,16 @@ pub struct DataChannel {
     /// Inbound messages, delivered one per `receive` call. Behind an async mutex
     /// so concurrent receivers serialize and each takes the next message.
     incoming: Arc<AsyncMutex<UnboundedReceiver<InboundMessage>>>,
+    /// Set once `receive-via-stream` has claimed the inbound messages. While set,
+    /// `receive` and `receive-via-stream` both fail with `receiving-via-stream`.
+    stream_receiving: Arc<AtomicBool>,
+    /// Sender fired when `receive-via-stream` is first called. Held in a mutex so
+    /// the first caller takes it (claiming the channel) and all later callers
+    /// observe `None`.
+    stream_started_tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    /// Resolves once `receive-via-stream` is called, so pending `receive` calls
+    /// can be woken and fail with `receiving-via-stream`.
+    stream_started: Shared<oneshot::Receiver<()>>,
     /// Keep the backing peer connection(s) alive for the channel's lifetime.
     _keep_alive: Vec<Arc<RTCPeerConnection>>,
 }
@@ -71,9 +85,13 @@ impl DataChannel {
         incoming: UnboundedReceiver<InboundMessage>,
         keep_alive: Vec<Arc<RTCPeerConnection>>,
     ) -> Self {
+        let (started_tx, started_rx) = oneshot::channel();
         Self {
             channel,
             incoming: Arc::new(AsyncMutex::new(incoming)),
+            stream_receiving: Arc::new(AtomicBool::new(false)),
+            stream_started_tx: Arc::new(Mutex::new(Some(started_tx))),
+            stream_started: started_rx.shared(),
             _keep_alive: keep_alive,
         }
     }
@@ -92,6 +110,35 @@ impl DataChannel {
     /// can await the next message without holding the store borrow.
     pub fn incoming(&self) -> Arc<AsyncMutex<UnboundedReceiver<InboundMessage>>> {
         self.incoming.clone()
+    }
+
+    /// Claim the channel's inbound messages for `receive-via-stream`.
+    ///
+    /// Returns `true` for the first caller (which takes ownership of the inbound
+    /// stream) and `false` for every later caller. On the first call it also
+    /// wakes any pending `receive` calls so they can fail with
+    /// `receiving-via-stream` before `receive-via-stream` returns.
+    pub fn begin_stream_receiving(&self) -> bool {
+        let mut guard = self.stream_started_tx.lock().unwrap();
+        match guard.take() {
+            Some(tx) => {
+                self.stream_receiving.store(true, Ordering::SeqCst);
+                let _ = tx.send(());
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether `receive-via-stream` has claimed the inbound messages.
+    pub fn is_stream_receiving(&self) -> bool {
+        self.stream_receiving.load(Ordering::SeqCst)
+    }
+
+    /// A future that resolves once `receive-via-stream` is called, used to wake
+    /// pending `receive` calls.
+    pub fn stream_started(&self) -> Shared<oneshot::Receiver<()>> {
+        self.stream_started.clone()
     }
 }
 

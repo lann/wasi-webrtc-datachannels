@@ -50,8 +50,13 @@ a single copy of the shared surface to edit:
   pipeline messages and let the async ABI apply backpressure. To bound in-memory
   buffering, a message may instead flow through a byte `stream` as a
   `stream-message` (`kind`, `length`, `data: stream<u8>`):
-  - `send-via-stream: async func(messages: stream<stream-message>) -> result<_, error>`
-  - `receive-via-stream: async func() -> stream<stream-message>`
+  - `send-via-stream: async func(messages: stream<stream-message>) -> result<_, send-via-stream-error>`
+  - `receive-via-stream: func() -> result<stream<stream-message>, error>`
+
+  `send-via-stream-error` carries the underlying `error` plus `sent`, the number
+  of messages handed to the transport before the failure. `receive-via-stream`
+  takes over the channel's inbound messages: it may be called only once, after
+  which it (and `receive`) fail with `error.receiving-via-stream`.
 - **`signaling`** — a fuller `RTCPeerConnection`-style surface (SDP offer/answer
   + trickle ICE) that documents where a *guest-driven* connection API is
   headed. It is the design target and is **not** required by the runnable demo.
