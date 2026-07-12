@@ -6,35 +6,6 @@ repository root.
 
 ## A. WIT interface design
 
-### 2. `receive` should probably not be `async`
-
-`receive: async func() -> stream<list<u8>>` does no waiting in either host (it
-just hands back a stream), and the design-target
-`signaling.incoming-data-channels: func() -> stream<data-channel>` is sync.
-Making `receive` sync removes an async ABI round trip and an inconsistency.
-Touches: `wit/webrtc.wit:54`, host bindgen config
-(`wasmtime-impl/src/bindings.rs`), jco `--async-imports` flags
-(`jco-impl/package.json`), guests.
-
-### 3. `data-channel` resource has no `close`, state, or buffering observability
-
-Guests can only abandon a channel by dropping the resource; there's no explicit
-`close()`, no `ready-state`, and no analogue of `bufferedAmount` (which the jco
-host uses internally for backpressure, `jco-impl/webrtc.js:27,66-77`). Decide
-the minimal surface that matches `RTCDataChannel` without bloating the
-interface — at least `close: func()` — and document that resource drop implies
-close. Update both hosts.
-
-### 4. Evaluate `stream<list<u8>>` per-message allocation cost; document limits or offer a byte-stream mode
-
-Each message is a separate `list<u8>` lift/lower with its own guest `realloc`
-allocation. Given the stated priority of limiting guest memory, benchmark
-against a length-prefixed `stream<u8>` framing (or document why
-message-per-element wins), and document the max message size implied by SCTP
-(~256 KiB practical / `maxMessageSize` from SDP), which the interface currently
-ignores. Output: a short design note in `wit/webrtc.wit` docs plus any
-interface change deemed worthwhile.
-
 ### 5. `error` variants `closed` / `timed-out` / `invalid-signaling` are never produced by any host
 
 Both hosts collapse every failure into `other(string)`
@@ -75,30 +46,6 @@ the `wasmtime_wasi_http::p3` patterns already used, with an integration test in
 peer connections.
 
 ## B. Wasmtime host implementation
-
-### 9. Dropping a `DataChannel` never calls `RTCPeerConnection::close()` — background task leak
-
-`DataChannel::_keep_alive` (`wasmtime-impl/src/data_channel.rs:30`) holds
-`Arc<RTCPeerConnection>`s, and the resource `drop` just deletes the table entry
-(`wasmtime-impl/src/host.rs:181-186`). webrtc-rs peer connections require an
-explicit async `close()` to tear down ICE/DTLS/SCTP tasks; dropping the `Arc`
-leaks them for the process lifetime. Same for `ManualPeer`: `close` is an
-explicit no-op (`examples/wasmtime-demo/src/manual.rs:312-315`) and drop
-doesn't close either. Fix: spawn `pc.close()` on drop/close (both `DataChannel`
-and `ManualPeer`), and make the WIT `close` (item 3) actually close.
-
-### 10. Audit `SendConsumer` finish/`Dropped` semantics for message loss and spurious success
-
-In `wasmtime-impl/src/host.rs::SendConsumer::poll_consume`: (a) when
-`finish=true` and the current item's send completes `Ready(Ok)`, it reports
-success and returns `StreamResult::Dropped` after consuming only **one** item —
-if the source still buffers more items they are silently discarded while
-`send()` returns `Ok`; (b) `Drop for SendConsumer` sends `Ok(())` even when
-`self.pending` is still in flight, so `send` can report success for a message
-never handed to the transport; (c) the `finish=false` no-item fallback comment
-admits uncertainty about the contract. Verify against Wasmtime's
-`StreamConsumer` docs, drain the source on finish, and add a test that closes
-the write end with items still queued.
 
 ### 11. Inbound message path is unbounded — no backpressure from guest to SCTP
 
@@ -242,6 +189,6 @@ against both hosts in CI, asserting identical observable results.
 
 ## Suggested priority
 
-Correctness first (9, 10, 11, 1), then interface-stabilizing decisions (2–7),
-then the strategic items (8, 27, 28); the rest are cheap hygiene wins
+Correctness first (11), then interface-stabilizing decisions (5–7), then the
+strategic items (8, 27, 28); the rest are cheap hygiene wins
 (14, 15, 19, 23, 24–26).

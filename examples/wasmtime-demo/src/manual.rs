@@ -26,8 +26,8 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
 use wasmtime_webrtc_datachannels::{
-    new_peer_connection, DataChannel, InboundMessage, SettingEngineHook, WasiWebrtcCtxView,
-    WasiWebrtcView,
+    close_peer_connections, new_peer_connection, DataChannel, InboundMessage, SettingEngineHook,
+    WasiWebrtcCtxView, WasiWebrtcView,
 };
 
 mod bindings {
@@ -156,6 +156,14 @@ impl ManualPeer {
             .unwrap()
             .clone()
             .ok_or_else(|| anyhow!("peer connection has not been initialized"))
+    }
+
+    /// Close the backing peer connection, tearing down its `webrtc-rs`
+    /// background tasks. Idempotent: the connection is taken out of its slot, so
+    /// a second call (e.g. from both `close` and resource drop) is a no-op.
+    pub fn close(&self) {
+        let connection = self.pc.lock().unwrap().take();
+        close_peer_connections(connection.into_iter().collect());
     }
 
     /// (Offerer) Create the data channel, produce a complete SDP offer with all
@@ -313,8 +321,8 @@ impl HostPeerConnection for WasiWebrtcCtxView<'_> {
         Ok(self.table.push(ManualPeer::new(hook))?)
     }
 
-    fn close(&mut self, _self_: Resource<ManualPeer>) -> wasmtime::Result<()> {
-        // The peer connection is torn down when the resource is dropped.
+    fn close(&mut self, self_: Resource<ManualPeer>) -> wasmtime::Result<()> {
+        self.table.get(&self_)?.close();
         Ok(())
     }
 }
@@ -372,7 +380,8 @@ impl<T> HostPeerConnectionWithStore<T> for ManualSignaling {
 
     async fn drop(accessor: &Accessor<T, Self>, rep: Resource<ManualPeer>) -> wasmtime::Result<()> {
         accessor.with(|mut access| {
-            access.get().table.delete(rep)?;
+            let peer = access.get().table.delete(rep)?;
+            peer.close();
             Ok(())
         })
     }

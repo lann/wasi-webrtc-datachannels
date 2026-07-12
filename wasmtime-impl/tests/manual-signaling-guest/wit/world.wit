@@ -16,13 +16,21 @@ interface runner {
         received: u32,
         /// Total bytes read back from the answerer's `receive` stream.
         bytes: u64,
+        /// Number of messages the offerer handed to `send-via-stream` before the
+        /// write end was closed with messages still queued.
+        stream-sent: u32,
+        /// Number of `send-via-stream` messages read back on the answerer.
+        stream-received: u32,
     }
 
     /// Stand up an offerer and an answerer `peer-connection` in-process, run the
     /// vanilla offer/answer exchange, open the data channel, then send
     /// `count` messages of `size` bytes from the offerer and read them all back
-    /// on the answerer. Proves the crate's `manual-signaling` + `data-channels`
-    /// host implementation round-trips a real WebRTC/SCTP connection.
+    /// on the answerer. A second pass sends another `count` messages through
+    /// `send-via-stream`, closing the stream's write end while messages are
+    /// still queued, and reads them back too. Proves the crate's
+    /// `manual-signaling` + `data-channels` host implementation round-trips a
+    /// real WebRTC/SCTP connection for both the per-message and streaming paths.
     run: async func(count: u32, size: u32) -> result<report, error>;
 }
 

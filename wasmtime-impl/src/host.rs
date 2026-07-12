@@ -218,31 +218,43 @@ impl<D: Send + 'static> StreamConsumer<D> for OutboundStreamMessages {
     ) -> Poll<Result<StreamResult>> {
         let this = self.get_mut(); // safe: OutboundStreamMessages is Unpin
 
-        let mut item: Option<StreamMessage> = None;
-        source.read(&mut store, &mut item)?;
-        let Some(message) = item else {
-            return Poll::Ready(Ok(if finish {
-                StreamResult::Cancelled
+        let available = source.remaining(&mut store);
+        if available == 0 {
+            // No items are ready. When `finish` is set the writer is done, so
+            // report cancellation; otherwise wait to be re-polled once the
+            // writer provides more items (returning `Completed` here without
+            // taking an item would trap).
+            return if finish {
+                Poll::Ready(Ok(StreamResult::Cancelled))
             } else {
-                StreamResult::Completed
-            }));
-        };
+                Poll::Pending
+            };
+        }
 
-        let is_string = matches!(message.kind, MessageKind::String);
-        let length = message.length as usize;
-        let (done_tx, done_rx) = oneshot::channel();
-        message.data.pipe(
-            store.as_context_mut(),
-            ByteCollector {
-                buf: Vec::with_capacity(length),
-                done_tx: Some(done_tx),
-            },
-        )?;
-        let _ = this.tx.unbounded_send(PendingSend {
-            is_string,
-            length,
-            done_rx,
-        });
+        // Drain every message the writer has made available, so a writer that
+        // queues several messages before closing does not have the trailing
+        // ones silently discarded when it finishes. Each message's payload is
+        // drained concurrently by a `ByteCollector`; the `send-via-stream`
+        // driver then sends the fully-buffered messages one at a time, in order.
+        let mut messages: Vec<StreamMessage> = Vec::with_capacity(available);
+        source.read(&mut store, &mut messages)?;
+        for message in messages {
+            let is_string = matches!(message.kind, MessageKind::String);
+            let length = message.length as usize;
+            let (done_tx, done_rx) = oneshot::channel();
+            message.data.pipe(
+                store.as_context_mut(),
+                ByteCollector {
+                    buf: Vec::with_capacity(length),
+                    done_tx: Some(done_tx),
+                },
+            )?;
+            let _ = this.tx.unbounded_send(PendingSend {
+                is_string,
+                length,
+                done_rx,
+            });
+        }
         Poll::Ready(Ok(StreamResult::Completed))
     }
 }

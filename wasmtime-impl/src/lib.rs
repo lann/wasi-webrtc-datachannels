@@ -17,7 +17,9 @@ pub mod bindings;
 mod data_channel;
 mod host;
 
-pub use data_channel::{new_peer_connection, send_message, DataChannel, InboundMessage};
+pub use data_channel::{
+    close_peer_connections, new_peer_connection, send_message, DataChannel, InboundMessage,
+};
 
 use std::sync::Arc;
 
