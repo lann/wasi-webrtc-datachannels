@@ -22,7 +22,7 @@ genuine WebRTC/SCTP data channel.
 | Path | Deliverable |
 | --- | --- |
 | [`wit/`](wit) | The streaming **WIT interface**, the `lann:webrtc-datachannels@0.1.0` package. Each demo component keeps its own demo-only WIT and symlinks this package in as a dependency. |
-| [`examples/echo-demo`](examples/echo-demo) | A **Rust example component** exercising a data channel entirely through streams. |
+| [`examples/echo-demo`](examples/echo-demo) | A **Rust example component** exercising a data channel one message at a time. |
 | [`wasmtime-impl`](wasmtime-impl) | The **Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `add_to_linker` + `WasiWebrtcView` for the `types` + `data-channels` interfaces. Crate name: `wasmtime-webrtc-datachannels`. |
 | [`jco-impl`](jco-impl) | The **browser-first host** (Node stand-in for the browser, jco + @roamhq/wrtc). |
 | [`examples/wasmtime-demo`](examples/wasmtime-demo) | The **native Rust host** (Wasmtime + webrtc-rs): demo binaries built on `wasmtime-impl`. |
@@ -40,14 +40,18 @@ a single copy of the shared surface to edit:
 
 - **`types`** — shared `error` variant and `data-channel-options`.
 - **`data-channels`** — the high-throughput surface. A `data-channel` resource
-  carries both directions as component-model **streams**:
-  - `send: async func(messages: stream<list<u8>>) -> result<_, error>`
-  - `receive: async func() -> stream<list<u8>>`
+  is bidirectional and message-oriented; each call carries exactly **one**
+  data-channel message, preserving WebRTC message boundaries:
+  - `send: async func(message: message) -> result<_, error>`
+  - `receive: async func() -> result<message, error>`
 
-  Each `list<u8>` element is exactly **one** data-channel message, so WebRTC
-  message boundaries are preserved end to end. Streaming (rather than one host
-  call per message) lets the async ABI pipeline messages and apply
-  backpressure.
+  A `message` is a variant — `binary(list<u8>)` or `%string(string)` (text,
+  valid UTF-8). Concurrent calls are supported so the host and guest can
+  pipeline messages and let the async ABI apply backpressure. To bound in-memory
+  buffering, a message may instead flow through a byte `stream` as a
+  `stream-message` (`kind`, `length`, `data: stream<u8>`):
+  - `send-via-stream: async func(messages: stream<stream-message>) -> result<_, error>`
+  - `receive-via-stream: async func() -> stream<stream-message>`
 - **`signaling`** — a fuller `RTCPeerConnection`-style surface (SDP offer/answer
   + trickle ICE) that documents where a *guest-driven* connection API is
   headed. It is the design target and is **not** required by the runnable demo.
@@ -59,7 +63,8 @@ for the manual-signaling demos):
 
 - **`connect`** — a convenience used by the demo: `open-echo` returns a channel
   wired to a host-provided echo endpoint, so the example can focus on the
-  streaming hot path while still exercising a real WebRTC stack in the host.
+  message round-trip hot path while still exercising a real WebRTC stack in the
+  host.
 - **`rendezvous`** — a proposed, deliberately *unstandardized* HTTP signaling
   mailbox for carrying SDP/ICE between two *separate* peers via an existing
   server over `wasi:http@0.3`, so remote connections can be developed locally.
@@ -83,11 +88,10 @@ world webrtc-echo-demo {
 `run`:
 
 1. calls `connect::open-echo` to get a channel,
-2. spawns a producer that writes `message-count` messages into an outbound
-   `stream<list<u8>>`,
-3. hands that stream to `data-channel.send`, and **concurrently** reads the
-   inbound stream from `data-channel.receive` (both under `futures::join!`),
-4. returns counts so the host can assert a complete round trip.
+2. sends `message-count` messages one at a time through `data-channel.send`, and
+   **concurrently** reads them back one at a time from `data-channel.receive`
+   (both loops under `futures::join!`),
+3. returns counts so the host can assert a complete round trip.
 
 ## Running it
 
