@@ -97,24 +97,26 @@ interface data-channels {
         /// implementation-defined order.
         receive: async func() -> result<message, error>;
 
-        /// Send a single message whose payload is streamed as bytes. The bytes
-        /// written to `message.data` MUST match `message.kind` (valid UTF-8 when
-        /// `kind` is `string`) and MUST total exactly `message.length` bytes.
-        /// The returned future resolves once the message has been handed to the
-        /// transport, or with an `error` if the channel closed early.
+        /// Send a stream of messages whose payloads are each streamed as bytes.
+        /// Every element of `messages` is one data-channel message, preserving
+        /// message boundaries; the bytes streamed through each element's `data`
+        /// MUST match its `kind` (valid UTF-8 when `kind` is `string`) and MUST
+        /// total exactly its `length` bytes. The returned future resolves once
+        /// the input stream is exhausted and every message has been handed to
+        /// the transport, or with an `error` if the channel closed early.
         ///
         /// Concurrent calls must be supported; concurrently sent messages are
         /// handed to the transport in an implementation-defined order.
-        send-via-stream: async func(message: stream-message) -> result<_, error>;
+        send-via-stream: async func(messages: stream<stream-message>) -> result<_, error>;
 
-        /// Receive a single message whose payload is delivered as a byte
-        /// `stream`. The returned future resolves with the next inbound
-        /// message, or with an `error` (such as `closed`) when the channel
-        /// closes.
+        /// Receive a stream of inbound messages whose payloads are each
+        /// delivered as a byte `stream`. One `stream-message` is produced per
+        /// received data-channel message; the returned stream ends (its reader
+        /// is dropped) when the channel closes.
         ///
         /// Concurrent calls must be supported; concurrently pending receivers
-        /// are each handed a message in an implementation-defined order.
-        receive-via-stream: async func() -> result<stream-message, error>;
+        /// are each handed messages in an implementation-defined order.
+        receive-via-stream: async func() -> stream<stream-message>;
     }
 }
 

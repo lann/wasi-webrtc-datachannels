@@ -1,19 +1,18 @@
 //! `echo-demo`: an example WebAssembly component that exercises a WebRTC data
-//! channel entirely through component-model `stream`s.
+//! channel one message at a time.
 //!
 //! The component is host-agnostic. It imports the `connect` interface to obtain
 //! a data channel wired to a host-provided echo endpoint, then:
 //!
-//!   1. spawns a producer that writes `message-count` messages into an outbound
-//!      `stream<list<u8>>`,
-//!   2. hands that stream to `data-channel.send` (the async streaming import),
-//!   3. concurrently reads the inbound `stream<list<u8>>` returned by
-//!      `data-channel.receive`, counting the echoed messages/bytes,
+//!   1. spawns a producer loop that sends `message-count` messages through
+//!      `data-channel.send` (the async per-message import),
+//!   2. concurrently reads the echoed messages back through
+//!      `data-channel.receive`, counting the messages/bytes,
 //!
-//! all within a single cooperative async task (steps 2 and 3 run under
-//! `futures::join!`). The same component binary runs unchanged under the Node
-//! (`jco` + `@roamhq/wrtc`) host and the Wasmtime (`webrtc-rs`) host, which is
-//! what demonstrates cross-implementation compatibility.
+//! all within a single cooperative async task (the send and receive loops run
+//! under `futures::join!`). The same component binary runs unchanged under the
+//! Node (`jco` + `@roamhq/wrtc`) host and the Wasmtime (`webrtc-rs`) host, which
+//! is what demonstrates cross-implementation compatibility.
 
 wit_bindgen::generate!({
     path: "wit",
@@ -23,8 +22,8 @@ wit_bindgen::generate!({
 
 use demo::webrtc_echo::connect;
 use exports::demo::webrtc_echo::demo::{DemoConfig, DemoStats, Guest};
+use lann::webrtc_datachannels::data_channels::Message;
 use lann::webrtc_datachannels::types::{DataChannelOptions, Error};
-use wit_bindgen::StreamResult;
 
 struct Component;
 
@@ -41,40 +40,25 @@ impl Guest for Component {
         })
         .await?;
 
-        // Outbound message pipeline: a detached producer writes each message
-        // into `tx`; `send` drains `rx` into the transport.
-        let (mut tx, rx) = wit_stream::new::<Vec<u8>>();
-        wit_bindgen::spawn(async move {
+        // Drive send and receive concurrently on this single task. Each call
+        // carries exactly one message, preserving WebRTC message boundaries.
+        let send_fut = async {
             for i in 0..count {
-                let message = make_message(size, i);
-                // `stream<list<u8>>` elements are whole messages; write one at a
-                // time so boundaries are preserved end to end.
-                let remaining = tx.write_all(vec![message]).await;
-                if !remaining.is_empty() {
-                    // The reader was dropped (channel closed); stop producing.
-                    break;
-                }
+                channel.send(Message::Binary(make_message(size, i))).await?;
             }
-            drop(tx);
-        });
-
-        // Inbound message stream. Created before `send` starts so no echoed
-        // message can be missed.
-        let mut incoming = channel.receive().await;
-
-        // Drive send and receive concurrently on this single task.
-        let send_fut = channel.send(rx);
+            Ok::<(), Error>(())
+        };
         let recv_fut = async {
             let mut messages_received: u32 = 0;
             let mut bytes_echoed: u64 = 0;
             while messages_received < count {
-                let (status, batch) = incoming.read(Vec::with_capacity(count as usize)).await;
-                for message in batch {
-                    messages_received += 1;
-                    bytes_echoed += message.len() as u64;
-                }
-                if matches!(status, StreamResult::Dropped | StreamResult::Cancelled) {
-                    break;
+                match channel.receive().await {
+                    Ok(message) => {
+                        messages_received += 1;
+                        bytes_echoed += message_len(&message) as u64;
+                    }
+                    // The channel closed before every message was echoed back.
+                    Err(_) => break,
                 }
             }
             (messages_received, bytes_echoed)
@@ -88,6 +72,14 @@ impl Guest for Component {
             messages_received,
             bytes_echoed,
         })
+    }
+}
+
+/// The byte length of a received message, regardless of kind.
+fn message_len(message: &Message) -> usize {
+    match message {
+        Message::Binary(bytes) => bytes.len(),
+        Message::String(text) => text.len(),
     }
 }
 

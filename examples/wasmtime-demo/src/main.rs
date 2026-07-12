@@ -15,8 +15,8 @@ use futures::channel::{mpsc, oneshot};
 use wasmtime::component::{Accessor, Component, HasData, Linker, Resource, ResourceTable};
 use wasmtime::{Config, Engine, Result, Store};
 use wasmtime_webrtc_datachannels::{
-    self as webrtc_host, new_peer_connection, DataChannel, WasiWebrtcCtx, WasiWebrtcCtxView,
-    WasiWebrtcView,
+    self as webrtc_host, new_peer_connection, DataChannel, InboundMessage, WasiWebrtcCtx,
+    WasiWebrtcCtxView, WasiWebrtcView,
 };
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
@@ -145,11 +145,14 @@ async fn build_echo(
     };
     let channel = near.create_data_channel(label, Some(init)).await?;
 
-    let (in_tx, in_rx) = mpsc::unbounded::<Vec<u8>>();
+    let (in_tx, in_rx) = mpsc::unbounded::<InboundMessage>();
     channel.on_message(Box::new(move |message: DataChannelMessage| {
         let in_tx = in_tx.clone();
         Box::pin(async move {
-            let _ = in_tx.unbounded_send(message.data.to_vec());
+            let _ = in_tx.unbounded_send(InboundMessage {
+                is_string: message.is_string,
+                data: message.data.to_vec(),
+            });
         })
     }));
 

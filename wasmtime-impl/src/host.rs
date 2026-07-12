@@ -11,16 +11,21 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
+use futures::channel::mpsc::{self, UnboundedReceiver};
 use futures::channel::oneshot;
-use wasmtime::component::{Accessor, Resource, Source, StreamConsumer, StreamReader, StreamResult};
-use wasmtime::{Result, StoreContextMut};
+use futures::lock::Mutex as AsyncMutex;
+use futures::StreamExt;
+use wasmtime::component::{
+    Accessor, Destination, Resource, Source, StreamConsumer, StreamProducer, StreamReader,
+    StreamResult,
+};
+use wasmtime::{AsContextMut, Result, StoreContextMut};
 
 use crate::bindings::webrtc_datachannels::data_channels::{
-    self, HostDataChannel, HostDataChannelWithStore,
+    self, HostDataChannel, HostDataChannelWithStore, Message, MessageKind, StreamMessage,
 };
 use crate::bindings::webrtc_datachannels::types::{self, Error};
-use crate::pipe::PipeProducer;
-use crate::{DataChannel, WasiWebrtc, WasiWebrtcCtxView};
+use crate::{DataChannel, InboundMessage, WasiWebrtc, WasiWebrtcCtxView};
 
 use webrtc::data_channel::RTCDataChannel;
 
@@ -32,106 +37,212 @@ impl types::Host for WasiWebrtcCtxView<'_> {}
 
 impl data_channels::Host for WasiWebrtcCtxView<'_> {}
 
-/// A [`StreamConsumer`] that forwards each item directly to a WebRTC data
-/// channel by polling a `send` future inside `poll_consume`.  Completion or
-/// any send error is reported back to the `send` host function via `done_tx`.
-struct SendConsumer {
-    channel: Arc<RTCDataChannel>,
-    /// A send future for the most-recently-read item, if still in flight.
-    pending: Option<Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>>,
-    /// Oneshot used to pass the final result back to the `send` host function.
-    done_tx: Option<oneshot::Sender<std::result::Result<(), Error>>>,
+/// Send one message over a data channel, honoring its `binary`/`string` kind.
+async fn send_channel_message(
+    channel: &Arc<RTCDataChannel>,
+    is_string: bool,
+    data: Vec<u8>,
+) -> std::result::Result<(), Error> {
+    let result = if is_string {
+        let text = match String::from_utf8(data) {
+            Ok(text) => text,
+            Err(err) => {
+                return Err(Error::Other(format!(
+                    "string message is not valid UTF-8: {err}"
+                )))
+            }
+        };
+        channel.send_text(text).await
+    } else {
+        channel.send(&Bytes::from(data)).await
+    };
+    result.map(|_| ()).map_err(|e| Error::Other(e.to_string()))
 }
 
-impl<D: Send + 'static> StreamConsumer<D> for SendConsumer {
-    type Item = Vec<u8>;
+/// Await the next inbound message from a channel's shared receiver, reporting
+/// `Error::Closed` once the channel has closed and no more messages will arrive.
+async fn next_inbound(
+    incoming: Arc<AsyncMutex<UnboundedReceiver<InboundMessage>>>,
+) -> std::result::Result<InboundMessage, Error> {
+    let mut receiver = incoming.lock().await;
+    receiver.next().await.ok_or(Error::Closed)
+}
+
+/// Convert a host-side inbound message into the WIT `message` variant.
+fn to_message(inbound: InboundMessage) -> std::result::Result<Message, Error> {
+    if inbound.is_string {
+        String::from_utf8(inbound.data)
+            .map(Message::String)
+            .map_err(|err| Error::Other(format!("string message is not valid UTF-8: {err}")))
+    } else {
+        Ok(Message::Binary(inbound.data))
+    }
+}
+
+/// A [`StreamConsumer`] that drains every byte of a `stream<u8>` into a buffer,
+/// handing the completed buffer back through `done_tx` when the stream ends.
+struct ByteCollector {
+    buf: Vec<u8>,
+    done_tx: Option<oneshot::Sender<Vec<u8>>>,
+}
+
+impl ByteCollector {
+    fn finish(&mut self) {
+        if let Some(tx) = self.done_tx.take() {
+            let _ = tx.send(std::mem::take(&mut self.buf));
+        }
+    }
+}
+
+impl<D: Send + 'static> StreamConsumer<D> for ByteCollector {
+    type Item = u8;
 
     fn poll_consume(
         self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        store: StoreContextMut<D>,
-        mut source: Source<'_, Vec<u8>>,
+        _cx: &mut Context<'_>,
+        mut store: StoreContextMut<D>,
+        mut source: Source<'_, u8>,
         finish: bool,
     ) -> Poll<Result<StreamResult>> {
-        let this = self.get_mut(); // safe: SendConsumer is Unpin
+        let this = self.get_mut(); // safe: ByteCollector is Unpin
 
-        // Complete any in-flight send before reading the next item.  The docs
-        // say we must not "put back" an item once taken from `source`, so we
-        // never read a new item while a prior send is still in progress.
-        if let Some(fut) = this.pending.as_mut() {
-            match fut.as_mut().poll(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Ok(())) => this.pending = None,
-                Poll::Ready(Err(e)) => {
-                    if let Some(tx) = this.done_tx.take() {
-                        let _ = tx.send(Err(Error::Other(e.to_string())));
-                    }
-                    return Poll::Ready(Ok(StreamResult::Dropped));
-                }
-            }
+        let available = source.remaining(&mut store);
+        if available > 0 {
+            let mut chunk = Vec::with_capacity(available);
+            source.read(&mut store, &mut chunk)?;
+            this.buf.extend_from_slice(&chunk);
+            return Poll::Ready(Ok(StreamResult::Completed));
         }
 
-        // Read the next item.  When finish=true this may be a stream-end signal
-        // with no trailing item (all prior items were already consumed).
-        let item = &mut None;
-        source.read(store, item)?;
-        let Some(msg) = item.take() else {
-            // No item available.  When finish=true this is a normal end-of-stream
-            // signal with no trailing item; acknowledge with Cancelled (which is
-            // only valid when finish=true) and report success.
-            if let Some(tx) = this.done_tx.take() {
-                let _ = tx.send(Ok(()));
-            }
-            return Poll::Ready(Ok(if finish {
-                StreamResult::Cancelled
-            } else {
-                // finish=false with no item should not occur per the
-                // StreamConsumer contract; Completed is the safest fallback.
-                StreamResult::Completed
-            }));
-        };
+        // No bytes available. When `finish` is set the stream is ending, so hand
+        // the collected buffer back; `Drop` covers a normal end-of-stream.
+        if finish {
+            this.finish();
+            Poll::Ready(Ok(StreamResult::Cancelled))
+        } else {
+            Poll::Pending
+        }
+    }
+}
 
-        let channel = this.channel.clone();
-        let mut fut = Box::pin(async move {
-            channel
-                .send(&Bytes::from(msg))
-                .await
-                .map(|_| ())
-                .map_err(Into::into)
+impl Drop for ByteCollector {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
+
+/// A [`StreamProducer`] that yields one `stream-message` per inbound WebRTC
+/// message, wrapping each message's bytes in a fresh `stream<u8>`.
+struct InboundStreamMessages {
+    incoming: Arc<AsyncMutex<UnboundedReceiver<InboundMessage>>>,
+    /// A future resolving to the next inbound message (or `None` at close),
+    /// retained across polls so the shared receiver lock is only held while
+    /// awaiting the next message.
+    pending: Option<Pin<Box<dyn Future<Output = Option<InboundMessage>> + Send>>>,
+}
+
+impl<D: Send + 'static> StreamProducer<D> for InboundStreamMessages {
+    type Item = StreamMessage;
+    type Buffer = Option<StreamMessage>;
+
+    fn poll_produce<'a>(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        store: StoreContextMut<'a, D>,
+        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<Result<StreamResult>> {
+        let this = self.get_mut(); // safe: InboundStreamMessages is Unpin
+
+        let incoming = this.incoming.clone();
+        let fut = this.pending.get_or_insert_with(|| {
+            Box::pin(async move {
+                let mut receiver = incoming.lock().await;
+                receiver.next().await
+            })
         });
 
         match fut.as_mut().poll(cx) {
             Poll::Pending => {
-                this.pending = Some(fut);
-                Poll::Pending
-            }
-            Poll::Ready(Ok(())) => {
                 if finish {
-                    if let Some(tx) = this.done_tx.take() {
-                        let _ = tx.send(Ok(()));
-                    }
-                    Poll::Ready(Ok(StreamResult::Dropped))
+                    Poll::Ready(Ok(StreamResult::Cancelled))
                 } else {
-                    Poll::Ready(Ok(StreamResult::Completed))
+                    Poll::Pending
                 }
             }
-            Poll::Ready(Err(e)) => {
-                if let Some(tx) = this.done_tx.take() {
-                    let _ = tx.send(Err(Error::Other(e.to_string())));
-                }
+            Poll::Ready(None) => {
+                this.pending = None;
                 Poll::Ready(Ok(StreamResult::Dropped))
+            }
+            Poll::Ready(Some(inbound)) => {
+                this.pending = None;
+                let kind = if inbound.is_string {
+                    MessageKind::String
+                } else {
+                    MessageKind::Binary
+                };
+                let length = inbound.data.len() as u32;
+                let data = StreamReader::new(store, inbound.data)?;
+                destination.set_buffer(Some(StreamMessage { kind, length, data }));
+                Poll::Ready(Ok(StreamResult::Completed))
             }
         }
     }
 }
 
-impl Drop for SendConsumer {
-    fn drop(&mut self) {
-        // If the stream ended without finish=true (consumer dropped normally),
-        // signal success.
-        if let Some(tx) = self.done_tx.take() {
-            let _ = tx.send(Ok(()));
-        }
+/// One outbound message parsed from a `stream<stream-message>` element: its kind,
+/// declared length, and a receiver for its fully-drained payload bytes.
+struct PendingSend {
+    is_string: bool,
+    length: usize,
+    done_rx: oneshot::Receiver<Vec<u8>>,
+}
+
+/// A [`StreamConsumer`] that reads each `stream-message` from a
+/// `stream<stream-message>`, starts draining its `data` payload, and forwards
+/// the resulting [`PendingSend`] to the `send-via-stream` driver.
+struct OutboundStreamMessages {
+    tx: mpsc::UnboundedSender<PendingSend>,
+}
+
+impl<D: Send + 'static> StreamConsumer<D> for OutboundStreamMessages {
+    type Item = StreamMessage;
+
+    fn poll_consume(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        mut store: StoreContextMut<D>,
+        mut source: Source<'_, StreamMessage>,
+        finish: bool,
+    ) -> Poll<Result<StreamResult>> {
+        let this = self.get_mut(); // safe: OutboundStreamMessages is Unpin
+
+        let mut item: Option<StreamMessage> = None;
+        source.read(&mut store, &mut item)?;
+        let Some(message) = item else {
+            return Poll::Ready(Ok(if finish {
+                StreamResult::Cancelled
+            } else {
+                StreamResult::Completed
+            }));
+        };
+
+        let is_string = matches!(message.kind, MessageKind::String);
+        let length = message.length as usize;
+        let (done_tx, done_rx) = oneshot::channel();
+        message.data.pipe(
+            store.as_context_mut(),
+            ByteCollector {
+                buf: Vec::with_capacity(length),
+                done_tx: Some(done_tx),
+            },
+        )?;
+        let _ = this.tx.unbounded_send(PendingSend {
+            is_string,
+            length,
+            done_rx,
+        });
+        Poll::Ready(Ok(StreamResult::Completed))
     }
 }
 
@@ -145,37 +256,79 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
     async fn send(
         accessor: &Accessor<T, Self>,
         self_: Resource<DataChannel>,
-        messages: StreamReader<Vec<u8>>,
+        message: Message,
     ) -> Result<std::result::Result<(), Error>> {
         let channel = accessor.with(|mut access| {
             Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.channel())
         })?;
 
-        let (done_tx, done_rx) = oneshot::channel();
-        accessor.with(move |access| {
-            messages.pipe(
-                access,
-                SendConsumer {
-                    channel,
-                    pending: None,
-                    done_tx: Some(done_tx),
-                },
-            )
-        })?;
-
-        Ok(done_rx.await.unwrap_or(Ok(())))
+        let (is_string, data) = match message {
+            Message::Binary(data) => (false, data),
+            Message::String(text) => (true, text.into_bytes()),
+        };
+        Ok(send_channel_message(&channel, is_string, data).await)
     }
 
     async fn receive(
         accessor: &Accessor<T, Self>,
         self_: Resource<DataChannel>,
-    ) -> Result<StreamReader<Vec<u8>>> {
+    ) -> Result<std::result::Result<Message, Error>> {
         let incoming = accessor.with(|mut access| {
-            Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.take_incoming())
+            Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.incoming())
         })?;
-        let incoming = incoming
-            .ok_or_else(|| wasmtime::Error::msg("receive() may only be called once per channel"))?;
-        accessor.with(|access| StreamReader::new(access, PipeProducer::new(incoming)))
+        Ok(match next_inbound(incoming).await {
+            Ok(inbound) => to_message(inbound),
+            Err(err) => Err(err),
+        })
+    }
+
+    async fn send_via_stream(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<DataChannel>,
+        messages: StreamReader<StreamMessage>,
+    ) -> Result<std::result::Result<(), Error>> {
+        let channel = accessor.with(|mut access| {
+            Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.channel())
+        })?;
+
+        // Drain each element's payload concurrently (via `OutboundStreamMessages`)
+        // while this driver sends the fully-buffered messages one at a time, in
+        // stream order.
+        let (tx, mut rx) = mpsc::unbounded::<PendingSend>();
+        accessor.with(|access| messages.pipe(access, OutboundStreamMessages { tx }))?;
+
+        while let Some(pending) = rx.next().await {
+            let data = pending.done_rx.await.unwrap_or_default();
+            if data.len() != pending.length {
+                return Ok(Err(Error::Other(format!(
+                    "stream-message payload was {} bytes but length declared {}",
+                    data.len(),
+                    pending.length
+                ))));
+            }
+            if let Err(err) = send_channel_message(&channel, pending.is_string, data).await {
+                return Ok(Err(err));
+            }
+        }
+        Ok(Ok(()))
+    }
+
+    async fn receive_via_stream(
+        accessor: &Accessor<T, Self>,
+        self_: Resource<DataChannel>,
+    ) -> Result<StreamReader<StreamMessage>> {
+        let incoming = accessor.with(|mut access| {
+            Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.incoming())
+        })?;
+        accessor.with(|access| {
+            StreamReader::new(
+                access,
+                InboundStreamMessages {
+                    incoming,
+                    pending: None,
+                },
+            )
+        })
     }
 
     async fn drop(accessor: &Accessor<T, Self>, rep: Resource<DataChannel>) -> Result<()> {

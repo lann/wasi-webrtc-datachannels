@@ -5,11 +5,12 @@
 //! open `webrtc-rs` [`RTCDataChannel`], its inbound-message stream, and the peer
 //! connection(s) that must outlive it.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::Result;
 use bytes::Bytes;
 use futures::channel::mpsc::UnboundedReceiver;
+use futures::lock::Mutex as AsyncMutex;
 use webrtc::api::media_engine::MediaEngine;
 use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
@@ -18,14 +19,46 @@ use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::RTCPeerConnection;
 
+/// A single inbound data-channel message together with its kind.
+///
+/// WebRTC distinguishes binary from text (UTF-8) messages; the host preserves
+/// that distinction so `receive` can surface the correct `message` variant.
+#[derive(Clone, Debug)]
+pub struct InboundMessage {
+    /// Whether the message was sent as text (UTF-8) rather than binary.
+    pub is_string: bool,
+    /// The raw message payload.
+    pub data: Vec<u8>,
+}
+
+impl InboundMessage {
+    /// A binary inbound message.
+    pub fn binary(data: Vec<u8>) -> Self {
+        Self {
+            is_string: false,
+            data,
+        }
+    }
+
+    /// A text (UTF-8) inbound message.
+    pub fn text(data: Vec<u8>) -> Self {
+        Self {
+            is_string: true,
+            data,
+        }
+    }
+}
+
 /// Host state behind a `data-channel` resource.
 ///
-/// A connected, bidirectional WebRTC data channel plus the inbound-message
-/// stream consumed once by `receive`.
+/// A connected, bidirectional WebRTC data channel plus its inbound-message
+/// stream. The inbound receiver is shared behind an async mutex so concurrent
+/// `receive` calls are each handed the next message in turn.
 pub struct DataChannel {
     channel: Arc<RTCDataChannel>,
-    /// Inbound messages, taken once by `receive`.
-    incoming: Mutex<Option<UnboundedReceiver<Vec<u8>>>>,
+    /// Inbound messages, delivered one per `receive` call. Behind an async mutex
+    /// so concurrent receivers serialize and each takes the next message.
+    incoming: Arc<AsyncMutex<UnboundedReceiver<InboundMessage>>>,
     /// Keep the backing peer connection(s) alive for the channel's lifetime.
     _keep_alive: Vec<Arc<RTCPeerConnection>>,
 }
@@ -35,12 +68,12 @@ impl DataChannel {
     /// given peer connections so they outlive the channel.
     pub fn new(
         channel: Arc<RTCDataChannel>,
-        incoming: UnboundedReceiver<Vec<u8>>,
+        incoming: UnboundedReceiver<InboundMessage>,
         keep_alive: Vec<Arc<RTCPeerConnection>>,
     ) -> Self {
         Self {
             channel,
-            incoming: Mutex::new(Some(incoming)),
+            incoming: Arc::new(AsyncMutex::new(incoming)),
             _keep_alive: keep_alive,
         }
     }
@@ -55,9 +88,10 @@ impl DataChannel {
         self.channel.clone()
     }
 
-    /// Take the inbound-message receiver. Returns `None` after the first call.
-    pub fn take_incoming(&self) -> Option<UnboundedReceiver<Vec<u8>>> {
-        self.incoming.lock().unwrap().take()
+    /// A cheap clone of the shared inbound-message receiver, so an async `receive`
+    /// can await the next message without holding the store borrow.
+    pub fn incoming(&self) -> Arc<AsyncMutex<UnboundedReceiver<InboundMessage>>> {
+        self.incoming.clone()
     }
 }
 
