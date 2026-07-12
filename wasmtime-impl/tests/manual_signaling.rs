@@ -2,11 +2,11 @@
 //!
 //! It builds the `manual-signaling-test` guest component, instantiates it under
 //! Wasmtime with the crate's `add_to_linker` providing `types` +
-//! `data-channels` and the demo [`manual::add_to_linker`] providing
+//! `connections` and the demo [`manual::add_to_linker`] providing
 //! `manual-signaling`, and drives a full manual-signaling round trip over a real
 //! `webrtc-rs` data channel. This exercises `manual-signaling`
 //! (`create-offer`/`create-answer`/`accept-answer`/`connect`) and the crate's
-//! `data-channels` (`label`/`send`/`receive`) host implementation.
+//! `connections` (`label`/`send`/`receive`) host implementation.
 //!
 //! [`manual::add_to_linker`]: crate::manual_host::add_to_linker
 
@@ -34,7 +34,7 @@ mod bindings {
             default: async,
         },
         with: {
-            "lann:webrtc-datachannels/data-channels.data-channel":
+            "lann:webrtc-datachannels/connections.data-channel":
                 wasmtime_webrtc_datachannels::DataChannel,
             "demo:webrtc-echo/manual-signaling.peer-connection":
                 crate::manual_host::ManualPeer,
@@ -131,7 +131,7 @@ async fn run_round_trip(count: u32, size: u32) -> anyhow::Result<Report> {
     let component = Component::from_binary(&engine, guest_component())?;
 
     let mut linker: Linker<Ctx> = Linker::new(&engine);
-    // Shared `types` + `data-channels`, then the demo-only `manual-signaling`.
+    // Shared `types` + `connections`, then the demo-only `manual-signaling`.
     wasmtime_webrtc_datachannels::add_to_linker(&mut linker)?;
     manual::add_to_linker(&mut linker)?;
 

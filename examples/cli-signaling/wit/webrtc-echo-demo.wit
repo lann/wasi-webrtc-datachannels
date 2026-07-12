@@ -65,7 +65,7 @@ interface manual-demo {
 /// components base64-encode these blobs before showing them to the user.
 interface manual-signaling {
     use lann:webrtc-datachannels/types@0.1.0.{error, data-channel-options};
-    use lann:webrtc-datachannels/data-channels@0.1.0.{data-channel};
+    use lann:webrtc-datachannels/connections@0.1.0.{data-channel};
 
     /// A peer connection driven with vanilla (non-trickle) ICE.
     ///

@@ -40,10 +40,10 @@ starter's examples first.
 
 ```
 wit/                                   # lann:webrtc-datachannels package
-  webrtc.wit                           #   types, data-channels, signaling
+  webrtc.wit                           #   types (structural), connections (resources)
 wasmtime-impl/                         # Wasmtime host crate (webrtc-rs),
                                        #   modeled after wasmtime_wasi_http::p3;
-                                       #   add_to_linker + WasiWebrtcView (types + data-channels);
+                                       #   add_to_linker + WasiWebrtcView (types + connections.data-channel);
                                        #   crate name: wasmtime-webrtc-datachannels
 jco-impl/                              # browser-first host (Node + jco + @roamhq/wrtc)
 examples/                              # guest components + the demo/manual-signaling driver
@@ -57,7 +57,7 @@ examples/                              # guest components + the demo/manual-sign
                                        #       manual-signaling, worlds)
       deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
   wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): demo binaries;
-                                       #   the shared types/data-channels host lives in
+                                       #   the shared types/connections host lives in
                                        #   wasmtime-impl above
 ```
 
@@ -73,9 +73,12 @@ a component or replace those `deps` symlinks with real directories.
 The WIT is split into two packages, keeping the shared and demo-only surfaces
 separate:
 
-- **`lann:webrtc-datachannels`** (`wit/webrtc.wit`) — the shared interfaces:
-  `types`, `data-channels`, and the `RTCPeerConnection`-style `signaling` design
-  target.
+- **`lann:webrtc-datachannels`** (`wit/webrtc.wit`) — the shared interfaces,
+  split by ownership: `types` holds every structural (non-resource) type, while
+  `connections` holds the two stateful resources — the `data-channel` transport
+  and the `RTCPeerConnection`-style `peer-connection` design target. Structural
+  types can be shared across a composition; the resources are each owned by the
+  one component that implements them.
 - **`demo:webrtc-echo`** — the demo-only interfaces, split across the demo
   components that use them:
   - `examples/echo-demo/wit/webrtc-echo-demo.wit` — `connect`, `rendezvous`,
@@ -193,7 +196,7 @@ an answerer — must exchange SDP and trickled ICE out of band.
 
 The intended shape:
 
-- The guest drives the `lann:webrtc-datachannels/signaling` `peer-connection`
+- The guest drives the `lann:webrtc-datachannels/connections` `peer-connection`
   interface to produce/consume offers, answers, and ICE candidates.
 - Those opaque blobs travel between the two peers through the demo-only
   `demo:webrtc-echo/rendezvous` mailbox interface. It is deliberately **not**
@@ -203,7 +206,7 @@ The intended shape:
   itself). Because the whole loop is plain HTTP, the server can run locally.
 
 `rendezvous` is defined but not yet wired into the `webrtc-echo-demo` world —
-mirroring how `signaling` is "designed but not yet exercised". Wiring it up
+mirroring how `connections.peer-connection` is "designed but not yet exercised". Wiring it up
 (host implementations for both stacks, a chosen signaling server, and a guest
 that drives it) is the natural next step; see the starter's `wasi:http` example
 for the client pattern.

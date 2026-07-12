@@ -30,8 +30,7 @@ wit_bindgen::generate!({
 });
 
 use demo::webrtc_echo::manual_signaling::PeerConnection;
-use lann::webrtc_datachannels::data_channels::Message;
-use lann::webrtc_datachannels::types::{DataChannelOptions, Error};
+use lann::webrtc_datachannels::types::{DataChannelOptions, Error, Message};
 
 /// The label used for the negotiated data channel. Both peers observe it.
 const CHANNEL_LABEL: &str = "manual-signaling";
@@ -123,7 +122,7 @@ async fn drive(role: Role) -> Result<String, Error> {
 
 /// Send one greeting and receive the peer's greeting over the data channel.
 async fn exchange(
-    channel: &lann::webrtc_datachannels::data_channels::DataChannel,
+    channel: &lann::webrtc_datachannels::connections::DataChannel,
     role: Role,
 ) -> Result<String, Error> {
     let greeting = format!("hello from the {}", role.name());

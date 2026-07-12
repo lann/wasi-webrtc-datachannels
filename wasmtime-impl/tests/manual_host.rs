@@ -32,7 +32,7 @@ mod bindings {
             "demo:webrtc-echo/manual-signaling@0.1.0.[method]peer-connection.close": trappable,
         },
         with: {
-            "lann:webrtc-datachannels/data-channels.data-channel":
+            "lann:webrtc-datachannels/connections.data-channel":
                 wasmtime_webrtc_datachannels::DataChannel,
             "demo:webrtc-echo/manual-signaling.peer-connection": super::ManualPeer,
         },
@@ -53,7 +53,7 @@ impl HasData for ManualSignaling {
 
 /// Add the demo-only `demo:webrtc-echo/manual-signaling` interface to `linker`.
 ///
-/// The `data-channels`/`types` imports must be provided separately by
+/// The `connections`/`types` imports must be provided separately by
 /// [`wasmtime_webrtc_datachannels::add_to_linker`]; the channels this
 /// interface returns are that crate's [`DataChannel`].
 pub fn add_to_linker<T>(linker: &mut Linker<T>) -> wasmtime::Result<()>
