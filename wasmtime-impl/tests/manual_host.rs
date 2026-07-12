@@ -14,7 +14,8 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::RTCPeerConnection;
 
 use wasmtime_webrtc_datachannels::{
-    new_peer_connection, DataChannel, SettingEngineHook, WasiWebrtcCtxView, WasiWebrtcView,
+    new_peer_connection, DataChannel, InboundMessage, SettingEngineHook, WasiWebrtcCtxView,
+    WasiWebrtcView,
 };
 
 mod bindings {
@@ -67,7 +68,7 @@ where
 #[derive(Default)]
 struct Negotiated {
     channel: Option<Arc<RTCDataChannel>>,
-    incoming: Option<UnboundedReceiver<Vec<u8>>>,
+    incoming: Option<UnboundedReceiver<InboundMessage>>,
     /// Resolves once the channel reports `open`. A oneshot (rather than a bare
     /// notify) so an early open is not missed if `connect` awaits later.
     open: Option<oneshot::Receiver<()>>,
@@ -261,11 +262,14 @@ async fn local_sdp(pc: &Arc<RTCPeerConnection>) -> Result<String> {
 /// Attach open/message handlers to `channel` and return its negotiated state
 /// (the channel, its inbound-message receiver, and an open signal).
 fn wire_channel(channel: &Arc<RTCDataChannel>) -> Negotiated {
-    let (in_tx, in_rx) = mpsc::unbounded::<Vec<u8>>();
+    let (in_tx, in_rx) = mpsc::unbounded::<InboundMessage>();
     channel.on_message(Box::new(move |message: DataChannelMessage| {
         let in_tx = in_tx.clone();
         Box::pin(async move {
-            let _ = in_tx.unbounded_send(message.data.to_vec());
+            let _ = in_tx.unbounded_send(InboundMessage {
+                is_string: message.is_string,
+                data: message.data.to_vec(),
+            });
         })
     }));
 

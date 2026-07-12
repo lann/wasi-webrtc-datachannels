@@ -4,7 +4,7 @@
 //!
 //! It stands up an offerer and an answerer `peer-connection` entirely in-guest,
 //! performs the vanilla (non-trickle) offer/answer exchange the host satisfies,
-//! opens the negotiated data channel, then streams `count` messages of `size`
+//! opens the negotiated data channel, then sends `count` messages of `size`
 //! bytes from the offerer and reads them all back on the answerer. This drives
 //! every method the manual-signaling host and the crate's `data-channels` host
 //! implement for these two interfaces.
@@ -17,8 +17,8 @@ wit_bindgen::generate!({
 
 use demo::webrtc_echo::manual_signaling::PeerConnection;
 use exports::test::webrtc_manual_signaling::runner::{Guest, Report};
+use lann::webrtc_datachannels::data_channels::Message;
 use lann::webrtc_datachannels::types::{DataChannelOptions, Error};
-use wit_bindgen::StreamResult;
 
 const CHANNEL_LABEL: &str = "manual-signaling-test";
 
@@ -47,35 +47,26 @@ impl Guest for Component {
 
         let label = offerer_channel.label();
 
-        // Read the inbound stream on the answerer first so no message is missed.
-        let mut incoming = answerer_channel.receive().await;
-
-        // Outbound pipeline on the offerer: a detached producer writes each
-        // message into `tx`; `send` drains `rx` into the transport.
-        let (mut tx, rx) = wit_stream::new::<Vec<u8>>();
-        wit_bindgen::spawn(async move {
+        // Send on the offerer and receive on the answerer concurrently. Each
+        // call carries exactly one message, preserving message boundaries.
+        let send_fut = async {
             for i in 0..count {
-                let message = make_message(size as usize, i);
-                let remaining = tx.write_all(vec![message]).await;
-                if !remaining.is_empty() {
-                    break;
-                }
+                offerer_channel
+                    .send(Message::Binary(make_message(size as usize, i)))
+                    .await?;
             }
-            drop(tx);
-        });
-
-        let send_fut = offerer_channel.send(rx);
+            Ok::<(), Error>(())
+        };
         let recv_fut = async {
             let mut received: u32 = 0;
             let mut bytes: u64 = 0;
             while received < count {
-                let (status, batch) = incoming.read(Vec::with_capacity(count as usize)).await;
-                for message in batch {
-                    received += 1;
-                    bytes += message.len() as u64;
-                }
-                if matches!(status, StreamResult::Dropped | StreamResult::Cancelled) {
-                    break;
+                match answerer_channel.receive().await {
+                    Ok(message) => {
+                        received += 1;
+                        bytes += message_len(&message) as u64;
+                    }
+                    Err(_) => break,
                 }
             }
             (received, bytes)
@@ -90,6 +81,14 @@ impl Guest for Component {
             received,
             bytes,
         })
+    }
+}
+
+/// The byte length of a received message, regardless of kind.
+fn message_len(message: &Message) -> usize {
+    match message {
+        Message::Binary(bytes) => bytes.len(),
+        Message::String(text) => text.len(),
     }
 }
 

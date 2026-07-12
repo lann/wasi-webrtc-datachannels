@@ -10,10 +10,10 @@ mod generated {
         path: "wit",
         world: "imports",
         imports: {
-            // `send`/`receive`/`drop` need all three: `async` for the
-            // component-model async ABI, `store` for `Accessor` access to the
-            // `ResourceTable` (and the `…WithStore` traits that host the async
-            // `drop`), and `trappable` so the host functions can return
+            // `send`/`receive`/`send-via-stream`/`drop` need all three: `async`
+            // for the component-model async ABI, `store` for `Accessor` access
+            // to the `ResourceTable` (and the `…WithStore` traits that host the
+            // async methods), and `trappable` so the host functions can return
             // `wasmtime::Result` and surface host errors as traps. Dropping any
             // one of them fails to compile against these host impls.
             default: async | store | trappable,
@@ -21,6 +21,11 @@ mod generated {
             // imported as such by guests, so it must be bound synchronously
             // (still `trappable`, but not `async`).
             "lann:webrtc-datachannels/data-channels@0.1.0.[method]data-channel.label": trappable,
+            // `data-channel.receive-via-stream` is synchronous in the WIT: it
+            // hands back the inbound stream without awaiting, so it is bound
+            // synchronously. It still needs `store` to allocate the returned
+            // `stream<stream-message>` on the guest's behalf.
+            "lann:webrtc-datachannels/data-channels@0.1.0.[method]data-channel.receive-via-stream": store | trappable,
         },
         with: {
             "lann:webrtc-datachannels/data-channels.data-channel": crate::DataChannel,

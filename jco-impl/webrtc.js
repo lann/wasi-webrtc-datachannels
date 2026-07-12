@@ -26,7 +26,13 @@ const RTCPeerConnection =
 // Keep the SCTP send buffer bounded; pause the producer when it fills.
 const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;
 
-/** The `data-channel` resource, implemented over an `RTCDataChannel`. */
+/**
+ * The `data-channel` resource, implemented over an `RTCDataChannel`.
+ *
+ * `send`/`receive` each carry exactly one data-channel message, preserving
+ * WebRTC message boundaries. A message is a variant: `{ tag: 'binary', val:
+ * Uint8Array }` or `{ tag: 'string', val: string }`.
+ */
 export class DataChannel {
   #channel;
   #incoming;
@@ -45,21 +51,23 @@ export class DataChannel {
   }
 
   /**
-   * Drain a stream of outbound messages into the channel. jco delivers the
-   * `stream<list<u8>>` as an async iterable whose values are one `Uint8Array`
-   * per `list<u8>` element, i.e. one data-channel message per iteration.
-   * @param {AsyncIterable<Uint8Array>} messages
+   * Send a single message on the channel. jco delivers the `message` variant as
+   * `{ tag: 'binary', val: Uint8Array }` or `{ tag: 'string', val: string }`.
+   * @param {{ tag: 'binary', val: Uint8Array } | { tag: 'string', val: string }} message
    */
-  async send(messages) {
-    for await (const message of messages) {
-      await this.#waitForDrain();
-      this.#channel.send(message);
-    }
+  async send(message) {
+    await this.#waitForDrain();
+    // A string is sent as a WebRTC text message; a Uint8Array as binary. Both
+    // preserve the message kind end to end.
+    this.#channel.send(message.val);
   }
 
-  /** A stream of inbound messages, one chunk per received message. */
+  /**
+   * Receive a single message from the channel, resolving with the next inbound
+   * `message` variant or throwing `{ tag: 'closed' }` once the channel closes.
+   */
   async receive() {
-    return this.#incoming;
+    return this.#incoming.next();
   }
 
   /** Apply backpressure so a fast producer cannot overrun the SCTP buffer. */
@@ -103,7 +111,7 @@ export async function openEcho(options) {
   const channel = near.createDataChannel(options.label, init);
   channel.binaryType = "arraybuffer";
 
-  const incoming = incomingStream(channel);
+  const incoming = incomingQueue(channel);
   const opened = waitOpen(channel);
 
   // Standard offer/answer exchange.
@@ -118,24 +126,52 @@ export async function openEcho(options) {
   return new DataChannel(channel, incoming, { near, far });
 }
 
-/** Build a ReadableStream that yields one Uint8Array per inbound message. */
-function incomingStream(channel) {
-  return new ReadableStream({
-    start(controller) {
-      channel.addEventListener("message", ({ data }) => {
-        controller.enqueue(new Uint8Array(data));
-      });
-      const end = () => {
-        try {
-          controller.close();
-        } catch {
-          // Already closed.
-        }
-      };
-      channel.addEventListener("close", end);
-      channel.addEventListener("error", end);
-    },
+/**
+ * Build a per-message inbound queue over `channel`. Each received message is
+ * tagged as a `message` variant (`{ tag: 'binary', val: Uint8Array }` for binary
+ * frames, `{ tag: 'string', val: string }` for text frames). `next()` resolves
+ * with the next message, or rejects with `{ tag: 'closed' }` once the channel
+ * closes with no more messages pending.
+ */
+function incomingQueue(channel) {
+  const messages = [];
+  const waiters = [];
+  let closed = false;
+
+  const push = (message) => {
+    const waiter = waiters.shift();
+    if (waiter) {
+      waiter.resolve(message);
+    } else {
+      messages.push(message);
+    }
+  };
+
+  channel.addEventListener("message", ({ data }) => {
+    const message =
+      typeof data === "string"
+        ? { tag: "string", val: data }
+        : { tag: "binary", val: new Uint8Array(data) };
+    push(message);
   });
+
+  const end = () => {
+    if (closed) return;
+    closed = true;
+    while (waiters.length) {
+      waiters.shift().reject({ tag: "closed" });
+    }
+  };
+  channel.addEventListener("close", end);
+  channel.addEventListener("error", end);
+
+  return {
+    next() {
+      if (messages.length) return Promise.resolve(messages.shift());
+      if (closed) return Promise.reject({ tag: "closed" });
+      return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
+    },
+  };
 }
 
 /** Resolve once the channel is open (or reject if it errors first). */

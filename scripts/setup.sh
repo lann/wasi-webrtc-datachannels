@@ -59,8 +59,14 @@ fi
 
 # Install a crate binary with cargo-binstall. It fetches a prebuilt artifact when
 # one exists and otherwise falls back to `cargo install` automatically.
+#
+# This is only reached after the `command -v` guards below fail, i.e. the tool is
+# not on PATH. `--force` is required because a restored cargo cache can contain
+# the install metadata (.crates.toml) without the corresponding ~/.cargo/bin
+# binary; without it, cargo-binstall would report the crate as "already
+# installed" and skip, leaving the binary absent for later steps.
 binstall() {
-  cargo binstall --no-confirm --locked "$1"
+  cargo binstall --no-confirm --locked --force "$1"
 }
 
 log "Ensuring wasm-tools ${WASM_TOOLS_VERSION} is installed"
@@ -89,6 +95,14 @@ if [ "${SKIP_NODE:-0}" = "1" ]; then
 else
   log "Installing Node host dependencies (jco-impl)"
   (cd "${REPO_ROOT}/jco-impl" && npm install)
+fi
+
+# In GitHub Actions, $GITHUB_PATH is a file; appending a path to it makes that
+# directory available in PATH for all subsequent steps in the job.  Without this,
+# wasm-tools / just / cargo-nextest (installed to ~/.cargo/bin above) are not
+# found by later `run:` steps even though they exist on disk.
+if [ -n "${GITHUB_PATH:-}" ]; then
+  echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
 fi
 
 log "Setup complete"

@@ -6,19 +6,6 @@ repository root.
 
 ## A. WIT interface design
 
-### 1. `data-channel.receive` is callable-once but the WIT doesn't encode that (host traps on second call)
-
-`wit/webrtc.wit` declares `receive: async func() -> stream<list<u8>>` with no
-hint that it may only be called once. The Wasmtime host enforces once-only by
-returning a host error (`wasmtime-impl/src/host.rs:169-179`), which **traps the
-guest**; the jco host returns the *same* `ReadableStream` again
-(`jco-impl/webrtc.js:61-63`) — two different behaviors for the same WIT. Either
-(a) encode the semantics in WIT (e.g.
-`receive: func() -> result<stream<list<u8>>, error>` with a documented
-`closed`/already-taken error), (b) move the inbound stream to channel
-construction so there's nothing to call twice, or (c) allow multiple calls with
-defined semantics. Acceptance: WIT doc + both hosts agree, covered by a test.
-
 ### 2. `receive` should probably not be `async`
 
 `receive: async func() -> stream<list<u8>>` does no waiting in either host (it

@@ -30,6 +30,7 @@ wit_bindgen::generate!({
 });
 
 use demo::webrtc_echo::manual_signaling::PeerConnection;
+use lann::webrtc_datachannels::data_channels::Message;
 use lann::webrtc_datachannels::types::{DataChannelOptions, Error};
 
 /// The label used for the negotiated data channel. Both peers observe it.
@@ -125,32 +126,19 @@ async fn exchange(
     channel: &lann::webrtc_datachannels::data_channels::DataChannel,
     role: Role,
 ) -> Result<String, Error> {
-    // Read the inbound stream first so the peer's message cannot be missed.
-    let mut incoming = channel.receive().await;
-
     let greeting = format!("hello from the {}", role.name());
-    let (mut tx, rx) = wit_stream::new::<Vec<u8>>();
-    wit_bindgen::spawn(async move {
-        let _ = tx.write_all(vec![greeting.into_bytes()]).await;
-        drop(tx);
-    });
 
-    let send_fut = channel.send(rx);
-    let recv_fut = async {
-        loop {
-            let (status, batch) = incoming.read(Vec::with_capacity(1)).await;
-            if let Some(message) = batch.into_iter().next() {
-                return String::from_utf8_lossy(&message).into_owned();
-            }
-            if matches!(status, StreamResult::Dropped | StreamResult::Cancelled) {
-                return String::new();
-            }
-        }
-    };
+    let send_fut = channel.send(Message::Binary(greeting.into_bytes()));
+    let recv_fut = channel.receive();
 
     let (send_result, peer_message) = futures::join!(send_fut, recv_fut);
     send_result?;
-    Ok(peer_message)
+
+    Ok(match peer_message {
+        Ok(Message::Binary(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+        Ok(Message::String(text)) => text,
+        Err(_) => String::new(),
+    })
 }
 
 /// Present an outgoing signaling blob (base64-encoded SDP) on stdout, alone on
