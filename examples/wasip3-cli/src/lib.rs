@@ -140,9 +140,9 @@ async fn drive(peer: &mut GuestPeer, role: &str, received: Rc<Cell<u32>>) -> Res
                         peer.peer().send_binary(id, greeting.as_bytes())?;
                     }
                 }
-                PeerEvent::Message { data, text, .. } => {
+                PeerEvent::Message { data, .. } => {
                     if got.is_none() {
-                        got = Some(decode(&data, text));
+                        got = Some(String::from_utf8_lossy(&data).into_owned());
                         received.set(received.get() + 1);
                     }
                 }
@@ -172,11 +172,6 @@ async fn drive(peer: &mut GuestPeer, role: &str, received: Rc<Cell<u32>>) -> Res
 
         peer.wait().await;
     }
-}
-
-/// Decode a data-channel payload into a `String` for reporting.
-fn decode(data: &[u8], _text: bool) -> String {
-    String::from_utf8_lossy(data).into_owned()
 }
 
 /// Write a string to `wasi:cli@0.3` stdout, awaiting until it is fully flushed.
