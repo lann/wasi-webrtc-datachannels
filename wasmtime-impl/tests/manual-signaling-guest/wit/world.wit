@@ -1,4 +1,4 @@
-// Test-only guest world exercising the `manual-signaling` and `data-channels`
+// Test-only guest world exercising the `manual-signaling` and `connections`
 // interfaces implemented by the crate under test.
 package test:webrtc-manual-signaling;
 
@@ -29,7 +29,7 @@ interface runner {
     /// on the answerer. A second pass sends another `count` messages through
     /// `send-via-stream`, closing the stream's write end while messages are
     /// still queued, and reads them back too. Proves the crate's
-    /// `manual-signaling` + `data-channels` host implementation round-trips a
+    /// `manual-signaling` + `connections` host implementation round-trips a
     /// real WebRTC/SCTP connection for both the per-message and streaming paths.
     run: async func(count: u32, size: u32) -> result<report, error>;
 }

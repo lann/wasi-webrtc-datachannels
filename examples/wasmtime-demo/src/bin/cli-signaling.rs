@@ -9,7 +9,7 @@
 //!     lowers to, and
 //!   * the demo-only `demo:webrtc-echo/manual-signaling` interface backed by
 //!     `webrtc-rs` (provided by this crate's [`manual`] module), plus the
-//!     `data-channels`/`types` imports (provided by
+//!     `connections`/`types` imports (provided by
 //!     [`wasmtime_webrtc_datachannels`]), so the offer/answer exchange
 //!     drives a real connection.
 //!
@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
     let mut linker: Linker<Ctx> = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
-    // Shared `data-channels`/`types` imports, then the demo-only
+    // Shared `connections`/`types` imports, then the demo-only
     // `manual-signaling` interface layered on top.
     wasmtime_webrtc_datachannels::add_to_linker(&mut linker)?;
     manual::add_to_linker(&mut linker)?;

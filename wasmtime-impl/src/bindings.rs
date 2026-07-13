@@ -1,8 +1,11 @@
 //! Raw `bindgen!` output for the `lann:webrtc-datachannels` package.
 //!
-//! Only the interfaces this crate implements are wired up (`types` and
-//! `data-channels`); see [`crate`] for the public API built on top of these
-//! bindings.
+//! The crate implements the `types` interface and the `data-channel` resource
+//! of the `connections` interface. The `connections` interface also declares a
+//! `peer-connection` resource (the `signaling` design target); it is not
+//! implemented here, so it is mapped to [`crate::UnsupportedPeerConnection`] and
+//! its host functions trap if a guest calls them. See [`crate`] for the public
+//! API built on top of these bindings.
 
 #[allow(missing_docs, reason = "generated code")]
 mod generated {
@@ -20,15 +23,26 @@ mod generated {
             // `data-channel.label` is a synchronous function in the WIT and is
             // imported as such by guests, so it must be bound synchronously
             // (still `trappable`, but not `async`).
-            "lann:webrtc-datachannels/data-channels@0.1.0.[method]data-channel.label": trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]data-channel.label": trappable,
             // `data-channel.receive-via-stream` is synchronous in the WIT: it
             // hands back the inbound stream without awaiting, so it is bound
             // synchronously. It still needs `store` to allocate the returned
             // `stream<stream-message>` on the guest's behalf.
-            "lann:webrtc-datachannels/data-channels@0.1.0.[method]data-channel.receive-via-stream": store | trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]data-channel.receive-via-stream": store | trappable,
+            // The `peer-connection` resource is not implemented by this crate;
+            // its synchronous functions are bound synchronously so the stub
+            // impls can trap. The `constructor`, `create-data-channel`, and
+            // `close` need no store access; the stream-returning functions need
+            // `store` to match the generated signature.
+            "lann:webrtc-datachannels/connections@0.1.0.[constructor]peer-connection": trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]peer-connection.create-data-channel": trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]peer-connection.incoming-data-channels": store | trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]peer-connection.local-ice-candidates": store | trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]peer-connection.close": trappable,
         },
         with: {
-            "lann:webrtc-datachannels/data-channels.data-channel": crate::DataChannel,
+            "lann:webrtc-datachannels/connections.data-channel": crate::DataChannel,
+            "lann:webrtc-datachannels/connections.peer-connection": crate::UnsupportedPeerConnection,
         },
     });
 }

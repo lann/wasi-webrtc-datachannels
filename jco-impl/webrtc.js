@@ -8,7 +8,7 @@
 //
 // `jco --map` wires this module in: the transpiled component does
 //   import { openEcho } from '.../connect'      -> openEcho here
-//   import { DataChannel } from '.../data-channels' -> DataChannel class here
+//   import { DataChannel } from '.../connections' -> DataChannel class here
 //
 // The component sees a channel already connected to an echo endpoint. Under the
 // hood `openEcho` performs a genuine SDP offer/answer + ICE handshake between

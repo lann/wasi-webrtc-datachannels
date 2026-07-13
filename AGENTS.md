@@ -40,12 +40,18 @@ starter's examples first.
 
 ```
 wit/                                   # lann:webrtc-datachannels package
-  webrtc.wit                           #   types, data-channels, signaling
+  webrtc.wit                           #   types (structural), connections (resources)
 wasmtime-impl/                         # Wasmtime host crate (webrtc-rs),
                                        #   modeled after wasmtime_wasi_http::p3;
-                                       #   add_to_linker + WasiWebrtcView (types + data-channels);
+                                       #   add_to_linker + WasiWebrtcView (types + connections.data-channel);
                                        #   crate name: wasmtime-webrtc-datachannels
 jco-impl/                              # browser-first host (Node + jco + @roamhq/wrtc)
+wasip3-impl/                           # sans-I/O crate on the wasm-capable
+                                       #   lann/rtc `wasi` fork; SansIoPeer core +
+                                       #   two drivers: NativePeer (Tokio UDP,
+                                       #   proves rtc<->webrtc-rs DTLS+SCTP interop)
+                                       #   and GuestPeer (wasi:sockets, `guest`
+                                       #   feature); crate: wasip3-webrtc-datachannels
 examples/                              # guest components + the demo/manual-signaling driver
   echo-demo/                           # example guest component (Rust)
     wit/                               #   demo-only WIT for this component
@@ -56,8 +62,11 @@ examples/                              # guest components + the demo/manual-sign
       webrtc-echo-demo.wit             #     demo:webrtc-echo (prompt, manual-demo,
                                        #       manual-signaling, worlds)
       deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
+  wasip3-cli/                          # self-contained wasi:cli@0.3 component: runs the
+                                       #   whole sans-I/O stack in-guest via wasip3-impl's
+                                       #   GuestPeer over wasi:sockets; `wasmtime run`
   wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): demo binaries;
-                                       #   the shared types/data-channels host lives in
+                                       #   the shared types/connections host lives in
                                        #   wasmtime-impl above
 ```
 
@@ -73,9 +82,12 @@ a component or replace those `deps` symlinks with real directories.
 The WIT is split into two packages, keeping the shared and demo-only surfaces
 separate:
 
-- **`lann:webrtc-datachannels`** (`wit/webrtc.wit`) — the shared interfaces:
-  `types`, `data-channels`, and the `RTCPeerConnection`-style `signaling` design
-  target.
+- **`lann:webrtc-datachannels`** (`wit/webrtc.wit`) — the shared interfaces,
+  split by ownership: `types` holds every structural (non-resource) type, while
+  `connections` holds the two stateful resources — the `data-channel` transport
+  and the `RTCPeerConnection`-style `peer-connection` design target. Structural
+  types can be shared across a composition; the resources are each owned by the
+  one component that implements them.
 - **`demo:webrtc-echo`** — the demo-only interfaces, split across the demo
   components that use them:
   - `examples/echo-demo/wit/webrtc-echo-demo.wit` — `connect`, `rendezvous`,
@@ -142,6 +154,11 @@ just test-browser
 # Wasmtime (native) host (defaults: 1000 messages of 4096 bytes):
 just demo-wasmtime          # or: just demo-wasmtime 1000 4096
 
+# In-guest WASIp3 demo: the whole sans-I/O WebRTC stack runs inside the wasm
+# component, connecting an offerer and answerer over wasi:sockets UDP loopback.
+# Needs `wasmtime` (v46+) on PATH; the recipe passes the async + WASIp3 flags:
+just demo-wasip3-cli
+
 # Manual-signaling integration test (builds a guest, drives a real webrtc-rs
 # manual-signaling round trip through a test-only host under wasmtime-impl/tests);
 # it is part of `just test`:
@@ -163,10 +180,11 @@ the headless-browser test). Match the recipe to the change:
 | Recipe | Run it when you change… |
 | --- | --- |
 | `just fmt-check` | any Rust source (formatting). |
-| `just clippy` | any Rust source (lints all crates and both wasm targets). |
+| `just clippy` | any Rust source (lints all crates and every wasm target, including `wasip3-cli`). |
 | `just validate-wit` | any `.wit` file (root `wit/` or a demo `examples/<name>/wit/`). |
 | `just test` | any Rust host/guest code, or the manual-signaling test host. |
 | `just build-component` | the `echo-demo` guest or its WIT. |
+| `just build-wasip3-cli` / `just demo-wasip3-cli` | the `wasip3-cli` component or the `GuestPeer` driver in `wasip3-impl` (`demo-` also runs it under `wasmtime`). |
 | `just transpile` | anything affecting the component's interfaces, or the `jco transpile` flags / `--map` targets in `jco-impl`. |
 | `just test-browser` | the browser host (`jco-impl`, e.g. `webrtc.js`) or the component it runs. |
 | `just check` | broad Rust/WIT changes — the quick gate for most commits. |
@@ -193,7 +211,7 @@ an answerer — must exchange SDP and trickled ICE out of band.
 
 The intended shape:
 
-- The guest drives the `lann:webrtc-datachannels/signaling` `peer-connection`
+- The guest drives the `lann:webrtc-datachannels/connections` `peer-connection`
   interface to produce/consume offers, answers, and ICE candidates.
 - Those opaque blobs travel between the two peers through the demo-only
   `demo:webrtc-echo/rendezvous` mailbox interface. It is deliberately **not**
@@ -203,7 +221,41 @@ The intended shape:
   itself). Because the whole loop is plain HTTP, the server can run locally.
 
 `rendezvous` is defined but not yet wired into the `webrtc-echo-demo` world —
-mirroring how `signaling` is "designed but not yet exercised". Wiring it up
+mirroring how `connections.peer-connection` is "designed but not yet exercised". Wiring it up
 (host implementations for both stacks, a chosen signaling server, and a guest
 that drives it) is the natural next step; see the starter's `wasi:http` example
 for the client pattern.
+
+## In-guest sans-I/O WebRTC (`wasip3-impl`) — direction
+
+The two demo hosts run the fully async `webrtc-rs` engine host-side. To move the
+WebRTC stack *into a wasm guest*, the protocol logic must be separated from I/O
+so the guest can drive it over `wasi:sockets` and WASI timers. The sans-I/O
+[`lann/rtc`](https://github.com/lann/rtc/tree/wasi) `wasi` fork makes that
+possible: it compiles for `wasm32-wasip2` (the fork stubs `ifaces()` to return
+`Unsupported` on wasm and bumps `rtc-mdns`'s `socket2` to 0.6). The `rtc`
+dependency is pinned once at the workspace level in the root `Cargo.toml`.
+
+[`wasip3-impl/`](wasip3-impl) walks down that path with one core and two drivers:
+
+- `SansIoPeer` is the runtime-agnostic core — it wraps an `rtc`
+  `RTCPeerConnection` and exposes signaling primitives plus the six sans-I/O
+  stepping calls (`poll_transmit` / `handle_input` / `poll_timeout` /
+  `handle_timeout` + drained events), performing no I/O itself.
+- `NativePeer` (default `native` feature) is a **host-side** Tokio UDP reference
+  driver. It is the CI-testable interop proof: `tests/interop.rs` stands up a
+  `webrtc-rs` offerer and the sans-I/O answerer in one process and round-trips a
+  data channel over real DTLS + SCTP.
+- `GuestPeer` (`guest` feature) is the **in-guest** driver: it feeds the same
+  `SansIoPeer` from WASIp3 `wasi:sockets` UDP and `wasi:clocks` timers instead
+  of Tokio, exposing a cooperative `flush`/`drain_events`/`wait` pump (the
+  component-model async model is single-threaded, with no cross-thread `spawn`).
+  [`examples/wasip3-cli`](examples/wasip3-cli) drives two of them — an offerer
+  and an answerer over UDP loopback — entirely inside one `wasi:cli@0.3`
+  component, runnable with `wasmtime run` (`just demo-wasip3-cli`).
+
+Because the sans-I/O model has no OS interface enumeration, host candidates are
+supplied explicitly by the driver (`add_local_host_candidate`) rather than
+gathered from mDNS. The remaining step is a guest driver over real (non-loopback)
+`wasi:sockets` paired with the `rendezvous` signaling above, so two separate
+components can connect across a network.

@@ -8,7 +8,7 @@
 //! async) implementation modeled after [`wasmtime_wasi_http::p3`]: a host embeds
 //! a [`WasiWebrtcCtx`] in its store state, implements [`WasiWebrtcView`] to
 //! expose it alongside the store's [`ResourceTable`], and calls
-//! [`add_to_linker`] to satisfy the `types` and `data-channels` imports with a
+//! [`add_to_linker`] to satisfy the `types` and `connections` imports with a
 //! real WebRTC/SCTP data channel.
 //!
 //! [`wasmtime_wasi_http::p3`]: https://docs.rs/wasmtime-wasi-http
@@ -128,8 +128,21 @@ impl HasData for WasiWebrtc {
     type Data<'a> = WasiWebrtcCtxView<'a>;
 }
 
+/// Backing type for the `connections.peer-connection` resource, which this
+/// crate does **not** implement.
+///
+/// The `peer-connection` resource (the `signaling` design target) shares the
+/// `connections` interface with the `data-channel` resource this crate does
+/// implement, so the generated bindings still require a backing type and host
+/// impl for it. Every `peer-connection` host function traps; no value of this
+/// type is ever constructed. Implementing `signaling` here would replace this
+/// stub with a real peer-connection type.
+pub struct UnsupportedPeerConnection {
+    _private: (),
+}
+
 /// Add the `lann:webrtc-datachannels` interfaces implemented by this crate
-/// (`types` and `data-channels`) to the provided [`Linker`].
+/// (`types` and `connections`) to the provided [`Linker`].
 ///
 /// The store's data type `T` must implement [`WasiWebrtcView`]. The engine's
 /// [`Config`](wasmtime::Config) must have `wasm_component_model_async` enabled,
@@ -171,9 +184,6 @@ where
     T: WasiWebrtcView + 'static,
 {
     bindings::webrtc_datachannels::types::add_to_linker::<_, WasiWebrtc>(linker, T::webrtc)?;
-    bindings::webrtc_datachannels::data_channels::add_to_linker::<_, WasiWebrtc>(
-        linker,
-        T::webrtc,
-    )?;
+    bindings::webrtc_datachannels::connections::add_to_linker::<_, WasiWebrtc>(linker, T::webrtc)?;
     Ok(())
 }

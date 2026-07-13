@@ -1,6 +1,13 @@
 package lann:webrtc-datachannels@0.1.0;
 
-/// Shared types for the WebRTC data-channel interfaces.
+/// Shared structural types for the WebRTC data-channel interfaces.
+///
+/// Every non-resource type used by the package lives here. Structural types
+/// carry no host-side identity, so a single composition can freely share these
+/// definitions across multiple components. The stateful, per-implementation
+/// objects — the `data-channel` and `peer-connection` resources — live in the
+/// separate `connections` interface, since a resource is always owned by the
+/// one component that implements it.
 interface types {
     /// Errors surfaced by peer connections and data channels.
     variant error {
@@ -12,7 +19,7 @@ interface types {
         /// string carries a human-readable reason.
         invalid-signaling(string),
         /// The channel's inbound messages are being consumed by
-        /// `data-channels.data-channel.receive-via-stream`. Once that method has
+        /// `connections.data-channel.receive-via-stream`. Once that method has
         /// been called on a data channel, any further call to it or to `receive`
         /// fails with this error.
         receiving-via-stream,
@@ -31,18 +38,6 @@ interface types {
         /// `none` requests fully reliable delivery (the default).
         max-retransmits: option<u16>,
     }
-}
-
-/// The high-throughput data-channel surface.
-///
-/// A data channel is bidirectional and message-oriented. Each `send`/`receive`
-/// carries exactly one data-channel message, preserving WebRTC message
-/// boundaries. Concurrent calls are supported so the host and guest can
-/// pipeline messages and let the async ABI apply backpressure. A message may be
-/// carried as a whole `message` value or, to bound in-memory buffering, as a
-/// `stream-message` whose payload flows through a byte `stream`.
-interface data-channels {
-    use types.{error, data-channel-options};
 
     /// A single data-channel message.
     ///
@@ -79,7 +74,7 @@ interface data-channels {
         data: stream<u8>,
     }
 
-    /// The failure returned by `data-channel.send-via-stream`.
+    /// The failure returned by `connections.data-channel.send-via-stream`.
     ///
     /// `sent` reports how many complete messages were handed to the transport
     /// before `error` occurred, so the caller can tell where the stream stopped.
@@ -90,7 +85,55 @@ interface data-channels {
         sent: u64,
     }
 
+    /// The kind of an SDP session description.
+    enum sdp-type {
+        offer,
+        answer,
+        pranswer,
+        rollback,
+    }
+
+    /// An SDP session description exchanged during signaling.
+    record session-description {
+        kind: sdp-type,
+        sdp: string,
+    }
+
+    /// A trickled ICE candidate.
+    record ice-candidate {
+        candidate: string,
+        sdp-mid: option<string>,
+        sdp-mline-index: option<u16>,
+    }
+}
+
+/// The stateful WebRTC resources: the `data-channel` transport and the
+/// `RTCPeerConnection`-style `peer-connection` that negotiates it.
+///
+/// Both resources carry host-side identity and are owned by the single
+/// component that implements them, so — unlike the structural `types` — they
+/// cannot be shared across a composition. They are grouped together here so an
+/// implementation provides the whole live-object surface in one place.
+interface connections {
+    use types.{
+        error,
+        data-channel-options,
+        message,
+        stream-message,
+        send-via-stream-error,
+        session-description,
+        ice-candidate,
+    };
+
     /// A connected, bidirectional WebRTC data channel.
+    ///
+    /// A data channel is bidirectional and message-oriented. Each
+    /// `send`/`receive` carries exactly one data-channel message, preserving
+    /// WebRTC message boundaries. Concurrent calls are supported so the host and
+    /// guest can pipeline messages and let the async ABI apply backpressure. A
+    /// message may be carried as a whole `message` value or, to bound in-memory
+    /// buffering, as a `stream-message` whose payload flows through a byte
+    /// `stream`.
     resource data-channel {
         /// The negotiated channel label.
         label: func() -> string;
@@ -139,43 +182,18 @@ interface data-channels {
         /// `error.receiving-via-stream`) before this method returns.
         receive-via-stream: func() -> result<stream<stream-message>, error>;
     }
-}
 
-/// The full RTCPeerConnection-style signaling surface.
-///
-/// This is the design target for the interface and is intended to be iterated
-/// on in parallel with the host implementations. It mirrors enough of
-/// `RTCPeerConnection` to drive a real SDP offer/answer exchange and trickle
-/// ICE. The runnable demo does not drive signaling directly (it uses
-/// the demo `connect` convenience), but this interface documents the shape a
-/// full guest-driven connection would take. See the demo `rendezvous` interface
-/// for the transport that would carry these blobs between remote peers.
-interface signaling {
-    use types.{error, data-channel-options};
-    use data-channels.{data-channel};
-
-    /// The kind of an SDP session description.
-    enum sdp-type {
-        offer,
-        answer,
-        pranswer,
-        rollback,
-    }
-
-    /// An SDP session description exchanged during signaling.
-    record session-description {
-        kind: sdp-type,
-        sdp: string,
-    }
-
-    /// A trickled ICE candidate.
-    record ice-candidate {
-        candidate: string,
-        sdp-mid: option<string>,
-        sdp-mline-index: option<u16>,
-    }
-
-    /// A single WebRTC peer connection.
+    /// A single WebRTC peer connection driving the full `RTCPeerConnection`-style
+    /// signaling surface.
+    ///
+    /// This is the design target for guest-driven connection setup and is
+    /// intended to be iterated on in parallel with the host implementations. It
+    /// mirrors enough of `RTCPeerConnection` to drive a real SDP offer/answer
+    /// exchange and trickle ICE. The runnable demo does not drive signaling
+    /// directly (it uses the demo `connect` convenience), but this resource
+    /// documents the shape a full guest-driven connection would take. See the
+    /// demo `rendezvous` interface for the transport that would carry these
+    /// blobs between remote peers.
     resource peer-connection {
         constructor();
 

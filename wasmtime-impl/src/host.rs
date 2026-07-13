@@ -16,17 +16,22 @@ use futures::channel::oneshot;
 use futures::lock::Mutex as AsyncMutex;
 use futures::StreamExt;
 use wasmtime::component::{
-    Accessor, Destination, Resource, Source, StreamConsumer, StreamProducer, StreamReader,
+    Access, Accessor, Destination, Resource, Source, StreamConsumer, StreamProducer, StreamReader,
     StreamResult,
 };
 use wasmtime::{AsContextMut, Result, StoreContextMut};
 
-use crate::bindings::webrtc_datachannels::data_channels::{
-    self, HostDataChannel, HostDataChannelWithStore, Message, MessageKind, SendViaStreamError,
-    StreamMessage,
+use crate::bindings::webrtc_datachannels::connections::{
+    self, HostDataChannel, HostDataChannelWithStore, HostPeerConnection,
+    HostPeerConnectionWithStore,
 };
-use crate::bindings::webrtc_datachannels::types::{self, Error};
-use crate::{DataChannel, InboundMessage, WasiWebrtc, WasiWebrtcCtxView};
+use crate::bindings::webrtc_datachannels::types::{
+    self, DataChannelOptions, Error, IceCandidate, Message, MessageKind, SendViaStreamError,
+    SessionDescription, StreamMessage,
+};
+use crate::{
+    DataChannel, InboundMessage, UnsupportedPeerConnection, WasiWebrtc, WasiWebrtcCtxView,
+};
 
 use webrtc::data_channel::RTCDataChannel;
 
@@ -34,9 +39,9 @@ use webrtc::data_channel::RTCDataChannel;
 
 impl types::Host for WasiWebrtcCtxView<'_> {}
 
-// --- data-channels ---------------------------------------------------------
+// --- connections -----------------------------------------------------------
 
-impl data_channels::Host for WasiWebrtcCtxView<'_> {}
+impl connections::Host for WasiWebrtcCtxView<'_> {}
 
 /// Send one message over a data channel, honoring its `binary`/`string` kind.
 async fn send_channel_message(
@@ -386,5 +391,105 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
             access.get().table.delete(rep)?;
             Ok(())
         })
+    }
+}
+
+// --- peer-connection (unimplemented) ---------------------------------------
+
+/// The error surfaced by every `peer-connection` host function.
+///
+/// The `signaling` design target is not implemented by this crate; these
+/// functions exist only because `peer-connection` shares the `connections`
+/// interface with the `data-channel` resource this crate does implement.
+fn peer_connection_unsupported() -> wasmtime::Error {
+    wasmtime::Error::msg(
+        "lann:webrtc-datachannels/connections.peer-connection (the signaling design \
+         target) is not implemented by this host",
+    )
+}
+
+impl HostPeerConnection for WasiWebrtcCtxView<'_> {
+    fn new(&mut self) -> Result<Resource<UnsupportedPeerConnection>> {
+        Err(peer_connection_unsupported())
+    }
+
+    fn create_data_channel(
+        &mut self,
+        _self_: Resource<UnsupportedPeerConnection>,
+        _options: DataChannelOptions,
+    ) -> Result<std::result::Result<Resource<DataChannel>, Error>> {
+        Err(peer_connection_unsupported())
+    }
+
+    fn close(&mut self, _self_: Resource<UnsupportedPeerConnection>) -> Result<()> {
+        Err(peer_connection_unsupported())
+    }
+}
+
+impl<T: Send> HostPeerConnectionWithStore<T> for WasiWebrtc {
+    fn incoming_data_channels(
+        _access: Access<'_, T, Self>,
+        _self_: Resource<UnsupportedPeerConnection>,
+    ) -> Result<StreamReader<Resource<DataChannel>>> {
+        Err(peer_connection_unsupported())
+    }
+
+    fn local_ice_candidates(
+        _access: Access<'_, T, Self>,
+        _self_: Resource<UnsupportedPeerConnection>,
+    ) -> Result<StreamReader<IceCandidate>> {
+        Err(peer_connection_unsupported())
+    }
+
+    async fn create_offer(
+        _accessor: &Accessor<T, Self>,
+        _self_: Resource<UnsupportedPeerConnection>,
+    ) -> Result<std::result::Result<SessionDescription, Error>> {
+        Err(peer_connection_unsupported())
+    }
+
+    async fn create_answer(
+        _accessor: &Accessor<T, Self>,
+        _self_: Resource<UnsupportedPeerConnection>,
+    ) -> Result<std::result::Result<SessionDescription, Error>> {
+        Err(peer_connection_unsupported())
+    }
+
+    async fn set_local_description(
+        _accessor: &Accessor<T, Self>,
+        _self_: Resource<UnsupportedPeerConnection>,
+        _description: SessionDescription,
+    ) -> Result<std::result::Result<(), Error>> {
+        Err(peer_connection_unsupported())
+    }
+
+    async fn set_remote_description(
+        _accessor: &Accessor<T, Self>,
+        _self_: Resource<UnsupportedPeerConnection>,
+        _description: SessionDescription,
+    ) -> Result<std::result::Result<(), Error>> {
+        Err(peer_connection_unsupported())
+    }
+
+    async fn add_ice_candidate(
+        _accessor: &Accessor<T, Self>,
+        _self_: Resource<UnsupportedPeerConnection>,
+        _candidate: IceCandidate,
+    ) -> Result<std::result::Result<(), Error>> {
+        Err(peer_connection_unsupported())
+    }
+
+    async fn wait_connected(
+        _accessor: &Accessor<T, Self>,
+        _self_: Resource<UnsupportedPeerConnection>,
+    ) -> Result<std::result::Result<(), Error>> {
+        Err(peer_connection_unsupported())
+    }
+
+    async fn drop(
+        _accessor: &Accessor<T, Self>,
+        _rep: Resource<UnsupportedPeerConnection>,
+    ) -> Result<()> {
+        Err(peer_connection_unsupported())
     }
 }

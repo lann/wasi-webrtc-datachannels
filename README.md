@@ -23,10 +23,12 @@ genuine WebRTC/SCTP data channel.
 | --- | --- |
 | [`wit/`](wit) | The streaming **WIT interface**, the `lann:webrtc-datachannels@0.1.0` package. Each demo component keeps its own demo-only WIT and symlinks this package in as a dependency. |
 | [`examples/echo-demo`](examples/echo-demo) | A **Rust example component** exercising a data channel one message at a time. |
-| [`wasmtime-impl`](wasmtime-impl) | The **Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `add_to_linker` + `WasiWebrtcView` for the `types` + `data-channels` interfaces. Crate name: `wasmtime-webrtc-datachannels`. |
+| [`wasmtime-impl`](wasmtime-impl) | The **Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `add_to_linker` + `WasiWebrtcView` for the `types` interface and the `data-channel` resource of `connections` (the `peer-connection` resource is unimplemented). Crate name: `wasmtime-webrtc-datachannels`. |
 | [`jco-impl`](jco-impl) | The **browser-first host** (Node stand-in for the browser, jco + @roamhq/wrtc). |
 | [`examples/wasmtime-demo`](examples/wasmtime-demo) | The **native Rust host** (Wasmtime + webrtc-rs): demo binaries built on `wasmtime-impl`. |
 | [`examples/cli-signaling`](examples/cli-signaling) | The **manual-signaling CLI guest component** (Rust). |
+| [`examples/wasip3-cli`](examples/wasip3-cli) | A **self-contained WASIp3 CLI component** that runs the whole sans-I/O WebRTC stack *in-guest*, driving `wasip3-impl` over `wasi:sockets` UDP. Connects an offerer and answerer over loopback and exchanges a message — runnable with `wasmtime run`. |
+| [`wasip3-impl`](wasip3-impl) | A **sans-I/O crate** built on the wasm-capable [`lann/rtc`](https://github.com/lann/rtc/tree/wasi) fork. Its `SansIoPeer` core is driven by two interchangeable drivers: a native Tokio UDP reference driver (`NativePeer`, proving interop with `webrtc-rs` over real DTLS + SCTP) and a wasm `wasi:sockets`/timer driver (`GuestPeer`, used by `examples/wasip3-cli`). Crate name: `wasip3-webrtc-datachannels`. |
 | [`AGENTS.md`](AGENTS.md) | Orientation for agents/contributors, linking the `lann/wasm-component-starter` knowledge base. |
 
 ## The interface
@@ -38,28 +40,37 @@ a single copy of the shared surface to edit:
 
 **`lann:webrtc-datachannels`** — the shared interfaces:
 
-- **`types`** — shared `error` variant and `data-channel-options`.
-- **`data-channels`** — the high-throughput surface. A `data-channel` resource
-  is bidirectional and message-oriented; each call carries exactly **one**
-  data-channel message, preserving WebRTC message boundaries:
-  - `send: async func(message: message) -> result<_, error>`
-  - `receive: async func() -> result<message, error>`
+- **`types`** — every structural (non-resource) type in the package: the
+  `error` variant, `data-channel-options`, the `message`/`message-kind`/
+  `stream-message`/`send-via-stream-error` data-channel types, and the
+  `sdp-type`/`session-description`/`ice-candidate` signaling types. Structural
+  types carry no host identity, so a single composition can share them across
+  components.
+- **`connections`** — the stateful WebRTC resources, which (unlike the
+  structural `types`) are each owned by the one component that implements them:
+  - **`data-channel`** — the high-throughput surface. A `data-channel` is
+    bidirectional and message-oriented; each call carries exactly **one**
+    data-channel message, preserving WebRTC message boundaries:
+    - `send: async func(message: message) -> result<_, error>`
+    - `receive: async func() -> result<message, error>`
 
-  A `message` is a variant — `binary(list<u8>)` or `%string(string)` (text,
-  valid UTF-8). Concurrent calls are supported so the host and guest can
-  pipeline messages and let the async ABI apply backpressure. To bound in-memory
-  buffering, a message may instead flow through a byte `stream` as a
-  `stream-message` (`kind`, `length`, `data: stream<u8>`):
-  - `send-via-stream: async func(messages: stream<stream-message>) -> result<_, send-via-stream-error>`
-  - `receive-via-stream: func() -> result<stream<stream-message>, error>`
+    A `message` is a variant — `binary(list<u8>)` or `%string(string)` (text,
+    valid UTF-8). Concurrent calls are supported so the host and guest can
+    pipeline messages and let the async ABI apply backpressure. To bound
+    in-memory buffering, a message may instead flow through a byte `stream` as a
+    `stream-message` (`kind`, `length`, `data: stream<u8>`):
+    - `send-via-stream: async func(messages: stream<stream-message>) -> result<_, send-via-stream-error>`
+    - `receive-via-stream: func() -> result<stream<stream-message>, error>`
 
-  `send-via-stream-error` carries the underlying `error` plus `sent`, the number
-  of messages handed to the transport before the failure. `receive-via-stream`
-  takes over the channel's inbound messages: it may be called only once, after
-  which it (and `receive`) fail with `error.receiving-via-stream`.
-- **`signaling`** — a fuller `RTCPeerConnection`-style surface (SDP offer/answer
-  + trickle ICE) that documents where a *guest-driven* connection API is
-  headed. It is the design target and is **not** required by the runnable demo.
+    `send-via-stream-error` carries the underlying `error` plus `sent`, the
+    number of messages handed to the transport before the failure.
+    `receive-via-stream` takes over the channel's inbound messages: it may be
+    called only once, after which it (and `receive`) fail with
+    `error.receiving-via-stream`.
+  - **`peer-connection`** — a fuller `RTCPeerConnection`-style surface (SDP
+    offer/answer + trickle ICE) that documents where a *guest-driven* connection
+    API is headed. It is the design target and is **not** required by the
+    runnable demo.
 
 **`demo:webrtc-echo`** — the demo-only interfaces, which live with the demo
 components that use them ([`examples/echo-demo/wit`](examples/echo-demo/wit)
@@ -73,7 +84,7 @@ for the manual-signaling demos):
 - **`rendezvous`** — a proposed, deliberately *unstandardized* HTTP signaling
   mailbox for carrying SDP/ICE between two *separate* peers via an existing
   server over `wasi:http@0.3`, so remote connections can be developed locally.
-  Like `signaling`, it is designed but not yet wired into the runnable demo (see
+  Like the `connections.peer-connection` resource, it is designed but not yet wired into the runnable demo (see
   [`AGENTS.md`](AGENTS.md#real-signaling-rendezvous--wasihttp03--direction)).
 - **`demo`** — the exported entry point (`run`) the hosts call.
 

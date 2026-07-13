@@ -1,0 +1,36 @@
+[package]
+name = "wasip3-webrtc-datachannels"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Sans-I/O WebRTC data-channel peer built on the wasm-capable `rtc` fork, with a native UDP reference driver."
+
+[features]
+# `native` pulls in the Tokio-based reference driver (`NativePeer`). It is on by
+# default for the workspace's native build and test, but a wasm guest that only
+# needs the sans-I/O `SansIoPeer` core (driven over `wasi:sockets`) turns it off
+# so no Tokio — which does not build for `wasm32-wasip2` — is pulled in.
+default = ["native"]
+native = ["dep:tokio"]
+# `guest` pulls in the `wasi:sockets`/timer driver (`GuestPeer`) that runs the
+# sans-I/O core inside a wasm component over WASIp3. It is off by default so the
+# native build/test path does not depend on the `wasip3` bindings.
+guest = ["dep:wasip3", "dep:futures"]
+
+[dependencies]
+# The sans-I/O WebRTC stack. Pinned, via the workspace, to the `lann/rtc` `wasi`
+# fork so a single source resolves for both native and (future) wasm builds.
+rtc.workspace = true
+anyhow = "1"
+bytes = "1"
+# Only the `native` driver needs Tokio; the sans-I/O core is runtime-agnostic.
+tokio = { version = "1", features = ["net", "rt", "sync", "time", "macros"], optional = true }
+# The `guest` driver drives the core over WASIp3 `wasi:sockets`/`wasi:clocks`.
+wasip3 = { version = "0.7", optional = true }
+futures = { version = "0.3", default-features = false, features = ["async-await"], optional = true }
+
+[dev-dependencies]
+# `webrtc-rs` provides the interop peer for the round-trip test: it speaks real
+# DTLS + SCTP against this crate's sans-I/O peer, mirroring the demo hosts.
+webrtc = "0.17"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
