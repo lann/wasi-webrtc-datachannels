@@ -187,8 +187,22 @@ item 3). Define a small conformance guest (call `receive` twice, send after
 close, zero-length message, oversized message, label round-trip) and run it
 against both hosts in CI, asserting identical observable results.
 
+### 29. Drive the sans-I/O `rtc` stack from inside a wasm guest (tracking)
+
+`wasip3-impl` proves the wasm-capable
+[`lann/rtc`](https://github.com/lann/rtc/tree/wasi) `wasi` fork interoperates
+with `webrtc-rs` over a real DTLS + SCTP data channel, but the sans-I/O event
+loop currently runs **host-side** in the native `NativePeer` driver
+(`wasip3-impl/src/native.rs`). The runtime-agnostic `SansIoPeer`
+(`wasip3-impl/src/peer.rs`) performs no I/O, so the natural next step is a
+**guest** driver that feeds it from `wasi:sockets` (UDP) and WASI timers instead
+of Tokio, then builds it for `wasm32-wasip2`. Host-candidate gathering must stay
+explicit (`ifaces()` is `Unsupported` on wasm) — supply interface addresses via
+config or use server-reflexive/relay candidates only. See the
+`wasm-component-starter` `wasi:sockets`/timer patterns.
+
 ## Suggested priority
 
 Correctness first (11), then interface-stabilizing decisions (5–7), then the
-strategic items (8, 27, 28); the rest are cheap hygiene wins
+strategic items (8, 27, 28, 29); the rest are cheap hygiene wins
 (14, 15, 19, 23, 24–26).

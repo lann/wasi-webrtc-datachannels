@@ -1,0 +1,20 @@
+[package]
+name = "wasip3-webrtc-datachannels"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Sans-I/O WebRTC data-channel peer built on the wasm-capable `rtc` fork, with a native UDP reference driver."
+
+[dependencies]
+# The sans-I/O WebRTC stack. Pinned, via the workspace, to the `lann/rtc` `wasi`
+# fork so a single source resolves for both native and (future) wasm builds.
+rtc.workspace = true
+anyhow = "1"
+bytes = "1"
+tokio = { version = "1", features = ["net", "rt", "sync", "time", "macros"] }
+
+[dev-dependencies]
+# `webrtc-rs` provides the interop peer for the round-trip test: it speaks real
+# DTLS + SCTP against this crate's sans-I/O peer, mirroring the demo hosts.
+webrtc = "0.17"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net"] }

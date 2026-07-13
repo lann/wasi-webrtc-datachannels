@@ -46,6 +46,10 @@ wasmtime-impl/                         # Wasmtime host crate (webrtc-rs),
                                        #   add_to_linker + WasiWebrtcView (types + connections.data-channel);
                                        #   crate name: wasmtime-webrtc-datachannels
 jco-impl/                              # browser-first host (Node + jco + @roamhq/wrtc)
+wasip3-impl/                           # sans-I/O host crate on the wasm-capable
+                                       #   lann/rtc `wasi` fork + native UDP driver;
+                                       #   proves rtc<->webrtc-rs interop (DTLS+SCTP);
+                                       #   crate name: wasip3-webrtc-datachannels
 examples/                              # guest components + the demo/manual-signaling driver
   echo-demo/                           # example guest component (Rust)
     wit/                               #   demo-only WIT for this component
@@ -210,3 +214,29 @@ mirroring how `connections.peer-connection` is "designed but not yet exercised".
 (host implementations for both stacks, a chosen signaling server, and a guest
 that drives it) is the natural next step; see the starter's `wasi:http` example
 for the client pattern.
+
+## In-guest sans-I/O WebRTC (`wasip3-impl`) — direction
+
+The two demo hosts run the fully async `webrtc-rs` engine host-side. To move the
+WebRTC stack *into a wasm guest*, the protocol logic must be separated from I/O
+so the guest can drive it over `wasi:sockets` and WASI timers. The sans-I/O
+[`lann/rtc`](https://github.com/lann/rtc/tree/wasi) `wasi` fork makes that
+possible: it compiles for `wasm32-wasip2` (the fork stubs `ifaces()` to return
+`Unsupported` on wasm and bumps `rtc-mdns`'s `socket2` to 0.6). The `rtc`
+dependency is pinned once at the workspace level in the root `Cargo.toml`.
+
+[`wasip3-impl/`](wasip3-impl) is the first step down that path:
+
+- `SansIoPeer` is the runtime-agnostic core — it wraps an `rtc`
+  `RTCPeerConnection` and exposes signaling primitives plus the six sans-I/O
+  stepping calls (`poll_transmit` / `handle_input` / `poll_timeout` /
+  `handle_timeout` + drained events), performing no I/O itself.
+- `NativePeer` is a **host-side** Tokio UDP reference driver. The loop lives
+  host-side for now because that is what is CI-testable: `tests/interop.rs`
+  stands up a `webrtc-rs` offerer and the sans-I/O answerer in one process and
+  round-trips a data channel over real DTLS + SCTP.
+
+Because the sans-I/O model has no OS interface enumeration, host candidates are
+supplied explicitly by the driver (`add_local_host_candidate`) rather than
+gathered from mDNS. The natural next step is a **guest** driver that feeds the
+same `SansIoPeer` from `wasi:sockets`/timers instead of Tokio.
