@@ -13,16 +13,23 @@
 //! - [`SansIoPeer`] — the runtime-agnostic core: signaling primitives plus the
 //!   six sans-I/O stepping calls. It performs no I/O.
 //! - [`NativePeer`] — a Tokio [`UdpSocket`](tokio::net::UdpSocket) driver that
-//!   runs the event loop. This is the host-side driver used to prove the
-//!   transport; a future guest driver would feed [`SansIoPeer`] from
-//!   `wasi:sockets` instead.
+//!   runs the event loop natively (the `native` feature, on by default).
+//! - `GuestPeer` — a WASIp3 `wasi:sockets`/timer driver that runs the same core
+//!   inside a wasm component (the `guest` feature). This is the guest driver
+//!   `AGENTS.md` calls the natural next step.
 //!
 //! The [`interop`](../../wasip3_webrtc_datachannels/tests) test connects a
 //! `webrtc-rs` offerer to this crate's answerer and round-trips messages over a
 //! real DTLS + SCTP data channel.
 
-mod native;
 mod peer;
+#[cfg(feature = "native")]
+mod native;
+#[cfg(feature = "guest")]
+mod guest;
 
+#[cfg(feature = "native")]
 pub use native::{Answered, InboundMessage, NativePeer};
+#[cfg(feature = "guest")]
+pub use guest::GuestPeer;
 pub use peer::{PeerEvent, SansIoPeer, Transmit};

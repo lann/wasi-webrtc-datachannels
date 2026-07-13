@@ -3481,13 +3481,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasip3-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "wasip3",
+ "wasip3-webrtc-datachannels",
+]
+
+[[package]]
 name = "wasip3-webrtc-datachannels"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "futures",
  "rtc",
  "tokio",
+ "wasip3",
  "webrtc",
 ]
 
