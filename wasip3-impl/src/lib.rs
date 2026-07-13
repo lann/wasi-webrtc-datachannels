@@ -22,14 +22,14 @@
 //! `webrtc-rs` offerer to this crate's answerer and round-trips messages over a
 //! real DTLS + SCTP data channel.
 
-mod peer;
-#[cfg(feature = "native")]
-mod native;
 #[cfg(feature = "guest")]
 mod guest;
-
 #[cfg(feature = "native")]
-pub use native::{Answered, InboundMessage, NativePeer};
+mod native;
+mod peer;
+
 #[cfg(feature = "guest")]
 pub use guest::GuestPeer;
+#[cfg(feature = "native")]
+pub use native::{Answered, InboundMessage, NativePeer};
 pub use peer::{PeerEvent, SansIoPeer, Transmit};

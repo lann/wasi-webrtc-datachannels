@@ -167,10 +167,7 @@ fn from_wasi_addr(addr: IpSocketAddress) -> SocketAddr {
         }
         IpSocketAddress::Ipv6(v6) => {
             let (a, b, c, d, e, f, g, h) = v6.address;
-            SocketAddr::new(
-                IpAddr::V6(Ipv6Addr::new(a, b, c, d, e, f, g, h)),
-                v6.port,
-            )
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::new(a, b, c, d, e, f, g, h)), v6.port)
         }
     }
 }

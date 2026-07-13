@@ -46,10 +46,12 @@ wasmtime-impl/                         # Wasmtime host crate (webrtc-rs),
                                        #   add_to_linker + WasiWebrtcView (types + connections.data-channel);
                                        #   crate name: wasmtime-webrtc-datachannels
 jco-impl/                              # browser-first host (Node + jco + @roamhq/wrtc)
-wasip3-impl/                           # sans-I/O host crate on the wasm-capable
-                                       #   lann/rtc `wasi` fork + native UDP driver;
-                                       #   proves rtc<->webrtc-rs interop (DTLS+SCTP);
-                                       #   crate name: wasip3-webrtc-datachannels
+wasip3-impl/                           # sans-I/O crate on the wasm-capable
+                                       #   lann/rtc `wasi` fork; SansIoPeer core +
+                                       #   two drivers: NativePeer (Tokio UDP,
+                                       #   proves rtc<->webrtc-rs DTLS+SCTP interop)
+                                       #   and GuestPeer (wasi:sockets, `guest`
+                                       #   feature); crate: wasip3-webrtc-datachannels
 examples/                              # guest components + the demo/manual-signaling driver
   echo-demo/                           # example guest component (Rust)
     wit/                               #   demo-only WIT for this component
@@ -60,6 +62,9 @@ examples/                              # guest components + the demo/manual-sign
       webrtc-echo-demo.wit             #     demo:webrtc-echo (prompt, manual-demo,
                                        #       manual-signaling, worlds)
       deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
+  wasip3-cli/                          # self-contained wasi:cli@0.3 component: runs the
+                                       #   whole sans-I/O stack in-guest via wasip3-impl's
+                                       #   GuestPeer over wasi:sockets; `wasmtime run`
   wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): demo binaries;
                                        #   the shared types/connections host lives in
                                        #   wasmtime-impl above
@@ -149,6 +154,11 @@ just test-browser
 # Wasmtime (native) host (defaults: 1000 messages of 4096 bytes):
 just demo-wasmtime          # or: just demo-wasmtime 1000 4096
 
+# In-guest WASIp3 demo: the whole sans-I/O WebRTC stack runs inside the wasm
+# component, connecting an offerer and answerer over wasi:sockets UDP loopback.
+# Needs `wasmtime` (v46+) on PATH; the recipe passes the async + WASIp3 flags:
+just demo-wasip3-cli
+
 # Manual-signaling integration test (builds a guest, drives a real webrtc-rs
 # manual-signaling round trip through a test-only host under wasmtime-impl/tests);
 # it is part of `just test`:
@@ -170,10 +180,11 @@ the headless-browser test). Match the recipe to the change:
 | Recipe | Run it when you change… |
 | --- | --- |
 | `just fmt-check` | any Rust source (formatting). |
-| `just clippy` | any Rust source (lints all crates and both wasm targets). |
+| `just clippy` | any Rust source (lints all crates and every wasm target, including `wasip3-cli`). |
 | `just validate-wit` | any `.wit` file (root `wit/` or a demo `examples/<name>/wit/`). |
 | `just test` | any Rust host/guest code, or the manual-signaling test host. |
 | `just build-component` | the `echo-demo` guest or its WIT. |
+| `just build-wasip3-cli` / `just demo-wasip3-cli` | the `wasip3-cli` component or the `GuestPeer` driver in `wasip3-impl` (`demo-` also runs it under `wasmtime`). |
 | `just transpile` | anything affecting the component's interfaces, or the `jco transpile` flags / `--map` targets in `jco-impl`. |
 | `just test-browser` | the browser host (`jco-impl`, e.g. `webrtc.js`) or the component it runs. |
 | `just check` | broad Rust/WIT changes — the quick gate for most commits. |
@@ -225,18 +236,26 @@ possible: it compiles for `wasm32-wasip2` (the fork stubs `ifaces()` to return
 `Unsupported` on wasm and bumps `rtc-mdns`'s `socket2` to 0.6). The `rtc`
 dependency is pinned once at the workspace level in the root `Cargo.toml`.
 
-[`wasip3-impl/`](wasip3-impl) is the first step down that path:
+[`wasip3-impl/`](wasip3-impl) walks down that path with one core and two drivers:
 
 - `SansIoPeer` is the runtime-agnostic core — it wraps an `rtc`
   `RTCPeerConnection` and exposes signaling primitives plus the six sans-I/O
   stepping calls (`poll_transmit` / `handle_input` / `poll_timeout` /
   `handle_timeout` + drained events), performing no I/O itself.
-- `NativePeer` is a **host-side** Tokio UDP reference driver. The loop lives
-  host-side for now because that is what is CI-testable: `tests/interop.rs`
-  stands up a `webrtc-rs` offerer and the sans-I/O answerer in one process and
-  round-trips a data channel over real DTLS + SCTP.
+- `NativePeer` (default `native` feature) is a **host-side** Tokio UDP reference
+  driver. It is the CI-testable interop proof: `tests/interop.rs` stands up a
+  `webrtc-rs` offerer and the sans-I/O answerer in one process and round-trips a
+  data channel over real DTLS + SCTP.
+- `GuestPeer` (`guest` feature) is the **in-guest** driver: it feeds the same
+  `SansIoPeer` from WASIp3 `wasi:sockets` UDP and `wasi:clocks` timers instead
+  of Tokio, exposing a cooperative `flush`/`drain_events`/`wait` pump (the
+  component-model async model is single-threaded, with no cross-thread `spawn`).
+  [`examples/wasip3-cli`](examples/wasip3-cli) drives two of them — an offerer
+  and an answerer over UDP loopback — entirely inside one `wasi:cli@0.3`
+  component, runnable with `wasmtime run` (`just demo-wasip3-cli`).
 
 Because the sans-I/O model has no OS interface enumeration, host candidates are
 supplied explicitly by the driver (`add_local_host_candidate`) rather than
-gathered from mDNS. The natural next step is a **guest** driver that feeds the
-same `SansIoPeer` from `wasi:sockets`/timers instead of Tokio.
+gathered from mDNS. The remaining step is a guest driver over real (non-loopback)
+`wasi:sockets` paired with the `rendezvous` signaling above, so two separate
+components can connect across a network.
