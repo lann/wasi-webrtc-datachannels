@@ -20,7 +20,10 @@ use tokio::sync::{mpsc, oneshot};
 use crate::peer::{PeerEvent, SansIoPeer};
 
 /// The safety-net wake interval, so the loop re-checks timers even if the stack
-/// reports no deadline.
+/// reports no deadline. A short fixed cap bounds how long the loop can sleep
+/// when [`SansIoPeer::poll_timeout`] returns `None`, ensuring retransmit and
+/// keep-alive timers still fire promptly; 50ms trades negligible idle wakeups
+/// for low latency.
 const MAX_WAIT: Duration = Duration::from_millis(50);
 
 /// An inbound data-channel message surfaced by [`NativePeer`].
@@ -191,7 +194,7 @@ async fn drive(
             },
             received = socket.recv_from(&mut buf) => {
                 if let Ok((n, from)) = received {
-                    let local = socket.local_addr().expect("bound socket has a local address");
+                    let local = socket.local_addr().expect("bound socket must have a local address (internal invariant)");
                     peer.handle_input(&buf[..n], from, local, Instant::now());
                 }
             }

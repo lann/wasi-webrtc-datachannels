@@ -73,8 +73,9 @@ pub struct SansIoPeer {
 }
 
 impl SansIoPeer {
-    /// Create an **answerer**: a peer with no local data channel, expected to
-    /// receive an offer and produce an answer.
+    /// Create an **answerer**: a peer that begins with no data channels and is
+    /// expected to receive an offer, adopt the remote-created channel via
+    /// negotiation, and produce an answer.
     pub fn answerer() -> Result<Self> {
         Ok(Self { pc: build_pc()? })
     }
