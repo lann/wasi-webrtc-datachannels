@@ -341,7 +341,7 @@ the reviewer directs otherwise.
   running Job 1 with no targets enabled.
 - **Done when:** runner passes on an empty test set in CI; schemas documented.
 
-### Phase 1 — Signaling server + protocol
+### Phase 1 — Signaling server + protocol (**COMPLETED**)
 - Write `conformance/signaling/PROTOCOL.md`; implement `conformance-signalingd`
   (suggested: axum or hyper; workspace member).
 - Integration tests: publish/fetch ordering, long-poll wakeup, seq idempotence
