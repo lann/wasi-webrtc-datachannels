@@ -194,7 +194,10 @@ impl mailbox::HostSessionWithStore<Ctx> for Ctx {
         })
     }
 
-    async fn drop(accessor: &Accessor<Ctx, Ctx>, rep: Resource<MailboxSession>) -> wasmtime::Result<()> {
+    async fn drop(
+        accessor: &Accessor<Ctx, Ctx>,
+        rep: Resource<MailboxSession>,
+    ) -> wasmtime::Result<()> {
         accessor.with(|mut access| {
             access.get().table.delete(rep)?;
             Ok(())
@@ -293,8 +296,12 @@ fn plan_for(test_id: &str) -> Plan {
         | "peer-close-releases"
         | "peer-invalid-sdp"
         | "error-invalid-signaling" => Plan::InProcess,
-        "send-via-stream" | "receive-via-stream" | "receive-via-stream-once" | "post-close-send"
-        | "error-closed" | "error-timed-out" => Plan::Skip,
+        "send-via-stream"
+        | "receive-via-stream"
+        | "receive-via-stream-once"
+        | "post-close-send"
+        | "error-closed"
+        | "error-timed-out" => Plan::Skip,
         _ => Plan::TwoPeer,
     }
 }
@@ -303,7 +310,10 @@ fn plan_for(test_id: &str) -> Plan {
 fn params_for(test_id: &str) -> (u32, u32) {
     match test_id {
         "large-message" => (1, 16384),
-        "message-boundaries" | "ordering" | "payload-integrity" | "concurrent-send-receive"
+        "message-boundaries"
+        | "ordering"
+        | "payload-integrity"
+        | "concurrent-send-receive"
         | "interop-handshake" => (16, 512),
         _ => (4, 256),
     }
@@ -476,7 +486,11 @@ async fn run_test(
     let mut last_detail = None;
 
     for _ in 0..MAX_ATTEMPTS {
-        let room = format!("conf-{}-{}", test_id, room_seq.fetch_add(1, Ordering::SeqCst));
+        let room = format!(
+            "conf-{}-{}",
+            test_id,
+            room_seq.fetch_add(1, Ordering::SeqCst)
+        );
         let attempt = async {
             match plan_for(test_id) {
                 Plan::TwoPeer => {
