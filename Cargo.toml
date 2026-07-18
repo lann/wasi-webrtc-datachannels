@@ -10,8 +10,6 @@ members = [
 resolver = "2"
 
 # Pin the sans-I/O WebRTC stack once, here, so every member (and any future wasm
-# build) resolves the exact same source: the `lann/rtc` `wasi` fork, which adds a
-# wasm `ifaces()` stub and a socket2 0.6 bump so `rtc` compiles for
-# `wasm32-wasip2`. Pinned by commit for reproducibility.
+# build) resolves the same published 0.20 release-candidate source.
 [workspace.dependencies]
-rtc = { git = "https://github.com/lann/rtc.git", rev = "cefbb625d1ebc1ed2637c904a829baf6dc577769" }
+rtc = "0.20.0-rc.3"

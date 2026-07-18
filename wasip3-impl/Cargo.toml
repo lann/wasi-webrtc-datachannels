@@ -3,7 +3,7 @@ name = "wasip3-webrtc-datachannels"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Sans-I/O WebRTC data-channel peer built on the wasm-capable `rtc` fork, with a native UDP reference driver."
+description = "Sans-I/O WebRTC data-channel peer built on rtc 0.20, with a native UDP reference driver."
 
 [features]
 # `native` pulls in the Tokio-based reference driver (`NativePeer`). It is on by
@@ -18,8 +18,8 @@ native = ["dep:tokio"]
 guest = ["dep:wasip3", "dep:futures"]
 
 [dependencies]
-# The sans-I/O WebRTC stack. Pinned, via the workspace, to the `lann/rtc` `wasi`
-# fork so a single source resolves for both native and (future) wasm builds.
+# The sans-I/O WebRTC stack, pinned via the workspace so a single source
+# resolves for both native and (future) wasm builds.
 rtc.workspace = true
 anyhow = "1"
 bytes = "1"

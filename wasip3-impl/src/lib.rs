@@ -1,12 +1,11 @@
-//! A sans-I/O WebRTC data-channel peer built on the wasm-capable
-//! [`lann/rtc`](https://github.com/lann/rtc/tree/wasi) fork, with a native UDP
-//! reference driver.
+//! A sans-I/O WebRTC data-channel peer built on `rtc` 0.20 release candidates,
+//! with a native UDP reference driver.
 //!
 //! This crate is the third stack alongside the `wasmtime-impl` (webrtc-rs) and
 //! `jco-impl` (browser) hosts: instead of the fully async `webrtc-rs` engine, it
 //! drives the *sans-I/O* `rtc` stack, where protocol logic is separated from
 //! I/O. That separation is what lets the same peer run in a wasm guest over
-//! `wasi:sockets` — the direction the `rtc` `wasi` fork unblocks.
+//! `wasi:sockets`.
 //!
 //! Two layers:
 //!

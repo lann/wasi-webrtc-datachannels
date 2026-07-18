@@ -28,7 +28,7 @@ genuine WebRTC/SCTP data channel.
 | [`examples/wasmtime-demo`](examples/wasmtime-demo) | The **native Rust host** (Wasmtime + webrtc-rs): demo binaries built on `wasmtime-impl`. |
 | [`examples/cli-signaling`](examples/cli-signaling) | The **manual-signaling CLI guest component** (Rust). |
 | [`examples/wasip3-cli`](examples/wasip3-cli) | A **self-contained WASIp3 CLI component** that runs the whole sans-I/O WebRTC stack *in-guest*, driving `wasip3-impl` over `wasi:sockets` UDP. Connects an offerer and answerer over loopback and exchanges a message — runnable with `wasmtime run`. |
-| [`wasip3-impl`](wasip3-impl) | A **sans-I/O crate** built on the wasm-capable [`lann/rtc`](https://github.com/lann/rtc/tree/wasi) fork. Its `SansIoPeer` core is driven by two interchangeable drivers: a native Tokio UDP reference driver (`NativePeer`, proving interop with `webrtc-rs` over real DTLS + SCTP) and a wasm `wasi:sockets`/timer driver (`GuestPeer`, used by `examples/wasip3-cli`). Crate name: `wasip3-webrtc-datachannels`. |
+| [`wasip3-impl`](wasip3-impl) | A **sans-I/O crate** built on `rtc` 0.20 release candidates. Its `SansIoPeer` core is driven by two interchangeable drivers: a native Tokio UDP reference driver (`NativePeer`, proving interop with `webrtc-rs` over real DTLS + SCTP) and a wasm `wasi:sockets`/timer driver (`GuestPeer`, used by `examples/wasip3-cli`). Crate name: `wasip3-webrtc-datachannels`. |
 | [`AGENTS.md`](AGENTS.md) | Orientation for agents/contributors, linking the `lann/wasm-component-starter` knowledge base. |
 
 ## The interface

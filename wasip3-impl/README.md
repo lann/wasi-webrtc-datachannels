@@ -1,7 +1,7 @@
 # wasip3-impl (`wasip3-webrtc-datachannels`)
 
-A **sans-I/O** WebRTC data-channel peer built on the wasm-capable
-[`lann/rtc`](https://github.com/lann/rtc/tree/wasi) fork, with two interchangeable
+A **sans-I/O** WebRTC data-channel peer built on `rtc` 0.20 release candidates,
+with two interchangeable
 drivers: a native UDP reference driver that proves it interoperates with the
 repo's `webrtc-rs` stack over a real DTLS + SCTP data channel, and a WASIp3
 `wasi:sockets` driver that runs the same core *inside a wasm guest*.
@@ -10,8 +10,7 @@ This is the third stack alongside the [`wasmtime-impl`](../wasmtime-impl)
 (webrtc-rs) and [`jco-impl`](../jco-impl) (browser) hosts. Instead of the fully
 async `webrtc-rs` engine, it drives the *sans-I/O* `rtc` stack, where protocol
 logic is separated from I/O. That separation is what lets the same peer run
-inside a wasm guest over `wasi:sockets` — the direction the `rtc` `wasi` fork
-unblocks (see [`AGENTS.md`](../AGENTS.md)), realized by the
+inside a wasm guest over `wasi:sockets`, realized by the
 [`examples/wasip3-cli`](../examples/wasip3-cli) component.
 
 ## Layers
@@ -52,9 +51,9 @@ below). `GuestPeer` moves the loop into a wasm guest — exercised end-to-end by
 `examples/wasip3-cli` under `wasmtime run` — validating that the same core runs
 over `wasi:sockets` with no changes.
 
-The sans-I/O model has no OS interface enumeration (the fork stubs `ifaces()` to
-return `Unsupported` on wasm), so host candidates are supplied **explicitly** by
-the driver via `add_local_host_candidate` rather than gathered from mDNS.
+The sans-I/O model has no OS interface enumeration on wasm, so host candidates
+are supplied **explicitly** by the driver via `add_local_host_candidate` rather
+than gathered from mDNS.
 
 ## Test
 
@@ -68,6 +67,5 @@ of the workspace `just test`.
 
 ## Dependency pin
 
-`rtc` is pinned once, at the workspace level in the root `Cargo.toml`, to the
-`lann/rtc` `wasi` fork by commit, so native and (future) wasm builds resolve the
-same source.
+`rtc` is pinned once, at the workspace level in the root `Cargo.toml`, to
+`0.20.0-rc.3`, so native and (future) wasm builds resolve the same source.
