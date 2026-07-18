@@ -331,7 +331,7 @@ manifests, an updated matrix artifact, and a reviewer checklist in the PR
 description. Do not start a phase until the previous phase's PR is merged or
 the reviewer directs otherwise.
 
-### Phase 0 — Scaffolding & registry
+### Phase 0 — Scaffolding & registry (**COMPLETED**)
 - Create the `conformance/` layout above; `README.md` (how to run; matrix
   interpretation); `tests.toml` schema (id, tags, description) and manifest
   schema; `conformance-runner` skeleton that parses both, aggregates stub
@@ -341,7 +341,7 @@ the reviewer directs otherwise.
   running Job 1 with no targets enabled.
 - **Done when:** runner passes on an empty test set in CI; schemas documented.
 
-### Phase 1 — Signaling server + protocol
+### Phase 1 — Signaling server + protocol (**COMPLETED**)
 - Write `conformance/signaling/PROTOCOL.md`; implement `conformance-signalingd`
   (suggested: axum or hyper; workspace member).
 - Integration tests: publish/fetch ordering, long-poll wakeup, seq idempotence

@@ -6,6 +6,8 @@ members = [
     "examples/echo-demo",
     "examples/cli-signaling",
     "examples/webrtc-consumer",
+    "conformance/runner",
+    "conformance/signaling/server",
 ]
 resolver = "2"
 

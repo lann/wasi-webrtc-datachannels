@@ -1,0 +1,26 @@
+[package]
+name = "conformance-signalingd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Suite-owned HTTP mailbox signaling server for the conformance suite. Relays opaque SDP/ICE blobs between two peers (offerer/answerer) with sequence-numbered, long-polling, idempotent reads. Test-only; see conformance/signaling/PROTOCOL.md."
+
+[lib]
+name = "conformance_signalingd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "conformance-signalingd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+bytes = "1"
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
