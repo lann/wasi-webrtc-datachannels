@@ -30,8 +30,8 @@ use crate::bindings::webrtc_datachannels::types::{
     SessionDescription, StreamMessage,
 };
 use crate::{
-    ChannelError, DataChannel, DataChannelOptions, InboundMessage, PeerConnection, SdpKind,
-    WaitError, WasiWebrtc, WasiWebrtcCtxView, WasiWebrtcView, WiredFuture,
+    ChannelError, DataChannel, DataChannelOptions, InboundMessage, PeerConnection, SdpError,
+    SdpKind, WaitError, WasiWebrtc, WasiWebrtcCtxView, WasiWebrtcView, WiredFuture,
 };
 
 use webrtc::data_channel::RTCDataChannel;
@@ -485,6 +485,14 @@ fn to_sdp_kind(kind: SdpType) -> std::result::Result<SdpKind, Error> {
     }
 }
 
+/// Map a host [`SdpError`] onto the WIT `error` variant.
+fn from_sdp_error(err: SdpError) -> Error {
+    match err {
+        SdpError::InvalidSignaling(detail) => Error::InvalidSignaling(detail),
+        SdpError::Other(detail) => Error::Other(detail),
+    }
+}
+
 impl HostPeerConnection for WasiWebrtcCtxView<'_> {
     fn new(&mut self) -> Result<Resource<PeerConnection>> {
         let hook = self.ctx.setting_engine_hook();
@@ -666,7 +674,7 @@ impl<T: WasiWebrtcView + 'static> HostPeerConnectionWithStore<T> for WasiWebrtc 
         Ok(peer
             .set_local_description(kind, description.sdp)
             .await
-            .map_err(Error::Other))
+            .map_err(from_sdp_error))
     }
 
     async fn set_remote_description(
@@ -683,7 +691,7 @@ impl<T: WasiWebrtcView + 'static> HostPeerConnectionWithStore<T> for WasiWebrtc 
         Ok(peer
             .set_remote_description(kind, description.sdp)
             .await
-            .map_err(Error::Other))
+            .map_err(from_sdp_error))
     }
 
     async fn add_ice_candidate(

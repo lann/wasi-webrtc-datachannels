@@ -1,0 +1,14 @@
+# Capability manifest for the `wasmtime` target (native Wasmtime host over
+# webrtc-rs; adapter: conformance/adapters/wasmtime).
+#
+# Tests the conformance guest itself reports `skipped` (the streaming forms and
+# the remaining error-taxonomy probes) need no entries here: a raw `skip` is
+# classified `skip-unsupported` without manifest involvement.
+
+[target]
+id = "wasmtime"
+
+[[expected-fail]]
+test = "zero-length-message"
+reason = "webrtc-rs's read_loop treats a zero-byte read as EOF and closes the channel, so a received empty message tears the channel down instead of surfacing it."
+tracking = "TODO.md item B6"

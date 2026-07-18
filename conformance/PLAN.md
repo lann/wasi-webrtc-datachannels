@@ -351,7 +351,7 @@ the reviewer directs otherwise.
 - **Done when:** `cargo nextest run -p conformance-signalingd` green in CI;
   runner can start/stop a server.
 
-### Phase 2 — Signaling WIT + conformance guest + wasmtime adapter
+### Phase 2 — Signaling WIT + conformance guest + wasmtime adapter (**COMPLETED**)
 - Define `conformance:signaling/mailbox` and the conformance-suite world under
   `conformance/wit/` (deps symlink to root `wit/`; add to `just validate-wit`).
 - Implement the conformance guest with the data-channel corpus and the

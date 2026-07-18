@@ -72,6 +72,15 @@ pub struct LocalCandidate {
     pub sdp_mline_index: Option<u16>,
 }
 
+/// Why applying a session description failed.
+#[derive(Clone, Debug)]
+pub enum SdpError {
+    /// The SDP could not be parsed or was otherwise not valid signaling.
+    InvalidSignaling(String),
+    /// Applying the description failed for an implementation-specific reason.
+    Other(String),
+}
+
 /// Why [`PeerConnection::wait_connected`] gave up.
 #[derive(Clone, Debug)]
 pub enum WaitError {
@@ -268,21 +277,21 @@ impl PeerConnection {
 
     /// Apply a local description, starting ICE gathering (and, in turn, the
     /// trickled `local-ice-candidates`).
-    pub async fn set_local_description(&self, kind: SdpKind, sdp: String) -> Result<(), String> {
-        let pc = self.pc().await?;
+    pub async fn set_local_description(&self, kind: SdpKind, sdp: String) -> Result<(), SdpError> {
+        let pc = self.pc().await.map_err(SdpError::Other)?;
         let desc = to_rtc_description(kind, sdp)?;
         pc.set_local_description(desc)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| SdpError::Other(err.to_string()))
     }
 
     /// Apply the remote peer's description.
-    pub async fn set_remote_description(&self, kind: SdpKind, sdp: String) -> Result<(), String> {
-        let pc = self.pc().await?;
+    pub async fn set_remote_description(&self, kind: SdpKind, sdp: String) -> Result<(), SdpError> {
+        let pc = self.pc().await.map_err(SdpError::Other)?;
         let desc = to_rtc_description(kind, sdp)?;
         pc.set_remote_description(desc)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(|err| SdpError::Other(err.to_string()))
     }
 
     /// Add an ICE candidate received from the remote peer.
@@ -399,21 +408,34 @@ fn register_handlers(
     }));
 }
 
-/// Attach message/open handlers to `channel` and fulfill `wire_tx` once the
-/// channel is open, so a [`DataChannel`]'s async methods can await its
-/// transport parts.
+/// Attach message/open/close handlers to `channel` and fulfill `wire_tx` once
+/// the channel is open, so a [`DataChannel`]'s async methods can await its
+/// transport parts. The close handler drops the inbound sender so pending and
+/// later `receive` calls observe `closed` instead of waiting forever.
 fn install_wiring(
     channel: &Arc<RTCDataChannel>,
     wire_tx: oneshot::Sender<Result<Wired, ChannelError>>,
 ) {
     let (in_tx, in_rx) = mpsc::unbounded::<InboundMessage>();
-    channel.on_message(Box::new(move |message: DataChannelMessage| {
+    let in_tx = Arc::new(Mutex::new(Some(in_tx)));
+    {
+        let in_tx = in_tx.clone();
+        channel.on_message(Box::new(move |message: DataChannelMessage| {
+            let in_tx = in_tx.clone();
+            Box::pin(async move {
+                if let Some(tx) = in_tx.lock().unwrap().as_ref() {
+                    let _ = tx.unbounded_send(InboundMessage {
+                        is_string: message.is_string,
+                        data: message.data.to_vec(),
+                    });
+                }
+            })
+        }));
+    }
+    channel.on_close(Box::new(move || {
         let in_tx = in_tx.clone();
         Box::pin(async move {
-            let _ = in_tx.unbounded_send(InboundMessage {
-                is_string: message.is_string,
-                data: message.data.to_vec(),
-            });
+            in_tx.lock().unwrap().take();
         })
     }));
 
@@ -451,11 +473,12 @@ fn wired_from_channel(channel: &Arc<RTCDataChannel>) -> WiredFuture {
 }
 
 /// Build a `webrtc-rs` session description from a [`SdpKind`] and SDP string.
-fn to_rtc_description(kind: SdpKind, sdp: String) -> Result<RTCSessionDescription, String> {
+/// A description that fails to parse is invalid signaling.
+fn to_rtc_description(kind: SdpKind, sdp: String) -> Result<RTCSessionDescription, SdpError> {
     let result = match kind {
         SdpKind::Offer => RTCSessionDescription::offer(sdp),
         SdpKind::Answer => RTCSessionDescription::answer(sdp),
         SdpKind::Pranswer => RTCSessionDescription::pranswer(sdp),
     };
-    result.map_err(|err| err.to_string())
+    result.map_err(|err| SdpError::InvalidSignaling(err.to_string()))
 }
