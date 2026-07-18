@@ -5,7 +5,7 @@ members = [
     "examples/wasmtime-demo",
     "examples/echo-demo",
     "examples/cli-signaling",
-    "examples/wasip3-cli",
+    "examples/webrtc-consumer",
 ]
 resolver = "2"
 

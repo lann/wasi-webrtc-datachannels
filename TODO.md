@@ -19,31 +19,20 @@ has since been rewritten. It was stale and is fully replaced here.
 
 ## A. Strategic / whole-project
 
-### A1. Only two of the three stacks actually implement the shared WIT
-
-The headline promise is "one component, many implementations." Today only
-`wasmtime-impl` (Rust host) and `jco-impl` (JS host) implement
-`lann:webrtc-datachannels`; the `echo-demo` component runs unchanged against
-both — that part works. But `wasip3-impl` does **not** implement the package at
-all: it is a standalone sans-I/O `rtc` experiment with its own Rust API, and
-`examples/wasip3-cli` exports `wasi:cli/run`, not any project interface (no file
-under `wasip3-impl/` references `lann:webrtc-datachannels`,
-`connections`, or `peer-connection`). So "third implementation" is currently
-aspirational. To make it real, `wasip3-impl` (or a new crate) needs to expose
-the `connections.data-channel` / `peer-connection` resources to a guest — the
-natural convergence point with items A2 and E.
-
-### A2. The guest-driven `peer-connection` path is unimplemented and untested everywhere
+### A2. The guest-driven `peer-connection` path is unimplemented in the two host stacks
 
 `connections.peer-connection` (`wit/webrtc.wit:197-225`) is the design target for
-guest-driven connection setup, but **both** hosts trap on every one of its
-methods (`wasmtime-impl/src/host.rs:411-495` returns
+guest-driven connection setup. The `wasip3-impl` **component** now implements the
+whole `connections` surface — including `peer-connection` (offer/answer +
+trickle-ICE) — driven in-guest over `wasi:sockets`, and is exercised by the
+composed `examples/webrtc-consumer` round-trip integration test
+(`just test-webrtc-composed`). But **both hosts** still trap on every
+`peer-connection` method (`wasmtime-impl/src/host.rs:411-495` returns
 `peer_connection_unsupported()`; `jco-impl/webrtc.js` implements only `openEcho`
-+ `DataChannel`). The only working path in the whole repo is the `connect`
-convenience shortcut, where the host builds *both* peers internally. Until a
-host implements `peer-connection` with an offer/answer + trickle-ICE integration
-test between two in-process peers, the interface is unproven and its open design
-questions (item C1) cannot be settled.
++ `DataChannel`). The only working host path is the `connect` convenience
+shortcut, where the host builds *both* peers internally. Implement
+`peer-connection` in at least one of the two hosts so the interface is proven
+host-side too, and settle its open design questions (item C1).
 
 ### A3. No cross-host conformance is executed; the suite is a plan only
 
@@ -198,17 +187,25 @@ a dev-dependency by the test and by the demo binary).
 
 ### E3. `wasip3-impl` limitations to document or lift
 
-- `NativePeer` / `GuestPeer` track a single "primary" data channel and ignore
-  any second channel (`wasip3-impl/src/native.rs`, `.../guest.rs`). Document
-  this as a known limit or support multiple channels via a channel-id map.
-- `NativePeer` drives only the answerer role (the offerer core
-  `SansIoPeer::offerer` exists but has no native driver); `GuestPeer` drives
-  both, which is why `examples/wasip3-cli` can do a loopback offerer+answerer.
-  Note the asymmetry.
-- The `rtc` dependency is pinned to a git fork commit
-  (`Cargo.toml`, `github.com/lann/rtc` `wasi` branch). Reproducible, but a
-  private fork on the critical path — track upstreaming the wasm `ifaces()` stub
-  and `socket2 0.6` bump, or vendor it.
+- The exported `peer-connection` binds its socket on IPv4 loopback
+  (`wasip3-impl/src/provider.rs`), so it only connects peers on the **same host**
+  (which is what the composed integration test needs). Real (non-loopback)
+  networking needs a way for the consumer to choose the bind address and a
+  routable host candidate.
+- `receive` / `wait-connected` / `incoming-data-channels` poll the shared state
+  on a fixed `POLL_NANOS` interval rather than waking on a condition. Adequate,
+  but a condition/notify primitive would remove the idle wakeups.
+- The in-guest handshake occasionally stalls: both peers reach a state where the
+  sans-I/O core reports no pending timer (`poll_timeout` returns `None`) and no
+  transmit, each waiting on the other, so `wait-connected` surfaces
+  `error::timed-out` (bounded by `CONNECT_TIMEOUT`). This is an upstream `rtc`
+  sans-I/O timing issue; `examples/webrtc-consumer` retries a bounded number of
+  fresh attempts to keep the integration test reliable. Root-cause and fix in the
+  fork (or its driving contract) to make a single attempt deterministic.
+- The `rtc` dependency is pinned to a `0.20` release candidate
+  (`Cargo.toml`, `rtc = "0.20.0-rc.3"`). Published on crates.io, but a
+  pre-release on the critical path — track moving to a stable `0.20` once it
+  ships.
 
 ## F. Examples
 
@@ -246,15 +243,16 @@ relays SDP/ICE over `wasi:http@0.3` (Wasmtime) / `fetch` (jco) through a trivial
 local mailbox server. This would exercise nearly every interface at once and
 could replace the `connect` shortcut as the reference example.
 
-### F4. Drive the sans-I/O `rtc` stack from a guest that speaks the project WIT (tracking)
+### F4. Drive the sans-I/O `rtc` stack across a real network (tracking)
 
-`wasip3-impl` already proves the wasm-capable `lann/rtc` fork interoperates with
-`webrtc-rs` over real DTLS+SCTP, and `examples/wasip3-cli` runs the whole stack
-in-guest over `wasi:sockets` loopback. The remaining step (and the payoff for
-item A1) is a guest driver over real (non-loopback) `wasi:sockets` that exposes
-the `connections` resources and, combined with `rendezvous` (item F3), lets two
-separate components connect across a network. Host-candidate gathering must stay
-explicit (`ifaces()` is `Unsupported` on wasm).
+`wasip3-impl` is now a **component** that runs the sans-I/O `rtc` stack
+in-guest and exports the project `connections` interface, composed (`wac plug`)
+with `examples/webrtc-consumer` for the same-host round-trip integration test.
+The remaining step is real (non-loopback) networking: let the consumer choose
+the bind address and produce a routable host candidate, then, combined with
+`rendezvous` (item F3), let two separate components connect across a network.
+Host-candidate gathering must stay explicit (`ifaces()` is `Unsupported` on
+wasm).
 
 ## G. Development environment / CI
 
@@ -265,14 +263,6 @@ Any interface/method rename must be mirrored by hand in the
 `jco-impl/package.json:9` (AGENTS.md documents this), but nothing verifies it —
 a mismatch fails only at transpile or runtime. Add a CI check (or generate the
 flags from the WIT) so a drifted rename fails fast with a clear message.
-
-### G2. `wasip3-cli` is only lint-checked in CI, never built or run
-
-`just clippy` covers `wasip3-cli` (`justfile:21`) but neither `just ci` nor
-`.github/workflows/ci.yml` builds (`just build-wasip3-cli`) or runs
-(`just demo-wasip3-cli`) it, so a break in the in-guest demo (or the `GuestPeer`
-driver) ships silently. Add at least a `build-wasip3-cli` step to CI; run
-`demo-wasip3-cli` if a `wasmtime` v46+ is available on the runner.
 
 ### G3. The jco Node host path is never exercised in CI
 
@@ -290,10 +280,11 @@ build).
    conformance guest across both hosts (A3), which also pins the error taxonomy
    (D1) and streaming parity (E1).
 3. Interface-stabilizing decisions (C1, C2) and the crate-level error type (D2).
-4. Strategic build-out: implement `peer-connection` (A2), wire `rendezvous`
-   (F3), and give `wasip3` a WIT-speaking guest (A1/F4).
+4. Strategic build-out: implement `peer-connection` host-side (A2), wire
+   `rendezvous` (F3), and take `wasip3`'s WIT-speaking component to a real
+   network (F4).
 5. Cheap hygiene: de-duplicate the manual host (E2), delete or build the dead
-   `browser-signaling` surface (F2), add the CI gaps (G1–G3), document the
+   `browser-signaling` surface (F2), add the CI gaps (G1, G3), document the
    `wasip3` limits (E3).
 
 ## Fixed opportunistically in this change

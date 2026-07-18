@@ -1,0 +1,19 @@
+[package]
+name = "webrtc-consumer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The async `wasi:cli/run` export plus `wasi:cli@0.3` stdio for progress output.
+# A synchronous `run` cannot await the async `connections` imports, so this is a
+# `cdylib` exporting an async `run` (see the starter's OUTLINE.md).
+wasip3 = { version = "0.7", features = ["async-spawn"] }
+# The `connections` import bindings. Composed away by `wac plug` against the
+# provider; until then it is an unsatisfied import.
+wit-bindgen = { version = "0.57", features = ["async", "async-spawn"] }
+futures = { version = "0.3", default-features = false, features = ["async-await", "std"] }
+anyhow = "1"

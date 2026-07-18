@@ -27,8 +27,8 @@ genuine WebRTC/SCTP data channel.
 | [`jco-impl`](jco-impl) | The **browser-first host** (Node stand-in for the browser, jco + @roamhq/wrtc). |
 | [`examples/wasmtime-demo`](examples/wasmtime-demo) | The **native Rust host** (Wasmtime + webrtc-rs): demo binaries built on `wasmtime-impl`. |
 | [`examples/cli-signaling`](examples/cli-signaling) | The **manual-signaling CLI guest component** (Rust). |
-| [`examples/wasip3-cli`](examples/wasip3-cli) | A **self-contained WASIp3 CLI component** that runs the whole sans-I/O WebRTC stack *in-guest*, driving `wasip3-impl` over `wasi:sockets` UDP. Connects an offerer and answerer over loopback and exchanges a message — runnable with `wasmtime run`. |
-| [`wasip3-impl`](wasip3-impl) | A **sans-I/O crate** built on `rtc` 0.20 release candidates. Its `SansIoPeer` core is driven by two interchangeable drivers: a native Tokio UDP reference driver (`NativePeer`, proving interop with `webrtc-rs` over real DTLS + SCTP) and a wasm `wasi:sockets`/timer driver (`GuestPeer`, used by `examples/wasip3-cli`). Crate name: `wasip3-webrtc-datachannels`. |
+| [`examples/webrtc-consumer`](examples/webrtc-consumer) | A **minimal consumer component** that imports `connections`. Composed (`wac plug`) with `wasip3-impl` for the in-guest round-trip integration test (`just test-webrtc-composed`). |
+| [`wasip3-impl`](wasip3-impl) | The **third implementation**: a wasm **component** (built for `wasm32-wasip2`) that runs the sans-I/O `rtc` 0.20 WebRTC stack *in-guest* — importing only `wasi:sockets`/`wasi:clocks` — and **exports** `lann:webrtc-datachannels/connections`. Its `SansIoPeer` core is driven over `wasi:sockets` UDP and WASI timers by an in-guest runtime pump. Composable via `wac plug`. Crate name: `wasip3-webrtc-datachannels`. |
 | [`AGENTS.md`](AGENTS.md) | Orientation for agents/contributors, linking the `lann/wasm-component-starter` knowledge base. |
 
 ## The interface

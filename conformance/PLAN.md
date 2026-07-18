@@ -43,7 +43,7 @@ divergences that TODO items track (e.g. error taxonomy), those become
 | `wasmtime` | Native Wasmtime host over webrtc-rs | `wasmtime-impl/` (+ `examples/wasmtime-demo/`) |
 | `jco-node` | Node host (jco transpile + `@roamhq/wrtc`) | `jco-impl/` |
 | `jco-browser` | Headless Chrome running the same transpiled component + `webrtc.js` | `jco-impl/test/browser.mjs` pattern |
-| `wasip3-guest` | In-guest sans-I/O stack (`wasip3-impl` `GuestPeer` over `wasi:sockets`) run under `wasmtime` | `wasip3-impl/`, `examples/wasip3-cli/` |
+| `wasip3-guest` | In-guest sans-I/O stack: `wasip3-impl` is itself a component that exports `connections` (driven over `wasi:sockets`), composed with the conformance guest and run under `wasmtime` | `wasip3-impl/`, `examples/webrtc-consumer/` |
 
 `jco-node` and `jco-browser` are separate targets: they share `webrtc.js` but
 diverge in ICE behavior (Chrome requires the fake-media/localhost secure
@@ -161,8 +161,9 @@ adapters report raw pass/fail/skip and the runner reclassifies.
   `jco-impl/webrtc.js` + a new `signaling.js` (fetch-based mailbox client)
   mapped via `--map`; a browser mode extending the `browser.mjs` pattern
   (headless Chrome 137+, fake-media permission, localhost secure context).
-- **`adapters/wasip3`** — a wasm component wiring `wasip3-impl`'s `GuestPeer`
-  to the `connections` surface plus an in-guest `wasi:http` mailbox client,
+- **`adapters/wasip3`** — the conformance guest composed (`wac plug`) with the
+  `wasip3-impl` provider component (which already exports `connections`, driven
+  in-guest over `wasi:sockets`) plus an in-guest `wasi:http` mailbox client,
   run via `wasmtime run -W component-model-async=y -S cli -S p3 -S http
   -S inherit-network`, results emitted on stdout.
 
@@ -376,12 +377,13 @@ the reviewer directs otherwise.
 - **Done when:** three target rows + the first interop rows green in CI Job 1.
 
 ### Phase 4 — wasip3-guest adapter
-- `adapters/wasip3`: component wiring `GuestPeer` to `connections` + in-guest
+- `adapters/wasip3`: the conformance guest composed (`wac plug`) with the
+  `wasip3-impl` provider (which exports `connections`) + an in-guest
   `wasi:http` mailbox client; runner invokes `wasmtime run` with the async/p3
   flags; results over stdout.
-- Manifest documents any partial surface (e.g. tags for features `GuestPeer`
-  cannot express yet; explicit host candidates only — `ifaces()` is
-  `Unsupported` on wasm).
+- Manifest documents any partial surface (e.g. tags for features the in-guest
+  provider cannot express yet; explicit host candidates only — `ifaces()` is
+  `Unsupported` on wasm; loopback bind address only).
 - Include in loopback scenarios and the interop matrix.
 - **Done when:** wasip3-guest row green in CI Job 1 with a manifest the
   reviewer has signed off.
