@@ -30,7 +30,8 @@ wit_bindgen::generate!({
 });
 
 use demo::webrtc_echo::manual_signaling::PeerConnection;
-use lann::webrtc_datachannels::types::{DataChannelOptions, Error, Message};
+use lann::webrtc_datachannels::connections::DataChannelOptions;
+use lann::webrtc_datachannels::types::{Error, Message};
 
 /// The label used for the negotiated data channel. Both peers observe it.
 const CHANNEL_LABEL: &str = "manual-signaling";
@@ -93,11 +94,9 @@ async fn drive(role: Role) -> Result<String, Error> {
 
     let channel = match role {
         Role::Offerer => {
-            let options = DataChannelOptions {
-                label: CHANNEL_LABEL.to_string(),
-                ordered: true,
-                max_retransmits: None,
-            };
+            let options = DataChannelOptions::new();
+            options.set_label(CHANNEL_LABEL);
+            options.set_ordered(true);
             let offer = pc.create_offer(options).await?;
             present("offer", &offer).await;
 

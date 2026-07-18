@@ -7,9 +7,11 @@
 //
 // `jco --map` wires this module in: the transpiled component does
 //   import { openEcho } from '.../connect'      -> openEcho here
-//   import { DataChannel } from '.../connections' -> DataChannel class here
+//   import { DataChannel, DataChannelOptions } from '.../connections'
+//                                               -> those classes here
 //
-// The component sees a channel already connected to an echo endpoint. Under the
+// The guest builds a `DataChannelOptions` (a configuration builder) and passes
+// it to `openEcho`. The component sees a channel already connected to an echo endpoint. Under the
 // hood `openEcho` performs a genuine SDP offer/answer + ICE handshake between
 // two peer connections and echoes every message on the far side, so a real
 // WebRTC/SCTP data channel carries the traffic.
@@ -85,8 +87,47 @@ export class DataChannel {
 }
 
 /**
+ * The `data-channel-options` resource: a configuration builder for a data
+ * channel, following the shape of `wasi:http`'s `request-options`. The guest
+ * constructs a default value, adjusts fields through the setters, and hands it
+ * to `openEcho`. Each field has a getter/setter accessor pair.
+ */
+export class DataChannelOptions {
+  #label = "";
+  #ordered = true;
+  #maxRetransmits = undefined;
+
+  /** The channel label. */
+  label() {
+    return this.#label;
+  }
+  /** @param {string} label */
+  setLabel(label) {
+    this.#label = label;
+  }
+
+  /** Whether messages are delivered in order. */
+  ordered() {
+    return this.#ordered;
+  }
+  /** @param {boolean} ordered */
+  setOrdered(ordered) {
+    this.#ordered = ordered;
+  }
+
+  /** The maximum number of retransmissions, or `undefined` for reliable delivery. */
+  maxRetransmits() {
+    return this.#maxRetransmits;
+  }
+  /** @param {number | undefined} maxRetransmits */
+  setMaxRetransmits(maxRetransmits) {
+    this.#maxRetransmits = maxRetransmits;
+  }
+}
+
+/**
  * Open a data channel connected to an internal echo endpoint.
- * @param {{ label: string, ordered: boolean, maxRetransmits?: number }} options
+ * @param {DataChannelOptions} options
  * @returns {Promise<DataChannel>}
  */
 export async function openEcho(options) {
@@ -103,11 +144,12 @@ export async function openEcho(options) {
     channel.onmessage = ({ data }) => channel.send(data);
   };
 
-  const init = { ordered: options.ordered };
-  if (options.maxRetransmits != null) {
-    init.maxRetransmits = options.maxRetransmits;
+  const init = { ordered: options.ordered() };
+  const maxRetransmits = options.maxRetransmits();
+  if (maxRetransmits != null) {
+    init.maxRetransmits = maxRetransmits;
   }
-  const channel = near.createDataChannel(options.label, init);
+  const channel = near.createDataChannel(options.label(), init);
   channel.binaryType = "arraybuffer";
 
   const incoming = incomingQueue(channel);

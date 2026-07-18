@@ -1,9 +1,9 @@
 //! Raw `bindgen!` output for the `lann:webrtc-datachannels` package.
 //!
-//! The crate implements the `types` interface and the `data-channel` resource
-//! of the `connections` interface. The `connections` interface also declares a
-//! `peer-connection` resource (the guest-driven connection design target); it
-//! is not
+//! The crate implements the `types` interface and, in the `connections`
+//! interface, the `data-channel-options` builder and the `data-channel`
+//! resource. The `connections` interface also declares a `peer-connection`
+//! resource (the guest-driven connection design target); it is not
 //! implemented here, so it is mapped to [`crate::UnsupportedPeerConnection`] and
 //! its host functions trap if a guest calls them. See [`crate`] for the public
 //! API built on top of these bindings.
@@ -40,8 +40,20 @@ mod generated {
             "lann:webrtc-datachannels/connections@0.1.0.[method]peer-connection.incoming-data-channels": store | trappable,
             "lann:webrtc-datachannels/connections@0.1.0.[method]peer-connection.local-ice-candidates": store | trappable,
             "lann:webrtc-datachannels/connections@0.1.0.[method]peer-connection.close": trappable,
+            // `data-channel-options` is a plain configuration builder: its
+            // constructor and every getter/setter are synchronous WIT
+            // functions, so they are bound synchronously (no `async`, no
+            // `store`).
+            "lann:webrtc-datachannels/connections@0.1.0.[constructor]data-channel-options": trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]data-channel-options.label": trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]data-channel-options.set-label": trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]data-channel-options.ordered": trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]data-channel-options.set-ordered": trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]data-channel-options.max-retransmits": trappable,
+            "lann:webrtc-datachannels/connections@0.1.0.[method]data-channel-options.set-max-retransmits": trappable,
         },
         with: {
+            "lann:webrtc-datachannels/connections.data-channel-options": crate::DataChannelOptions,
             "lann:webrtc-datachannels/connections.data-channel": crate::DataChannel,
             "lann:webrtc-datachannels/connections.peer-connection": crate::UnsupportedPeerConnection,
         },

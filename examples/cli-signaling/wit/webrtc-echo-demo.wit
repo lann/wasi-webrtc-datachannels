@@ -64,8 +64,8 @@ interface manual-demo {
 /// human copy/paste (for example base64) is the guest's concern; the demo
 /// components base64-encode these blobs before showing them to the user.
 interface manual-signaling {
-    use lann:webrtc-datachannels/types@0.1.0.{error, data-channel-options};
-    use lann:webrtc-datachannels/connections@0.1.0.{data-channel};
+    use lann:webrtc-datachannels/types@0.1.0.{error};
+    use lann:webrtc-datachannels/connections@0.1.0.{data-channel, data-channel-options};
 
     /// A peer connection driven with vanilla (non-trickle) ICE.
     ///

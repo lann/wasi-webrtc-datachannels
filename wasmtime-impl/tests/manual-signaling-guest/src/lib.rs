@@ -17,9 +17,8 @@ wit_bindgen::generate!({
 
 use demo::webrtc_echo::manual_signaling::PeerConnection;
 use exports::test::webrtc_manual_signaling::runner::{Guest, Report};
-use lann::webrtc_datachannels::types::{
-    DataChannelOptions, Error, Message, MessageKind, StreamMessage,
-};
+use lann::webrtc_datachannels::connections::DataChannelOptions;
+use lann::webrtc_datachannels::types::{Error, Message, MessageKind, StreamMessage};
 use wit_bindgen::spawn;
 
 const CHANNEL_LABEL: &str = "manual-signaling-test";
@@ -32,11 +31,9 @@ impl Guest for Component {
         let answerer = PeerConnection::new();
 
         // Vanilla offer/answer exchange, offerer -> answerer -> offerer.
-        let options = DataChannelOptions {
-            label: CHANNEL_LABEL.to_string(),
-            ordered: true,
-            max_retransmits: None,
-        };
+        let options = DataChannelOptions::new();
+        options.set_label(CHANNEL_LABEL);
+        options.set_ordered(true);
         let offer = offerer.create_offer(options).await?;
         let answer = answerer.create_answer(offer).await?;
         offerer.accept_answer(answer).await?;

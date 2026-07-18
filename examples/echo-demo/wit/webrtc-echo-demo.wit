@@ -12,8 +12,8 @@ package demo:webrtc-echo@0.1.0;
 /// signaling is involved. See `rendezvous` for the interface that would carry
 /// signaling between two *separate* peers (the "real signaling" path).
 interface connect {
-    use lann:webrtc-datachannels/types@0.1.0.{error, data-channel-options};
-    use lann:webrtc-datachannels/connections@0.1.0.{data-channel};
+    use lann:webrtc-datachannels/types@0.1.0.{error};
+    use lann:webrtc-datachannels/connections@0.1.0.{data-channel, data-channel-options};
 
     /// Open a data channel connected to a host-provided echo endpoint. Every
     /// message the guest sends is echoed back verbatim.

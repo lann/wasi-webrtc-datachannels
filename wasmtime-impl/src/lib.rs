@@ -17,9 +17,7 @@ pub mod bindings;
 mod data_channel;
 mod host;
 
-pub use data_channel::{
-    close_peer_connections, new_peer_connection, DataChannel, InboundMessage,
-};
+pub use data_channel::{close_peer_connections, new_peer_connection, DataChannel, InboundMessage};
 
 use std::sync::Arc;
 
@@ -119,6 +117,35 @@ pub struct WasiWebrtc;
 
 impl HasData for WasiWebrtc {
     type Data<'a> = WasiWebrtcCtxView<'a>;
+}
+
+/// Backing type for the `connections.data-channel-options` resource.
+///
+/// A plain configuration builder (mirroring `wasi:http`'s `request-options`):
+/// the guest constructs a default value through the imported constructor,
+/// adjusts the fields through the setters, then hands the resource to a
+/// data-channel-creating function such as `peer-connection.create-data-channel`
+/// or a demo `open-echo`/`create-offer`. The host that receives the resource
+/// reads these fields back to configure the `webrtc-rs` channel.
+#[derive(Clone, Debug)]
+pub struct DataChannelOptions {
+    /// The channel label. Both peers observe the same label.
+    pub label: String,
+    /// Whether messages are delivered in order.
+    pub ordered: bool,
+    /// The maximum number of retransmissions before a message is dropped, or
+    /// `None` for fully reliable delivery.
+    pub max_retransmits: Option<u16>,
+}
+
+impl Default for DataChannelOptions {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            ordered: true,
+            max_retransmits: None,
+        }
+    }
 }
 
 /// Backing type for the `connections.peer-connection` resource, which this

@@ -34,13 +34,16 @@ mod bindings {
             default: async,
         },
         with: {
+            "lann:webrtc-datachannels/connections.data-channel-options":
+                wasmtime_webrtc_datachannels::DataChannelOptions,
             "lann:webrtc-datachannels/connections.data-channel":
                 wasmtime_webrtc_datachannels::DataChannel,
         },
     });
 }
 
-use bindings::lann::webrtc_datachannels::types::{DataChannelOptions, Error};
+use bindings::lann::webrtc_datachannels::types::Error;
+use wasmtime_webrtc_datachannels::DataChannelOptions;
 
 struct Ctx {
     webrtc: WasiWebrtcCtx,
@@ -67,12 +70,17 @@ impl bindings::demo::webrtc_echo::connect::Host for Ctx {}
 impl<T> bindings::demo::webrtc_echo::connect::HostWithStore<T> for Ctx {
     async fn open_echo(
         accessor: &Accessor<T, Self>,
-        options: DataChannelOptions,
+        options: Resource<DataChannelOptions>,
     ) -> Result<std::result::Result<Resource<DataChannel>, Error>> {
         // The two echo peers live in this one process, so apply the store's
         // `SettingEngine` hook (e.g. loopback ICE candidates) to each of them.
-        let hook = accessor.with(|mut access| {
-            Ok::<_, wasmtime::Error>(access.get().webrtc.setting_engine_hook())
+        // Take the guest-provided options out of the table, consuming the
+        // owned resource handle.
+        let (options, hook) = accessor.with(|mut access| {
+            let ctx = access.get();
+            let options = ctx.table.delete(options)?;
+            let hook = ctx.webrtc.setting_engine_hook();
+            Ok::<_, wasmtime::Error>((options, hook))
         })?;
         let echo = match build_echo(
             &options.label,

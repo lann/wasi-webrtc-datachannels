@@ -43,7 +43,7 @@ wit/                                   # lann:webrtc-datachannels package
   webrtc.wit                           #   types (structural), connections (resources)
 wasmtime-impl/                         # Wasmtime host crate (webrtc-rs),
                                        #   modeled after wasmtime_wasi_http::p3;
-                                       #   add_to_linker + WasiWebrtcView (types + connections.data-channel);
+                                       #   add_to_linker + WasiWebrtcView (types + connections.data-channel-options/data-channel);
                                        #   crate name: wasmtime-webrtc-datachannels
 jco-impl/                              # browser-first host (Node + jco + @roamhq/wrtc)
 wasip3-impl/                           # sans-I/O crate on the wasm-capable
@@ -84,8 +84,9 @@ separate:
 
 - **`lann:webrtc-datachannels`** (`wit/webrtc.wit`) — the shared interfaces,
   split by ownership: `types` holds every structural (non-resource) type, while
-  `connections` holds the two stateful resources — the `data-channel` transport
-  and the `RTCPeerConnection`-style `peer-connection` design target. Structural
+  `connections` holds the stateful resources — the `data-channel-options`
+  configuration builder, the `data-channel` transport, and the
+  `RTCPeerConnection`-style `peer-connection` design target. Structural
   types can be shared across a composition; the resources are each owned by the
   one component that implements them.
 - **`demo:webrtc-echo`** — the demo-only interfaces, split across the demo
