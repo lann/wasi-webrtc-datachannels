@@ -398,16 +398,26 @@ async fn exchange(test_id: &str, config: &TestConfig, dc: &DataChannel) -> Resul
 /// A final rendezvous over the connected data channel: each peer sends a
 /// sentinel and waits for the peer's, so neither peer tears down the connection
 /// while the other still needs it. The sentinel arrives after any test payloads
-/// because the channel is reliable and ordered.
+/// because the channel is reliable and ordered. A `closed` error counts as the
+/// rendezvous: the peer only closes after completing its own exchange, so the
+/// close carries the same information as the sentinel (and hosts may drop a
+/// final in-flight message when the remote tears down immediately after it).
 async fn barrier(dc: &DataChannel) -> Result<(), String> {
     const SENTINEL: &[u8] = b"__conformance_barrier__";
-    let send_side = send(dc, Message::Binary(SENTINEL.to_vec()));
+    let send_side = async {
+        match dc.send(Message::Binary(SENTINEL.to_vec())).await {
+            Ok(()) | Err(Error::Closed) => Ok(()),
+            Err(err) => Err(format!("send: {}", describe(&err))),
+        }
+    };
     let recv_side = async {
         loop {
-            match receive(dc).await? {
-                Message::Binary(bytes) if bytes == SENTINEL => return Ok::<(), String>(()),
+            match dc.receive().await {
+                Ok(Message::Binary(bytes)) if bytes == SENTINEL => return Ok::<(), String>(()),
                 // Defensively skip anything still in flight before the sentinel.
-                _ => continue,
+                Ok(_) => continue,
+                Err(Error::Closed) => return Ok(()),
+                Err(err) => return Err(format!("receive: {}", describe(&err))),
             }
         }
     };
