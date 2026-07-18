@@ -18,7 +18,7 @@ mod data_channel;
 mod host;
 
 pub use data_channel::{
-    close_peer_connections, new_peer_connection, send_message, DataChannel, InboundMessage,
+    close_peer_connections, new_peer_connection, DataChannel, InboundMessage,
 };
 
 use std::sync::Arc;
@@ -91,13 +91,6 @@ impl WasiWebrtcCtx {
     pub fn setting_engine_hook(&self) -> Option<SettingEngineHook> {
         self.setting_engine_hook.clone()
     }
-
-    /// Apply the registered hook (if any) to `engine`.
-    pub fn configure_setting_engine(&self, engine: &mut SettingEngine) {
-        if let Some(hook) = &self.setting_engine_hook {
-            hook(engine);
-        }
-    }
 }
 
 /// A borrowed view into a host's [`WasiWebrtcCtx`] and its [`ResourceTable`].
@@ -131,12 +124,12 @@ impl HasData for WasiWebrtc {
 /// Backing type for the `connections.peer-connection` resource, which this
 /// crate does **not** implement.
 ///
-/// The `peer-connection` resource (the `signaling` design target) shares the
-/// `connections` interface with the `data-channel` resource this crate does
-/// implement, so the generated bindings still require a backing type and host
-/// impl for it. Every `peer-connection` host function traps; no value of this
-/// type is ever constructed. Implementing `signaling` here would replace this
-/// stub with a real peer-connection type.
+/// The `peer-connection` resource (the guest-driven connection design target)
+/// shares the `connections` interface with the `data-channel` resource this
+/// crate does implement, so the generated bindings still require a backing type
+/// and host impl for it. Every `peer-connection` host function traps; no value
+/// of this type is ever constructed. Implementing `peer-connection` here would
+/// replace this stub with a real peer-connection type.
 pub struct UnsupportedPeerConnection {
     _private: (),
 }

@@ -31,8 +31,10 @@ interface types {
     record data-channel-options {
         /// The channel label. Both peers observe the same label.
         label: string,
-        /// Whether messages are delivered in order. Defaults to `true` when the
-        /// host constructs a channel on the guest's behalf.
+        /// Whether messages are delivered in order. There is no implicit
+        /// default: the guest sets this explicitly on every channel it opens
+        /// (the demo guests pass `true`). WIT records cannot express defaults,
+        /// so a host must not assume one.
         ordered: bool,
         /// Maximum number of retransmissions before a message is dropped.
         /// `none` requests fully reliable delivery (the default).

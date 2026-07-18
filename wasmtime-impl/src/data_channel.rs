@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use bytes::Bytes;
 use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot;
 use futures::future::Shared;
@@ -199,10 +198,4 @@ pub async fn new_peer_connection(
         .build();
     let config = RTCConfiguration::default();
     Ok(Arc::new(api.new_peer_connection(config).await?))
-}
-
-/// Send one message over a data channel.
-pub async fn send_message(channel: &Arc<RTCDataChannel>, message: Vec<u8>) -> Result<()> {
-    channel.send(&Bytes::from(message)).await?;
-    Ok(())
 }

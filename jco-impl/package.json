@@ -13,7 +13,6 @@
   },
   "devDependencies": {
     "@bytecodealliance/jco": "^1.19.0",
-    "@bytecodealliance/componentize-js": "^0.20.0",
     "playwright-core": "^1.61.1"
   },
   "dependencies": {

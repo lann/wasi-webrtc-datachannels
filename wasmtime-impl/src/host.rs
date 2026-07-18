@@ -398,13 +398,14 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
 
 /// The error surfaced by every `peer-connection` host function.
 ///
-/// The `signaling` design target is not implemented by this crate; these
-/// functions exist only because `peer-connection` shares the `connections`
-/// interface with the `data-channel` resource this crate does implement.
+/// The `peer-connection` guest-driven connection design target is not
+/// implemented by this crate; these functions exist only because
+/// `peer-connection` shares the `connections` interface with the `data-channel`
+/// resource this crate does implement.
 fn peer_connection_unsupported() -> wasmtime::Error {
     wasmtime::Error::msg(
-        "lann:webrtc-datachannels/connections.peer-connection (the signaling design \
-         target) is not implemented by this host",
+        "lann:webrtc-datachannels/connections.peer-connection (the guest-driven connection \
+         design target) is not implemented by this host",
     )
 }
 

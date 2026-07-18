@@ -2,7 +2,8 @@
 //!
 //! The crate implements the `types` interface and the `data-channel` resource
 //! of the `connections` interface. The `connections` interface also declares a
-//! `peer-connection` resource (the `signaling` design target); it is not
+//! `peer-connection` resource (the guest-driven connection design target); it
+//! is not
 //! implemented here, so it is mapped to [`crate::UnsupportedPeerConnection`] and
 //! its host functions trap if a guest calls them. See [`crate`] for the public
 //! API built on top of these bindings.
