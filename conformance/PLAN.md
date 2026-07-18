@@ -331,7 +331,7 @@ manifests, an updated matrix artifact, and a reviewer checklist in the PR
 description. Do not start a phase until the previous phase's PR is merged or
 the reviewer directs otherwise.
 
-### Phase 0 — Scaffolding & registry
+### Phase 0 — Scaffolding & registry (**COMPLETED**)
 - Create the `conformance/` layout above; `README.md` (how to run; matrix
   interpretation); `tests.toml` schema (id, tags, description) and manifest
   schema; `conformance-runner` skeleton that parses both, aggregates stub

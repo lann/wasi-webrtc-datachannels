@@ -1,0 +1,52 @@
+name: Conformance
+
+# The conformance suite (see conformance/PLAN.md). Job 1 builds the conformance
+# guest once and runs the loopback + trickle-variants scenarios across all
+# enabled targets, including the pairwise interop matrix, uploading the matrix
+# artifact and failing on any unexpected status.
+#
+# Phase 0: no targets are enabled yet, so this job only exercises the runner
+# over an empty target set (green over the empty set). Later phases enable
+# targets, the signaling server, and additional jobs (see the workflow plan in
+# conformance/PLAN.md).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Job 1: every PR. Currently runs the runner over the empty target set.
+  matrix:
+    runs-on: ubuntu-latest
+    # WebRTC handshakes can hang; cap the job so a stuck run fails fast.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+
+      - name: Install dependencies
+        run: SKIP_NODE=1 ./scripts/setup.sh
+
+      - name: Run conformance suite
+        run: just conformance
+
+      - name: Upload conformance matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-matrix
+          path: conformance/matrix.md
+          if-no-files-found: warn

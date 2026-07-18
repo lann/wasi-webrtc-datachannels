@@ -36,6 +36,16 @@ test:
     cargo nextest run --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer
     cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer
 
+# Run the conformance suite runner over the currently enabled targets. In
+# Phase 0 no targets are enabled, so this passes over an empty set; it reads
+# conformance/tests.toml + conformance/manifests/ and writes the matrix to
+# conformance/matrix.md, exiting nonzero on any fail or unexpected-pass.
+conformance:
+    cargo run -p conformance-runner -- \
+        --tests conformance/tests.toml \
+        --manifests conformance/manifests \
+        --matrix-out conformance/matrix.md
+
 # Build the echo-demo guest component into examples/echo-demo/build/.
 build-component:
     cd jco-impl && npm run build:component
