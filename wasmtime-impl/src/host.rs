@@ -22,15 +22,16 @@ use wasmtime::component::{
 use wasmtime::{AsContextMut, Result, StoreContextMut};
 
 use crate::bindings::webrtc_datachannels::connections::{
-    self, HostDataChannel, HostDataChannelWithStore, HostPeerConnection,
+    self, HostDataChannel, HostDataChannelOptions, HostDataChannelWithStore, HostPeerConnection,
     HostPeerConnectionWithStore,
 };
 use crate::bindings::webrtc_datachannels::types::{
-    self, DataChannelOptions, Error, IceCandidate, Message, MessageKind, SendViaStreamError,
-    SessionDescription, StreamMessage,
+    self, Error, IceCandidate, Message, MessageKind, SendViaStreamError, SessionDescription,
+    StreamMessage,
 };
 use crate::{
-    DataChannel, InboundMessage, UnsupportedPeerConnection, WasiWebrtc, WasiWebrtcCtxView,
+    DataChannel, DataChannelOptions, InboundMessage, UnsupportedPeerConnection, WasiWebrtc,
+    WasiWebrtcCtxView,
 };
 
 use webrtc::data_channel::RTCDataChannel;
@@ -42,6 +43,52 @@ impl types::Host for WasiWebrtcCtxView<'_> {}
 // --- connections -----------------------------------------------------------
 
 impl connections::Host for WasiWebrtcCtxView<'_> {}
+
+impl HostDataChannelOptions for WasiWebrtcCtxView<'_> {
+    fn new(&mut self) -> Result<Resource<DataChannelOptions>> {
+        Ok(self.table.push(DataChannelOptions::default())?)
+    }
+
+    fn label(&mut self, self_: Resource<DataChannelOptions>) -> Result<String> {
+        Ok(self.table.get(&self_)?.label.clone())
+    }
+
+    fn set_label(&mut self, self_: Resource<DataChannelOptions>, label: String) -> Result<()> {
+        self.table.get_mut(&self_)?.label = label;
+        Ok(())
+    }
+
+    fn ordered(&mut self, self_: Resource<DataChannelOptions>) -> Result<bool> {
+        Ok(self.table.get(&self_)?.ordered)
+    }
+
+    fn set_ordered(&mut self, self_: Resource<DataChannelOptions>, ordered: bool) -> Result<()> {
+        self.table.get_mut(&self_)?.ordered = ordered;
+        Ok(())
+    }
+
+    fn max_retransmits(&mut self, self_: Resource<DataChannelOptions>) -> Result<Option<u16>> {
+        Ok(self.table.get(&self_)?.max_retransmits)
+    }
+
+    fn set_max_retransmits(
+        &mut self,
+        self_: Resource<DataChannelOptions>,
+        max_retransmits: Option<u16>,
+    ) -> Result<()> {
+        self.table.get_mut(&self_)?.max_retransmits = max_retransmits;
+        Ok(())
+    }
+}
+
+impl<T: Send> connections::HostDataChannelOptionsWithStore<T> for WasiWebrtc {
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<DataChannelOptions>) -> Result<()> {
+        accessor.with(|mut access| {
+            access.get().table.delete(rep)?;
+            Ok(())
+        })
+    }
+}
 
 /// Send one message over a data channel, honoring its `binary`/`string` kind.
 async fn send_channel_message(
@@ -417,7 +464,7 @@ impl HostPeerConnection for WasiWebrtcCtxView<'_> {
     fn create_data_channel(
         &mut self,
         _self_: Resource<UnsupportedPeerConnection>,
-        _options: DataChannelOptions,
+        _options: Resource<DataChannelOptions>,
     ) -> Result<std::result::Result<Resource<DataChannel>, Error>> {
         Err(peer_connection_unsupported())
     }

@@ -32,6 +32,8 @@ mod bindings {
             "demo:webrtc-echo/manual-signaling@0.1.0.[method]peer-connection.close": trappable,
         },
         with: {
+            "lann:webrtc-datachannels/connections.data-channel-options":
+                wasmtime_webrtc_datachannels::DataChannelOptions,
             "lann:webrtc-datachannels/connections.data-channel":
                 wasmtime_webrtc_datachannels::DataChannel,
             "demo:webrtc-echo/manual-signaling.peer-connection": super::ManualPeer,
@@ -42,7 +44,8 @@ mod bindings {
 use bindings::demo::webrtc_echo::manual_signaling::{
     self, HostPeerConnection, HostPeerConnectionWithStore,
 };
-use bindings::lann::webrtc_datachannels::types::{DataChannelOptions, Error};
+use bindings::lann::webrtc_datachannels::types::Error;
+use wasmtime_webrtc_datachannels::DataChannelOptions;
 
 /// [`HasData`] marker for the demo-only `manual-signaling` host bindings.
 struct ManualSignaling;
@@ -319,9 +322,13 @@ impl<T> HostPeerConnectionWithStore<T> for ManualSignaling {
     async fn create_offer(
         accessor: &Accessor<T, Self>,
         self_: Resource<ManualPeer>,
-        options: DataChannelOptions,
+        options: Resource<DataChannelOptions>,
     ) -> wasmtime::Result<std::result::Result<String, Error>> {
-        let peer = accessor.with(|mut access| clone_peer(access.get(), &self_))?;
+        let (peer, options) = accessor.with(|mut access| {
+            let peer = clone_peer(access.get(), &self_)?;
+            let options = access.get().table.delete(options)?;
+            Ok::<_, wasmtime::Error>((peer, options))
+        })?;
         Ok(peer
             .create_offer(&options.label, options.ordered, options.max_retransmits)
             .await

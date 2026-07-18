@@ -22,7 +22,8 @@ wit_bindgen::generate!({
 
 use demo::webrtc_echo::connect;
 use exports::demo::webrtc_echo::demo::{DemoConfig, DemoStats, Guest};
-use lann::webrtc_datachannels::types::{DataChannelOptions, Error, Message};
+use lann::webrtc_datachannels::connections::DataChannelOptions;
+use lann::webrtc_datachannels::types::{Error, Message};
 
 struct Component;
 
@@ -32,12 +33,10 @@ impl Guest for Component {
         let size = config.message_size as usize;
 
         // Ask the host for a channel connected to its echo endpoint.
-        let channel = connect::open_echo(DataChannelOptions {
-            label: "echo".to_string(),
-            ordered: true,
-            max_retransmits: None,
-        })
-        .await?;
+        let options = DataChannelOptions::new();
+        options.set_label("echo");
+        options.set_ordered(true);
+        let channel = connect::open_echo(options).await?;
 
         // Drive send and receive concurrently on this single task. Each call
         // carries exactly one message, preserving WebRTC message boundaries.

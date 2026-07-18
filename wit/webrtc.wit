@@ -5,9 +5,9 @@ package lann:webrtc-datachannels@0.1.0;
 /// Every non-resource type used by the package lives here. Structural types
 /// carry no host-side identity, so a single composition can freely share these
 /// definitions across multiple components. The stateful, per-implementation
-/// objects — the `data-channel` and `peer-connection` resources — live in the
-/// separate `connections` interface, since a resource is always owned by the
-/// one component that implements it.
+/// objects — the `data-channel-options`, `data-channel`, and `peer-connection`
+/// resources — live in the separate `connections` interface, since a resource
+/// is always owned by the one component that implements it.
 interface types {
     /// Errors surfaced by peer connections and data channels.
     variant error {
@@ -25,20 +25,6 @@ interface types {
         receiving-via-stream,
         /// An implementation-specific failure. The string is human-readable.
         other(string),
-    }
-
-    /// A subset of `RTCDataChannelInit` (https://w3c.github.io/webrtc-pc/).
-    record data-channel-options {
-        /// The channel label. Both peers observe the same label.
-        label: string,
-        /// Whether messages are delivered in order. There is no implicit
-        /// default: the guest sets this explicitly on every channel it opens
-        /// (the demo guests pass `true`). WIT records cannot express defaults,
-        /// so a host must not assume one.
-        ordered: bool,
-        /// Maximum number of retransmissions before a message is dropped.
-        /// `none` requests fully reliable delivery (the default).
-        max-retransmits: option<u16>,
     }
 
     /// A single data-channel message.
@@ -109,23 +95,56 @@ interface types {
     }
 }
 
-/// The stateful WebRTC resources: the `data-channel` transport and the
-/// `RTCPeerConnection`-style `peer-connection` that negotiates it.
+/// The stateful WebRTC resources: the `data-channel-options` builder, the
+/// `data-channel` transport, and the `RTCPeerConnection`-style
+/// `peer-connection` that negotiates it.
 ///
-/// Both resources carry host-side identity and are owned by the single
+/// These resources carry host-side identity and are owned by the single
 /// component that implements them, so — unlike the structural `types` — they
 /// cannot be shared across a composition. They are grouped together here so an
 /// implementation provides the whole live-object surface in one place.
 interface connections {
     use types.{
         error,
-        data-channel-options,
         message,
         stream-message,
         send-via-stream-error,
         session-description,
         ice-candidate,
     };
+
+    /// Configuration for a data channel, a subset of `RTCDataChannelInit`
+    /// (https://w3c.github.io/webrtc-pc/).
+    ///
+    /// This is a builder resource, following the shape of `wasi:http`'s
+    /// `request-options`: construct a default value, adjust the fields you care
+    /// about through the setters, then hand it to `peer-connection`'s
+    /// `create-data-channel` (or a demo's `open-echo`/`create-offer`). Each
+    /// field has an accessor pair — a getter that reports the current value and
+    /// a setter that overrides it.
+    resource data-channel-options {
+        /// Construct a `data-channel-options` with default field values: an
+        /// empty `label`, ordered delivery (`ordered` is `true`), and fully
+        /// reliable delivery (`max-retransmits` is `none`).
+        constructor();
+
+        /// The channel label. Both peers observe the same label.
+        label: func() -> string;
+        /// Set the channel label.
+        set-label: func(label: string);
+
+        /// Whether messages are delivered in order.
+        ordered: func() -> bool;
+        /// Set whether messages are delivered in order.
+        set-ordered: func(ordered: bool);
+
+        /// The maximum number of retransmissions before a message is dropped,
+        /// or `none` for fully reliable delivery.
+        max-retransmits: func() -> option<u16>;
+        /// Set the maximum number of retransmissions before a message is
+        /// dropped. `none` requests fully reliable delivery.
+        set-max-retransmits: func(max-retransmits: option<u16>);
+    }
 
     /// A connected, bidirectional WebRTC data channel.
     ///

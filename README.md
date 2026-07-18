@@ -41,13 +41,18 @@ a single copy of the shared surface to edit:
 **`lann:webrtc-datachannels`** — the shared interfaces:
 
 - **`types`** — every structural (non-resource) type in the package: the
-  `error` variant, `data-channel-options`, the `message`/`message-kind`/
+  `error` variant, the `message`/`message-kind`/
   `stream-message`/`send-via-stream-error` data-channel types, and the
   `sdp-type`/`session-description`/`ice-candidate` signaling types. Structural
   types carry no host identity, so a single composition can share them across
   components.
 - **`connections`** — the stateful WebRTC resources, which (unlike the
   structural `types`) are each owned by the one component that implements them:
+  - **`data-channel-options`** — a configuration builder for a data channel (a
+    subset of `RTCDataChannelInit`: `label`, `ordered`, `max-retransmits`),
+    shaped after `wasi:http`'s `request-options`: construct a default value,
+    adjust fields through the setters, then hand it to a data-channel-creating
+    function such as `peer-connection.create-data-channel`.
   - **`data-channel`** — the high-throughput surface. A `data-channel` is
     bidirectional and message-oriented; each call carries exactly **one**
     data-channel message, preserving WebRTC message boundaries:
