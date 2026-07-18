@@ -5,9 +5,19 @@ edition = "2021"
 publish = false
 description = "Conformance adapter for the wasmtime (native webrtc-rs) target: runs the shared conformance guest against the wasmtime host, driving each test to a raw pass/fail/skip and emitting an adapter result document the conformance runner consumes."
 
+[lib]
+name = "conformance_adapter_wasmtime"
+path = "src/lib.rs"
+
 [[bin]]
 name = "conformance-adapter-wasmtime"
 path = "src/main.rs"
+
+# Cross-runtime interop orchestrator: reuses the adapter library to drive one
+# wasmtime peer of a pair while the other runtime drives the second peer.
+[[bin]]
+name = "conformance-interop"
+path = "src/bin/interop.rs"
 
 [dependencies]
 # The wasmtime host under test: satisfies the guest's `connections`/`types`
@@ -22,9 +32,9 @@ wasmtime = { version = "46", features = ["component-model", "component-model-asy
 # Native HTTP client backing the mailbox host (plain HTTP/1.1 long-poll against
 # the in-process signaling server; no TLS needed for localhost).
 reqwest = { version = "0.12", default-features = false }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "process"] }
 futures = "0.3"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }

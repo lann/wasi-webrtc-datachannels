@@ -1,0 +1,19 @@
+{
+  "name": "@lann/conformance-adapter-jco",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "jco conformance adapters (Node + headless browser) for lann:webrtc-datachannels: transpile the shared conformance guest and run it against the browser-first host over the suite signaling server.",
+  "scripts": {
+    "transpile": "jco transpile ../../guest/build/conformance-guest.component.wasm --name conformance-guest -I async -o generated",
+    "run:node": "node --experimental-wasm-jspi run-node.mjs",
+    "run:browser": "node run-browser.mjs"
+  },
+  "devDependencies": {
+    "@bytecodealliance/jco": "^1.19.0",
+    "playwright-core": "^1.61.1"
+  },
+  "dependencies": {
+    "@roamhq/wrtc": "^0.8.0"
+  }
+}

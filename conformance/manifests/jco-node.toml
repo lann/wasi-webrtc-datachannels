@@ -1,0 +1,16 @@
+# Capability manifest for the `jco-node` target (browser-first host transpiled
+# by jco and run under Node with `@roamhq/wrtc`; adapter:
+# conformance/adapters/jco, `run-node.mjs`).
+#
+# The jco host implements the full `connections` surface (data-channel and
+# peer-connection) and drives real signaling over the suite mailbox, so every
+# behavioral and peer-connection test passes on loopback. The streaming forms and
+# the remaining error-taxonomy probes are reported `skipped` by the conformance
+# guest itself (a raw `skip`, classified `skip-unsupported` without a manifest
+# entry), so no `[[unsupported]]` or `[[expected-fail]]` entries are needed.
+#
+# Unlike the wasmtime target, `@roamhq/wrtc` delivers zero-length messages, so
+# `zero-length-message` passes here and is deliberately NOT an expected-fail.
+
+[target]
+id = "jco-node"

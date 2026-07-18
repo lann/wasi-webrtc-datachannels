@@ -13,6 +13,12 @@ name: Conformance
 #     conformance` builds the guest component, runs the adapter over the
 #     wasmtime host (loopback ICE, in-process signaling), and classifies the
 #     wasmtime row of the matrix against conformance/manifests/wasmtime.toml.
+#   - Phase 3: the jco adapters — the browser-first host transpiled by jco and
+#     run under Node (`jco-node`, via @roamhq/wrtc) and headless Chromium
+#     (`jco-browser`), plus the cross-runtime interop pair
+#     `wasmtime`<->`jco-node` in both orders. jco's async ABI always uses JSPI
+#     (WebAssembly.Suspending), so the Node driver requires Node 24+ with
+#     --experimental-wasm-jspi (the browser gets JSPI natively).
 # Later phases enable more targets and additional jobs (see the workflow plan
 # in conformance/PLAN.md).
 
@@ -27,7 +33,8 @@ permissions:
 
 jobs:
   # Job 1: every PR. Builds the conformance guest and runs the enabled targets
-  # (currently wasmtime) over loopback via `just conformance`.
+  # (wasmtime, jco-node, jco-browser, and the wasmtime<->jco-node interop pair)
+  # over loopback via `just conformance`.
   matrix:
     runs-on: ubuntu-latest
     # WebRTC handshakes can hang; cap the job so a stuck run fails fast.
@@ -39,17 +46,33 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show active-toolchain || rustup toolchain install
 
+      # jco's async ABI always uses JSPI (WebAssembly.Suspending), which Node
+      # only exposes on 24+ behind --experimental-wasm-jspi. The jco-node target
+      # and the jco-node half of the interop pair run the guest under Node, so
+      # the driver node must be 24+. (The jco-browser target runs the guest in
+      # headless Chrome, which has JSPI natively.)
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: conformance/adapters/jco/package-lock.json
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           cache-all-crates: true
 
       - name: Install dependencies
-        run: SKIP_NODE=1 ./scripts/setup.sh
+        run: ./scripts/setup.sh
 
       - name: Test signaling server
         run: cargo nextest run -p conformance-signalingd
 
+      # `just conformance` runs the jco adapters (Node + headless Chrome) and the
+      # interop pair, all of which invoke `node --experimental-wasm-jspi`. The
+      # setup-node step above puts a JSPI-capable Node 24 on PATH; the interop
+      # orchestrator honours CONFORMANCE_NODE if a specific node is needed.
       - name: Run conformance suite
         run: just conformance
 

@@ -39,18 +39,26 @@ test:
     cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest
 
 # Run the conformance suite over the currently enabled targets (see
-# conformance/PLAN.md). Builds the shared conformance guest component, runs the
-# wasmtime adapter (which starts its own in-process signaling server) to
-# produce conformance/results/wasmtime.json, then runs the runner over
-# conformance/tests.toml + conformance/manifests/ + those results — also
+# conformance/PLAN.md). Builds the shared conformance guest component, runs each
+# adapter to produce conformance/results/<target>.json, then runs the runner
+# over conformance/tests.toml + conformance/manifests/ + those results — also
 # spawning the standalone conformance-signalingd binary (ephemeral localhost
 # port, gated on /healthz) to exercise its lifecycle — and writes the matrix to
 # conformance/matrix.md, exiting nonzero on any fail or unexpected-pass.
-conformance: build-conformance-guest
+#
+# Enabled targets: wasmtime (native webrtc-rs), jco-node and jco-browser (the
+# browser-first host transpiled by jco, run under Node and headless Chromium),
+# plus the wasmtime<->jco-node interop pair. The jco targets need a JSPI-capable
+# Node (24+; see conformance-jco-node) and, for the browser target, a Chrome
+# 137+ binary (auto-detected, or set CHROME_PATH).
+conformance: build-conformance-guest transpile-conformance-guest
     cargo build -p conformance-signalingd
-    cargo run --release -p conformance-adapter-wasmtime -- \
+    cargo run --release -p conformance-adapter-wasmtime --bin conformance-adapter-wasmtime -- \
         --guest conformance/guest/build/conformance-guest.component.wasm \
         --out conformance/results
+    just conformance-jco-node
+    just conformance-jco-browser
+    just conformance-interop
     cargo run -p conformance-runner -- \
         --tests conformance/tests.toml \
         --manifests conformance/manifests \
@@ -65,6 +73,35 @@ build-conformance-guest:
     wasm-tools component new \
         target/wasm32-unknown-unknown/release/conformance_guest.wasm \
         -o conformance/guest/build/conformance-guest.component.wasm
+
+# Transpile the conformance guest for the jco adapters (Node + browser) into
+# conformance/adapters/jco/generated (jco `--instantiation` mode so one process
+# can stand up two guest instances). Rebuilds the guest component first.
+transpile-conformance-guest: build-conformance-guest
+    cd conformance/adapters/jco && npm run transpile
+
+# Run the jco-node conformance adapter (guest transpiled by jco, run under Node
+# with @roamhq/wrtc). jco's async ABI needs JavaScript Promise Integration, so
+# this uses `node --experimental-wasm-jspi` and requires Node 24+ (which ships
+# WebAssembly.Suspending). Writes conformance/results/jco-node.json.
+conformance-jco-node: transpile-conformance-guest
+    cargo build -p conformance-signalingd
+    cd conformance/adapters/jco && npm run run:node
+
+# Run the jco-browser conformance adapter (the same guest + host modules inside
+# headless Chromium; Chrome 137+ ships JSPI). Writes
+# conformance/results/jco-browser.json.
+conformance-jco-browser: transpile-conformance-guest
+    cargo build -p conformance-signalingd
+    cd conformance/adapters/jco && npm run run:browser
+
+# Run the wasmtime<->jco-node interop pair (both orders): one peer per runtime
+# shares a signaling room and a real WebRTC data channel. Writes
+# conformance/results/wasmtime-x-jco-node.json and
+# conformance/results/jco-node-x-wasmtime.json.
+conformance-interop: transpile-conformance-guest
+    cargo build -p conformance-signalingd
+    cargo run --release -p conformance-adapter-wasmtime --bin conformance-interop
 
 # Build the echo-demo guest component into examples/echo-demo/build/.
 build-component:
