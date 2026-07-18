@@ -173,7 +173,14 @@ async fn run_two_peer(test_id: &str, config: &TestConfig) -> Outcome {
         Err(detail) => return Outcome::Fail(detail),
     };
 
-    let outcome = Outcome::from_result(exchange(test_id, config, &dc).await);
+    // Run the per-test assertions, then rendezvous over the data channel before
+    // tearing down, so neither peer closes the connection while the other still
+    // needs it — to receive the channel (`label-round-trip` transfers no
+    // payload) or to drain the last buffered messages.
+    let outcome = match exchange(test_id, config, &dc).await {
+        Ok(()) => Outcome::from_result(barrier(&dc).await),
+        Err(detail) => Outcome::Fail(detail),
+    };
     peer.close();
     outcome
 }
@@ -386,6 +393,27 @@ async fn exchange(test_id: &str, config: &TestConfig, dc: &DataChannel) -> Resul
         }
         other => Err(format!("unhandled test id {other:?}")),
     }
+}
+
+/// A final rendezvous over the connected data channel: each peer sends a
+/// sentinel and waits for the peer's, so neither peer tears down the connection
+/// while the other still needs it. The sentinel arrives after any test payloads
+/// because the channel is reliable and ordered.
+async fn barrier(dc: &DataChannel) -> Result<(), String> {
+    const SENTINEL: &[u8] = b"__conformance_barrier__";
+    let send_side = send(dc, Message::Binary(SENTINEL.to_vec()));
+    let recv_side = async {
+        loop {
+            match receive(dc).await? {
+                Message::Binary(bytes) if bytes == SENTINEL => return Ok::<(), String>(()),
+                // Defensively skip anything still in flight before the sentinel.
+                _ => continue,
+            }
+        }
+    };
+    let (sent, received) = futures::join!(send_side, recv_side);
+    sent?;
+    received
 }
 
 /// Send `count` indexed, checksummable payloads of `size` bytes each.

@@ -8,3 +8,4 @@ node_modules/
 build/
 jco-impl/generated/
 conformance/matrix.md
+conformance/results/

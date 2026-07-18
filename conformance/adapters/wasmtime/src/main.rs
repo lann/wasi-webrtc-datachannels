@@ -20,6 +20,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use clap::Parser;
@@ -347,12 +348,16 @@ fn build_engine() -> Result<Engine> {
     Ok(Engine::new(&config)?)
 }
 
-/// A fresh store whose WebRTC host enables loopback ICE so two same-host peers
-/// (whether in one `both` instance or two instances) can pair.
+/// A fresh store whose WebRTC host restricts ICE to loopback so two same-host
+/// peers pair deterministically. `set_include_loopback_candidate` gathers the
+/// loopback candidates and the IP filter drops every non-loopback address, so
+/// the peers avoid the flaky LAN / container / link-local candidate pairs that
+/// otherwise stall the handshake.
 fn new_store(engine: &Engine) -> Store<Ctx> {
     let mut webrtc = WasiWebrtcCtx::new();
     webrtc.set_setting_engine_hook(|engine| {
         engine.set_include_loopback_candidate(true);
+        engine.set_ip_filter(Box::new(|ip| ip.is_loopback()));
     });
     Store::new(
         engine,
@@ -452,6 +457,13 @@ fn is_flaky(detail: &str) -> bool {
 /// fresh peer connections and a fresh room.
 const MAX_ATTEMPTS: u32 = 3;
 
+/// How long a single attempt may run before it is abandoned as a stalled
+/// handshake and retried. It must exceed the host's `wait-connected` timeout so
+/// a genuine connection failure surfaces as a WIT outcome rather than tripping
+/// this guard, while still bounding an attempt whose data-channel wait never
+/// resolves (e.g. a peer whose channel never opens).
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(45);
+
 /// Run one test to a raw result, retrying flaky handshakes with fresh rooms.
 async fn run_test(
     engine: &Engine,
@@ -465,27 +477,38 @@ async fn run_test(
 
     for _ in 0..MAX_ATTEMPTS {
         let room = format!("conf-{}-{}", test_id, room_seq.fetch_add(1, Ordering::SeqCst));
-        let result = match plan_for(test_id) {
-            Plan::TwoPeer => {
-                run_two_peer(engine, component, test_id, base_url, &room, count, size).await
+        let attempt = async {
+            match plan_for(test_id) {
+                Plan::TwoPeer => {
+                    run_two_peer(engine, component, test_id, base_url, &room, count, size).await
+                }
+                Plan::InProcess => {
+                    run_instance(
+                        engine,
+                        component,
+                        test_id,
+                        make_config(Role::Both, base_url, &room, count, size),
+                    )
+                    .await
+                }
+                Plan::Skip => {
+                    run_instance(
+                        engine,
+                        component,
+                        test_id,
+                        make_config(Role::Offerer, base_url, &room, count, size),
+                    )
+                    .await
+                }
             }
-            Plan::InProcess => {
-                run_instance(
-                    engine,
-                    component,
-                    test_id,
-                    make_config(Role::Both, base_url, &room, count, size),
-                )
-                .await
-            }
-            Plan::Skip => {
-                run_instance(
-                    engine,
-                    component,
-                    test_id,
-                    make_config(Role::Offerer, base_url, &room, count, size),
-                )
-                .await
+        };
+        let result = match tokio::time::timeout(ATTEMPT_TIMEOUT, attempt).await {
+            Ok(result) => result,
+            // A stalled attempt is treated like a flaky handshake: retry with a
+            // fresh room rather than hanging the whole run.
+            Err(_) => {
+                last_detail = Some("attempt timed-out".to_string());
+                continue;
             }
         };
 
@@ -549,6 +572,10 @@ struct Cli {
     /// Environment/scenario label recorded in the result document.
     #[arg(long, default_value = "loopback")]
     environment: String,
+
+    /// Run only these test ids (repeatable). When empty, run every test.
+    #[arg(long = "only")]
+    only: Vec<String>,
 }
 
 #[tokio::main]
@@ -573,6 +600,9 @@ async fn main() -> Result<()> {
     let room_seq = AtomicU64::new(0);
     let mut results = Vec::with_capacity(TESTS.len());
     for test_id in TESTS {
+        if !cli.only.is_empty() && !cli.only.iter().any(|t| t == test_id) {
+            continue;
+        }
         eprint!("running {test_id} … ");
         let result = run_test(&engine, &component, &base_url, test_id, &room_seq).await;
         eprintln!("{:?}", result.status);
