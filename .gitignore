@@ -7,5 +7,6 @@ node_modules/
 # Build artifacts
 build/
 jco-impl/generated/
+conformance/adapters/jco/generated/
 conformance/matrix.md
 conformance/results/

@@ -17,7 +17,8 @@
 #     wasip3 provider (`just compose-webrtc`)
 #   - wasmtime, the host runtime that runs the composed in-guest WebRTC
 #     integration test (`just test-webrtc-composed`)
-#   - the Node host's npm dependencies (jco + @roamhq/wrtc)
+#   - the Node host's npm dependencies (jco + @roamhq/wrtc), and the conformance
+#     jco adapter's npm dependencies (jco + @roamhq/wrtc + playwright-core)
 #
 # wasm-tools, just, and cargo-nextest are installed with cargo-binstall, which
 # downloads the pinned prebuilt release binaries when available and automatically
@@ -115,6 +116,8 @@ if [ "${SKIP_NODE:-0}" = "1" ]; then
 else
   log "Installing Node host dependencies (jco-impl)"
   (cd "${REPO_ROOT}/jco-impl" && npm install)
+  log "Installing conformance jco adapter dependencies (conformance/adapters/jco)"
+  (cd "${REPO_ROOT}/conformance/adapters/jco" && npm install)
 fi
 
 # In GitHub Actions, $GITHUB_PATH is a file; appending a path to it makes that
