@@ -9,6 +9,7 @@ members = [
     "conformance/runner",
     "conformance/signaling/server",
     "conformance/guest",
+    "conformance/adapters/wasmtime",
 ]
 resolver = "2"
 
