@@ -19,9 +19,12 @@ Phases in place so far:
 - **Phase 1 (signaling server):** `conformance-signalingd`, the suite-owned HTTP
   mailbox that relays opaque SDP/ICE blobs between two peers. The runner starts
   it (ephemeral localhost port, gated on `/healthz`) and tears it down.
-
-**No conformance targets are enabled yet**, so the suite runs green over an
-empty target set. Adapters and the conformance guest arrive in later phases.
+- **Phase 2 (conformance guest + wasmtime adapter):** the shared conformance
+  guest component (`guest/`, exporting `conformance:suite/runner`) and the
+  `wasmtime` adapter (`adapters/wasmtime/`), which runs that guest against the
+  native Wasmtime host (loopback ICE, in-process signaling) and emits the
+  adapter result document the runner classifies against
+  `manifests/wasmtime.toml`.
 
 ## Running
 
@@ -31,12 +34,14 @@ From the repository root:
 just conformance
 ```
 
-This builds `conformance-signalingd`, then invokes `conformance-runner`, which
-reads the test registry and any per-target manifests, starts a signaling server
-and waits for `/healthz`, aggregates adapter result documents (none yet), applies
-the expected-fail / unexpected-pass policy, tears the server down, and writes the
-markdown matrix to `conformance/matrix.md`. It exits nonzero on any `fail` or
-`unexpected-pass`.
+This builds the conformance guest component and `conformance-signalingd`, runs
+the `wasmtime` adapter (which starts its own in-process signaling server and
+writes `conformance/results/wasmtime.json`), then invokes `conformance-runner`,
+which reads the test registry, the per-target manifests, and those adapter
+result documents, starts and health-checks a standalone signaling server,
+applies the expected-fail / unexpected-pass policy, tears the server down, and
+writes the markdown matrix to `conformance/matrix.md`. It exits nonzero on any
+`fail` or `unexpected-pass`.
 
 Run the runner's unit tests and the signaling server's integration tests with
 the rest of the workspace:

@@ -26,12 +26,12 @@ use crate::bindings::webrtc_datachannels::connections::{
     HostPeerConnectionWithStore,
 };
 use crate::bindings::webrtc_datachannels::types::{
-    self, Error, IceCandidate, Message, MessageKind, SendViaStreamError, SessionDescription,
-    StreamMessage,
+    self, Error, IceCandidate, Message, MessageKind, SdpType, SendViaStreamError,
+    SessionDescription, StreamMessage,
 };
 use crate::{
-    DataChannel, DataChannelOptions, InboundMessage, UnsupportedPeerConnection, WasiWebrtc,
-    WasiWebrtcCtxView,
+    ChannelError, DataChannel, DataChannelOptions, InboundMessage, PeerConnection, SdpError,
+    SdpKind, WaitError, WasiWebrtc, WasiWebrtcCtxView, WasiWebrtcView, WiredFuture,
 };
 
 use webrtc::data_channel::RTCDataChannel;
@@ -184,13 +184,23 @@ impl Drop for ByteCollector {
     }
 }
 
+/// Convert a channel-wiring error into the WIT `error` variant.
+fn channel_error_to_error(err: ChannelError) -> Error {
+    match err {
+        ChannelError::Closed => Error::Closed,
+        ChannelError::Other(reason) => Error::Other(reason),
+    }
+}
+
 /// A [`StreamProducer`] that yields one `stream-message` per inbound WebRTC
 /// message, wrapping each message's bytes in a fresh `stream<u8>`.
 struct InboundStreamMessages {
-    incoming: Arc<AsyncMutex<UnboundedReceiver<InboundMessage>>>,
-    /// A future resolving to the next inbound message (or `None` at close),
-    /// retained across polls so the shared receiver lock is only held while
-    /// awaiting the next message.
+    /// Resolves to the channel's transport parts (including its inbound-message
+    /// receiver) once the channel is wired.
+    wired: WiredFuture,
+    /// A future resolving to the next inbound message (or `None` once the
+    /// channel is closed or wiring failed), retained across polls so the shared
+    /// receiver lock is only held while awaiting the next message.
     pending: Option<Pin<Box<dyn Future<Output = Option<InboundMessage>> + Send>>>,
 }
 
@@ -207,10 +217,13 @@ impl<D: Send + 'static> StreamProducer<D> for InboundStreamMessages {
     ) -> Poll<Result<StreamResult>> {
         let this = self.get_mut(); // safe: InboundStreamMessages is Unpin
 
-        let incoming = this.incoming.clone();
+        let wired = this.wired.clone();
         let fut = this.pending.get_or_insert_with(|| {
             Box::pin(async move {
-                let mut receiver = incoming.lock().await;
+                // Wait for the channel to be wired; if wiring failed the channel
+                // never opened, so treat it as end-of-stream.
+                let wired = wired.await.ok()?;
+                let mut receiver = wired.incoming.lock().await;
                 receiver.next().await
             })
         });
@@ -323,25 +336,29 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
         self_: Resource<DataChannel>,
         message: Message,
     ) -> Result<std::result::Result<(), Error>> {
-        let channel = accessor.with(|mut access| {
-            Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.channel())
-        })?;
+        let wired = accessor
+            .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.wired()))?;
 
         let (is_string, data) = match message {
             Message::Binary(data) => (false, data),
             Message::String(text) => (true, text.into_bytes()),
         };
-        Ok(send_channel_message(&channel, is_string, data).await)
+
+        let wired = match wired.await {
+            Ok(wired) => wired,
+            Err(err) => return Ok(Err(channel_error_to_error(err))),
+        };
+        Ok(send_channel_message(&wired.channel, is_string, data).await)
     }
 
     async fn receive(
         accessor: &Accessor<T, Self>,
         self_: Resource<DataChannel>,
     ) -> Result<std::result::Result<Message, Error>> {
-        let (incoming, stream_started, stream_receiving) = accessor.with(|mut access| {
+        let (wired, stream_started, stream_receiving) = accessor.with(|mut access| {
             let channel = access.get().table.get(&self_)?;
             Ok::<_, wasmtime::Error>((
-                channel.incoming(),
+                channel.wired(),
                 channel.stream_started(),
                 channel.is_stream_receiving(),
             ))
@@ -352,10 +369,14 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
             return Ok(Err(Error::ReceivingViaStream));
         }
 
-        // Race the next inbound message against `receive-via-stream` being called:
-        // whichever resolves first wins, so a pending receiver is woken and fails
-        // with `receiving-via-stream` the moment the stream is claimed.
-        let receive = std::pin::pin!(next_inbound(incoming));
+        // Race receiving the next inbound message (once the channel is wired)
+        // against `receive-via-stream` being called: whichever resolves first
+        // wins, so a pending receiver is woken and fails with
+        // `receiving-via-stream` the moment the stream is claimed.
+        let receive = std::pin::pin!(async move {
+            let wired = wired.await.map_err(channel_error_to_error)?;
+            next_inbound(wired.incoming).await
+        });
         let started = std::pin::pin!(stream_started);
         Ok(match futures::future::select(receive, started).await {
             futures::future::Either::Left((result, _)) => match result {
@@ -379,9 +400,17 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
         self_: Resource<DataChannel>,
         messages: StreamReader<StreamMessage>,
     ) -> Result<std::result::Result<(), SendViaStreamError>> {
-        let channel = accessor.with(|mut access| {
-            Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.channel())
-        })?;
+        let wired = accessor
+            .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.wired()))?;
+        let channel = match wired.await {
+            Ok(wired) => wired.channel,
+            Err(err) => {
+                return Ok(Err(SendViaStreamError {
+                    error: channel_error_to_error(err),
+                    sent: 0,
+                }))
+            }
+        };
 
         // Drain each element's payload concurrently (via `OutboundStreamMessages`)
         // while this driver sends the fully-buffered messages one at a time, in
@@ -416,9 +445,9 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
     ) -> Result<std::result::Result<StreamReader<StreamMessage>, Error>> {
         // Claim the inbound messages for this stream. A second call (or any
         // concurrent `receive`) observes the claim and fails.
-        let (claimed, incoming) = {
+        let (claimed, wired) = {
             let channel = access.get().table.get(&self_)?;
-            (channel.begin_stream_receiving(), channel.incoming())
+            (channel.begin_stream_receiving(), channel.wired())
         };
         if !claimed {
             return Ok(Err(Error::ReceivingViaStream));
@@ -426,7 +455,7 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
         let reader = StreamReader::new(
             access,
             InboundStreamMessages {
-                incoming,
+                wired,
                 pending: None,
             },
         )?;
@@ -441,103 +470,265 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
     }
 }
 
-// --- peer-connection (unimplemented) ---------------------------------------
+// --- peer-connection -------------------------------------------------------
 
-/// The error surfaced by every `peer-connection` host function.
-///
-/// The `peer-connection` guest-driven connection design target is not
-/// implemented by this crate; these functions exist only because
-/// `peer-connection` shares the `connections` interface with the `data-channel`
-/// resource this crate does implement.
-fn peer_connection_unsupported() -> wasmtime::Error {
-    wasmtime::Error::msg(
-        "lann:webrtc-datachannels/connections.peer-connection (the guest-driven connection \
-         design target) is not implemented by this host",
-    )
+/// Map a WIT `session-description` `kind` onto the host [`SdpKind`], rejecting
+/// `rollback` (which `webrtc-rs`'s `set-*-description` cannot express here).
+fn to_sdp_kind(kind: SdpType) -> std::result::Result<SdpKind, Error> {
+    match kind {
+        SdpType::Offer => Ok(SdpKind::Offer),
+        SdpType::Answer => Ok(SdpKind::Answer),
+        SdpType::Pranswer => Ok(SdpKind::Pranswer),
+        SdpType::Rollback => Err(Error::InvalidSignaling(
+            "rollback descriptions are not supported".to_string(),
+        )),
+    }
+}
+
+/// Map a host [`SdpError`] onto the WIT `error` variant.
+fn from_sdp_error(err: SdpError) -> Error {
+    match err {
+        SdpError::InvalidSignaling(detail) => Error::InvalidSignaling(detail),
+        SdpError::Other(detail) => Error::Other(detail),
+    }
 }
 
 impl HostPeerConnection for WasiWebrtcCtxView<'_> {
-    fn new(&mut self) -> Result<Resource<UnsupportedPeerConnection>> {
-        Err(peer_connection_unsupported())
+    fn new(&mut self) -> Result<Resource<PeerConnection>> {
+        let hook = self.ctx.setting_engine_hook();
+        Ok(self.table.push(PeerConnection::new(hook))?)
     }
 
     fn create_data_channel(
         &mut self,
-        _self_: Resource<UnsupportedPeerConnection>,
-        _options: Resource<DataChannelOptions>,
+        self_: Resource<PeerConnection>,
+        options: Resource<DataChannelOptions>,
     ) -> Result<std::result::Result<Resource<DataChannel>, Error>> {
-        Err(peer_connection_unsupported())
+        // `create-data-channel` takes ownership of the options resource; read
+        // its configuration, then drop it from the table.
+        let options = self.table.delete(options)?;
+        let channel = self.table.get(&self_)?.create_data_channel(
+            options.label,
+            options.ordered,
+            options.max_retransmits,
+        );
+        Ok(Ok(self.table.push(channel)?))
     }
 
-    fn close(&mut self, _self_: Resource<UnsupportedPeerConnection>) -> Result<()> {
-        Err(peer_connection_unsupported())
+    fn close(&mut self, self_: Resource<PeerConnection>) -> Result<()> {
+        self.table.get(&self_)?.close();
+        Ok(())
     }
 }
 
-impl<T: Send> HostPeerConnectionWithStore<T> for WasiWebrtc {
+/// A [`StreamProducer`] yielding one `ice-candidate` per locally gathered ICE
+/// candidate; the stream ends once gathering completes.
+struct LocalCandidateStream {
+    /// The candidate receiver, or `None` if `local-ice-candidates` was already
+    /// claimed (in which case the stream is empty).
+    rx: Option<UnboundedReceiver<crate::LocalCandidate>>,
+}
+
+impl<D: Send + 'static> StreamProducer<D> for LocalCandidateStream {
+    type Item = IceCandidate;
+    type Buffer = Option<IceCandidate>;
+
+    fn poll_produce<'a>(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        _store: StoreContextMut<'a, D>,
+        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<Result<StreamResult>> {
+        let this = self.get_mut(); // safe: LocalCandidateStream is Unpin
+        let Some(rx) = this.rx.as_mut() else {
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        };
+        match rx.poll_next_unpin(cx) {
+            Poll::Pending => {
+                if finish {
+                    Poll::Ready(Ok(StreamResult::Cancelled))
+                } else {
+                    Poll::Pending
+                }
+            }
+            Poll::Ready(None) => {
+                this.rx = None;
+                Poll::Ready(Ok(StreamResult::Dropped))
+            }
+            Poll::Ready(Some(candidate)) => {
+                destination.set_buffer(Some(IceCandidate {
+                    candidate: candidate.candidate,
+                    sdp_mid: candidate.sdp_mid,
+                    sdp_mline_index: candidate.sdp_mline_index,
+                }));
+                Poll::Ready(Ok(StreamResult::Completed))
+            }
+        }
+    }
+}
+
+/// A [`StreamProducer`] yielding one `data-channel` resource per channel opened
+/// by the remote peer. Producing a resource needs table access, so it is bound
+/// on [`WasiWebrtcView`].
+struct IncomingChannelStream {
+    /// The incoming-channel receiver, or `None` if `incoming-data-channels` was
+    /// already claimed (in which case the stream is empty).
+    rx: Option<UnboundedReceiver<DataChannel>>,
+}
+
+impl<D: WasiWebrtcView + 'static> StreamProducer<D> for IncomingChannelStream {
+    type Item = Resource<DataChannel>;
+    type Buffer = Option<Resource<DataChannel>>;
+
+    fn poll_produce<'a>(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        mut store: StoreContextMut<'a, D>,
+        mut destination: Destination<'a, Self::Item, Self::Buffer>,
+        finish: bool,
+    ) -> Poll<Result<StreamResult>> {
+        let this = self.get_mut(); // safe: IncomingChannelStream is Unpin
+        let Some(rx) = this.rx.as_mut() else {
+            return Poll::Ready(Ok(StreamResult::Dropped));
+        };
+        match rx.poll_next_unpin(cx) {
+            Poll::Pending => {
+                if finish {
+                    Poll::Ready(Ok(StreamResult::Cancelled))
+                } else {
+                    Poll::Pending
+                }
+            }
+            Poll::Ready(None) => {
+                this.rx = None;
+                Poll::Ready(Ok(StreamResult::Dropped))
+            }
+            Poll::Ready(Some(channel)) => {
+                let resource = store.data_mut().webrtc().table.push(channel)?;
+                destination.set_buffer(Some(resource));
+                Poll::Ready(Ok(StreamResult::Completed))
+            }
+        }
+    }
+}
+
+impl<T: WasiWebrtcView + 'static> HostPeerConnectionWithStore<T> for WasiWebrtc {
     fn incoming_data_channels(
-        _access: Access<'_, T, Self>,
-        _self_: Resource<UnsupportedPeerConnection>,
+        mut access: Access<'_, T, Self>,
+        self_: Resource<PeerConnection>,
     ) -> Result<StreamReader<Resource<DataChannel>>> {
-        Err(peer_connection_unsupported())
+        let rx = access.get().table.get(&self_)?.take_incoming_channels();
+        StreamReader::new(access, IncomingChannelStream { rx })
     }
 
     fn local_ice_candidates(
-        _access: Access<'_, T, Self>,
-        _self_: Resource<UnsupportedPeerConnection>,
+        mut access: Access<'_, T, Self>,
+        self_: Resource<PeerConnection>,
     ) -> Result<StreamReader<IceCandidate>> {
-        Err(peer_connection_unsupported())
+        let rx = access.get().table.get(&self_)?.take_local_candidates();
+        StreamReader::new(access, LocalCandidateStream { rx })
     }
 
     async fn create_offer(
-        _accessor: &Accessor<T, Self>,
-        _self_: Resource<UnsupportedPeerConnection>,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<PeerConnection>,
     ) -> Result<std::result::Result<SessionDescription, Error>> {
-        Err(peer_connection_unsupported())
+        let peer = accessor
+            .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.clone()))?;
+        Ok(match peer.create_offer().await {
+            Ok(sdp) => Ok(SessionDescription {
+                kind: SdpType::Offer,
+                sdp,
+            }),
+            Err(reason) => Err(Error::Other(reason)),
+        })
     }
 
     async fn create_answer(
-        _accessor: &Accessor<T, Self>,
-        _self_: Resource<UnsupportedPeerConnection>,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<PeerConnection>,
     ) -> Result<std::result::Result<SessionDescription, Error>> {
-        Err(peer_connection_unsupported())
+        let peer = accessor
+            .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.clone()))?;
+        Ok(match peer.create_answer().await {
+            Ok(sdp) => Ok(SessionDescription {
+                kind: SdpType::Answer,
+                sdp,
+            }),
+            Err(reason) => Err(Error::Other(reason)),
+        })
     }
 
     async fn set_local_description(
-        _accessor: &Accessor<T, Self>,
-        _self_: Resource<UnsupportedPeerConnection>,
-        _description: SessionDescription,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<PeerConnection>,
+        description: SessionDescription,
     ) -> Result<std::result::Result<(), Error>> {
-        Err(peer_connection_unsupported())
+        let kind = match to_sdp_kind(description.kind) {
+            Ok(kind) => kind,
+            Err(err) => return Ok(Err(err)),
+        };
+        let peer = accessor
+            .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.clone()))?;
+        Ok(peer
+            .set_local_description(kind, description.sdp)
+            .await
+            .map_err(from_sdp_error))
     }
 
     async fn set_remote_description(
-        _accessor: &Accessor<T, Self>,
-        _self_: Resource<UnsupportedPeerConnection>,
-        _description: SessionDescription,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<PeerConnection>,
+        description: SessionDescription,
     ) -> Result<std::result::Result<(), Error>> {
-        Err(peer_connection_unsupported())
+        let kind = match to_sdp_kind(description.kind) {
+            Ok(kind) => kind,
+            Err(err) => return Ok(Err(err)),
+        };
+        let peer = accessor
+            .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.clone()))?;
+        Ok(peer
+            .set_remote_description(kind, description.sdp)
+            .await
+            .map_err(from_sdp_error))
     }
 
     async fn add_ice_candidate(
-        _accessor: &Accessor<T, Self>,
-        _self_: Resource<UnsupportedPeerConnection>,
-        _candidate: IceCandidate,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<PeerConnection>,
+        candidate: IceCandidate,
     ) -> Result<std::result::Result<(), Error>> {
-        Err(peer_connection_unsupported())
+        let peer = accessor
+            .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.clone()))?;
+        Ok(peer
+            .add_ice_candidate(
+                candidate.candidate,
+                candidate.sdp_mid,
+                candidate.sdp_mline_index,
+            )
+            .await
+            .map_err(Error::Other))
     }
 
     async fn wait_connected(
-        _accessor: &Accessor<T, Self>,
-        _self_: Resource<UnsupportedPeerConnection>,
+        accessor: &Accessor<T, Self>,
+        self_: Resource<PeerConnection>,
     ) -> Result<std::result::Result<(), Error>> {
-        Err(peer_connection_unsupported())
+        let peer = accessor
+            .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.clone()))?;
+        Ok(match peer.wait_connected().await {
+            Ok(()) => Ok(()),
+            Err(WaitError::TimedOut) => Err(Error::TimedOut),
+            Err(WaitError::Closed) => Err(Error::Closed),
+            Err(WaitError::Other(reason)) => Err(Error::Other(reason)),
+        })
     }
 
-    async fn drop(
-        _accessor: &Accessor<T, Self>,
-        _rep: Resource<UnsupportedPeerConnection>,
-    ) -> Result<()> {
-        Err(peer_connection_unsupported())
+    async fn drop(accessor: &Accessor<T, Self>, rep: Resource<PeerConnection>) -> Result<()> {
+        accessor.with(|mut access| {
+            access.get().table.delete(rep)?;
+            Ok(())
+        })
     }
 }

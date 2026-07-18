@@ -1,0 +1,65 @@
+// The suite-owned `conformance:signaling` package.
+//
+// `mailbox` is the guest-facing view of the HTTP mailbox served by
+// `conformance-signalingd` (see `conformance/signaling/PROTOCOL.md`): a room
+// holds two ordered per-role mailboxes, a peer publishes opaque blobs to its
+// own role and consumes the peer's mailbox in publish order. The blob payloads
+// are opaque here; the conformance guest owns the encoding (JSON
+// `session-description` / `ice-candidate` values with an explicit
+// `end-of-candidates` message).
+//
+// This is deliberately separate from the demo `demo:webrtc-echo/rendezvous`
+// proposal and from any future standardized signaling interface, so it can
+// evolve with the tests and be discarded without API cost.
+//
+// It lives here (under the conformance suite's own `wit/deps/`) rather than at
+// the repository root because it is suite-owned test infrastructure, not part
+// of the shared `lann:webrtc-datachannels` surface. The shared package is still
+// pulled in through the sibling `deps/lann-webrtc-datachannels` symlink.
+package conformance:signaling@0.1.0;
+
+/// The guest-facing mailbox interface. Per-target implementations relay blobs
+/// to and from `conformance-signalingd`: a native HTTP client for the wasmtime
+/// adapter, a `fetch`-based client for the jco adapters, and an in-guest
+/// `wasi:http` client for the wasip3-guest adapter.
+interface mailbox {
+    use lann:webrtc-datachannels/types@0.1.0.{error};
+
+    /// Which half of the exchange this peer drives. The `offerer` publishes to
+    /// the `offerer` mailbox and consumes the `answerer` mailbox; the
+    /// `answerer` does the reverse.
+    enum role {
+        offerer,
+        answerer,
+    }
+
+    /// A joined mailbox session for one `{room}` and `{role}` on one server.
+    ///
+    /// A session publishes to its own role's mailbox and consumes the peer's
+    /// mailbox in publish order. Reads are sequence-numbered and idempotent
+    /// (see `PROTOCOL.md`), so the implementation may retry a fetch after a
+    /// timeout, reconnect, or reload and observe the same blob.
+    resource session {
+        /// Join (creating implicitly) `room` on the signaling server reachable
+        /// at `server` as `as-role`. `server` is the base URL the runner passes
+        /// to the adapter (for example `http://127.0.0.1:PORT`).
+        open: static async func(
+            server: string,
+            room: string,
+            as-role: role,
+        ) -> result<session, error>;
+
+        /// Publish the next opaque blob to this session's own mailbox. Blobs are
+        /// delivered to the peer in publish order.
+        send: async func(blob: list<u8>) -> result<_, error>;
+
+        /// Fetch the next opaque blob from the peer's mailbox, in publish order.
+        /// Resolves with `none` once the peer has marked its mailbox `done` and
+        /// no further blob will arrive.
+        recv: async func() -> result<option<list<u8>>, error>;
+
+        /// Mark this session's own mailbox as `done`: no further blobs will be
+        /// published, so the peer's `recv` resolves with `none` at the end.
+        done: async func() -> result<_, error>;
+    }
+}

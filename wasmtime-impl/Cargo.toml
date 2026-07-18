@@ -17,8 +17,10 @@ futures = "0.3"
 anyhow = "1"
 bytes = "1"
 # `webrtc-rs` peer connections require a Tokio runtime; the host spawns their
-# async `close()` from `Drop` to tear down ICE/DTLS/SCTP background tasks.
-tokio = { version = "1", features = ["rt"] }
+# async `close()` from `Drop` to tear down ICE/DTLS/SCTP background tasks, spawns
+# the peer-connection build/channel-wiring tasks, and uses `sync`/`time` for the
+# `wait-connected` connection-state signalling and its timeout.
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

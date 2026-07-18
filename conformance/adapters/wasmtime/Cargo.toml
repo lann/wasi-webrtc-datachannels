@@ -1,0 +1,30 @@
+[package]
+name = "conformance-adapter-wasmtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Conformance adapter for the wasmtime (native webrtc-rs) target: runs the shared conformance guest against the wasmtime host, driving each test to a raw pass/fail/skip and emitting an adapter result document the conformance runner consumes."
+
+[[bin]]
+name = "conformance-adapter-wasmtime"
+path = "src/main.rs"
+
+[dependencies]
+# The wasmtime host under test: satisfies the guest's `connections`/`types`
+# imports with a real webrtc-rs data channel and peer connection.
+wasmtime-webrtc-datachannels = { path = "../../../wasmtime-impl" }
+# The suite-owned signaling server, started in-process so each run owns its own
+# mailbox without managing a subprocess.
+conformance-signalingd = { path = "../../signaling/server" }
+# Wasmtime with component-model async (the guest's `run-test` export and the
+# host's stream/future plumbing use the async ABI).
+wasmtime = { version = "46", features = ["component-model", "component-model-async", "async", "cranelift", "runtime"] }
+# Native HTTP client backing the mailbox host (plain HTTP/1.1 long-poll against
+# the in-process signaling server; no TLS needed for localhost).
+reqwest = { version = "0.12", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+futures = "0.3"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }

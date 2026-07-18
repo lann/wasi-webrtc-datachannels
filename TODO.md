@@ -111,6 +111,20 @@ edge case (Drop after the runtime stops), but a production host should not rely
 on runtime presence for cleanup. Consider a dedicated close path or documenting
 the invariant.
 
+### B6. Wasmtime host cannot receive zero-length messages (upstream webrtc-rs bug)
+
+`webrtc-rs`'s `RTCDataChannel::read_loop` treats any zero-byte read from
+`read_data_channel` as EOF and closes the channel
+(`webrtc-0.17/src/data_channel/mod.rs`, the `Ok((0, _))` arm) — but per RFC
+8831 §6.6 a zero-length message legitimately arrives as a zero-byte read with a
+`StringEmpty`/`BinaryEmpty` PPID, which `webrtc-data` correctly decodes to
+`n = 0`. So a peer that receives an empty message through the callback API has
+its channel torn down instead of observing the message. Sending empty messages
+works (`webrtc-data` maps them onto the empty PPIDs); only receiving is broken.
+Tracked by the `zero-length-message` expected-fail in
+`conformance/manifests/wasmtime.toml`; fixing it needs an upstream patch or
+detached data channels with a host-side read loop.
+
 ## C. WIT interface design
 
 ### C1. `peer-connection` has open design questions to settle before implementation

@@ -15,8 +15,9 @@ fmt-check:
 
 # Run clippy across all crates.
 clippy:
-    cargo clippy --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer -- -D warnings
+    cargo clippy --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest -- -D warnings
     cargo clippy -p echo-demo --target wasm32-unknown-unknown -- -D warnings
+    cargo clippy -p conformance-guest --target wasm32-unknown-unknown -- -D warnings
     cargo clippy -p cli-signaling --target wasm32-wasip2 -- -D warnings
     cargo clippy -p wasip3-webrtc-datachannels --target wasm32-wasip2 -- -D warnings
     cargo clippy -p webrtc-consumer --target wasm32-wasip2 -- -D warnings
@@ -29,26 +30,41 @@ validate-wit:
     wasm-tools component wit examples/cli-signaling/wit
     wasm-tools component wit wasip3-impl/wit
     wasm-tools component wit examples/webrtc-consumer/wit
+    wasm-tools component wit conformance/wit
 
 # Run the Rust / Wasmtime tests (includes the manual-signaling integration test).
 # nextest runs faster but does not execute doctests, so run those separately.
 test:
-    cargo nextest run --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer
-    cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer
+    cargo nextest run --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest
+    cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest
 
-# Run the conformance suite runner over the currently enabled targets. In
-# Phase 0 no targets are enabled, so this passes over an empty set. It reads
-# conformance/tests.toml + conformance/manifests/, starts the signaling server
-# (ephemeral localhost port, gated on /healthz) via the built
-# conformance-signalingd binary, and writes the matrix to conformance/matrix.md,
-# exiting nonzero on any fail or unexpected-pass.
-conformance:
+# Run the conformance suite over the currently enabled targets (see
+# conformance/PLAN.md). Builds the shared conformance guest component, runs the
+# wasmtime adapter (which starts its own in-process signaling server) to
+# produce conformance/results/wasmtime.json, then runs the runner over
+# conformance/tests.toml + conformance/manifests/ + those results — also
+# spawning the standalone conformance-signalingd binary (ephemeral localhost
+# port, gated on /healthz) to exercise its lifecycle — and writes the matrix to
+# conformance/matrix.md, exiting nonzero on any fail or unexpected-pass.
+conformance: build-conformance-guest
     cargo build -p conformance-signalingd
+    cargo run --release -p conformance-adapter-wasmtime -- \
+        --guest conformance/guest/build/conformance-guest.component.wasm \
+        --out conformance/results
     cargo run -p conformance-runner -- \
         --tests conformance/tests.toml \
         --manifests conformance/manifests \
+        --results conformance/results \
         --signaling-bin target/debug/conformance-signalingd \
         --matrix-out conformance/matrix.md
+
+# Build the shared conformance guest component into conformance/guest/build/.
+build-conformance-guest:
+    cargo build --release -p conformance-guest --target wasm32-unknown-unknown
+    mkdir -p conformance/guest/build
+    wasm-tools component new \
+        target/wasm32-unknown-unknown/release/conformance_guest.wasm \
+        -o conformance/guest/build/conformance-guest.component.wasm
 
 # Build the echo-demo guest component into examples/echo-demo/build/.
 build-component:
