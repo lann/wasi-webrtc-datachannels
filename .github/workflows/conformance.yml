@@ -6,11 +6,15 @@ name: Conformance
 # artifact and failing on any unexpected status.
 #
 # Phases enabled so far:
-#   - Phase 0: the runner over an empty target set (green over the empty set).
+#   - Phase 0: the runner, registry, and manifest schema.
 #   - Phase 1: the conformance-signalingd HTTP mailbox server — its integration
 #     tests run here, and the runner starts/health-checks/stops a live server.
-# Later phases enable targets and additional jobs (see the workflow plan in
-# conformance/PLAN.md).
+#   - Phase 2: the shared conformance guest + the wasmtime adapter — `just
+#     conformance` builds the guest component, runs the adapter over the
+#     wasmtime host (loopback ICE, in-process signaling), and classifies the
+#     wasmtime row of the matrix against conformance/manifests/wasmtime.toml.
+# Later phases enable more targets and additional jobs (see the workflow plan
+# in conformance/PLAN.md).
 
 on:
   push:
@@ -22,11 +26,12 @@ permissions:
   contents: read
 
 jobs:
-  # Job 1: every PR. Currently runs the runner over the empty target set.
+  # Job 1: every PR. Builds the conformance guest and runs the enabled targets
+  # (currently wasmtime) over loopback via `just conformance`.
   matrix:
     runs-on: ubuntu-latest
     # WebRTC handshakes can hang; cap the job so a stuck run fails fast.
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

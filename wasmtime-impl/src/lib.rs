@@ -22,7 +22,7 @@ pub use data_channel::{
     close_peer_connections, new_peer_connection, ChannelError, DataChannel, InboundMessage, Wired,
     WiredFuture,
 };
-pub use peer_connection::{LocalCandidate, PeerConnection, SdpKind, WaitError};
+pub use peer_connection::{LocalCandidate, PeerConnection, SdpError, SdpKind, WaitError};
 
 use std::sync::Arc;
 
