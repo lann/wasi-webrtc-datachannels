@@ -365,7 +365,7 @@ the reviewer directs otherwise.
 - **Done when:** wasmtime row of the matrix is green (with declared
   expected-fails) in CI.
 
-### Phase 3 — jco adapters
+### Phase 3 — jco adapters (**COMPLETED**)
 - `adapters/jco`: `signaling.js` fetch mailbox client; transpile the
   conformance guest with the right `--async-*`/`--map` flags (keep flags next
   to the adapter, not in `jco-impl/package.json`); Node runner mode; browser

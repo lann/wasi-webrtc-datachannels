@@ -16,10 +16,22 @@
 // Resolve `RTCPeerConnection` isomorphically: a browser (including headless
 // Chromium) exposes the W3C class as a global; under Node it is provided by
 // `@roamhq/wrtc`, imported lazily so the bare specifier never has to resolve in
-// the browser.
-const RTCPeerConnection =
-  globalThis.RTCPeerConnection ??
-  (await import("@roamhq/wrtc")).default.RTCPeerConnection;
+// the browser. A missing Node dependency is surfaced with an actionable message
+// rather than a bare module-resolution error.
+async function resolveRTCPeerConnection() {
+  if (globalThis.RTCPeerConnection) return globalThis.RTCPeerConnection;
+  try {
+    return (await import("@roamhq/wrtc")).default.RTCPeerConnection;
+  } catch (cause) {
+    throw new Error(
+      "no RTCPeerConnection available: not running in a browser and @roamhq/wrtc " +
+        "could not be loaded (run `npm install` in conformance/adapters/jco)",
+      { cause },
+    );
+  }
+}
+
+const RTCPeerConnection = await resolveRTCPeerConnection();
 
 // Keep the SCTP send buffer bounded; pause the producer when it fills.
 const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;

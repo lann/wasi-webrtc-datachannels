@@ -83,7 +83,9 @@ async function spawnSignaling(bin) {
       }
     };
     child.stdout.on("data", onData);
-    child.on("exit", (code) => rejectUrl(new Error(`signaling server exited early (${code})`)));
+    child.on("exit", (code) =>
+      rejectUrl(new Error(`signaling server exited before reporting a URL (exit code ${code})`)),
+    );
     setTimeout(() => rejectUrl(new Error("signaling server did not report a URL in time")), 10_000);
   });
   await waitHealthy(base);
