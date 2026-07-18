@@ -11,11 +11,17 @@ exists today.
 
 ## Status
 
-Phase 0 (scaffolding & registry) is in place: the test registry, the manifest
-schema, and the `conformance-runner` that aggregates adapter results, applies
-expected-fail policy, and renders the matrix. **No targets are enabled yet**, so
-the suite runs green over an empty target set. Adapters, the signaling server,
-and the conformance guest arrive in later phases.
+Phases in place so far:
+
+- **Phase 0 (scaffolding & registry):** the test registry, the manifest schema,
+  and the `conformance-runner` that aggregates adapter results, applies
+  expected-fail policy, and renders the matrix.
+- **Phase 1 (signaling server):** `conformance-signalingd`, the suite-owned HTTP
+  mailbox that relays opaque SDP/ICE blobs between two peers. The runner starts
+  it (ephemeral localhost port, gated on `/healthz`) and tears it down.
+
+**No conformance targets are enabled yet**, so the suite runs green over an
+empty target set. Adapters and the conformance guest arrive in later phases.
 
 ## Running
 
@@ -25,15 +31,35 @@ From the repository root:
 just conformance
 ```
 
-This invokes `conformance-runner`, which reads the test registry and any
-per-target manifests, aggregates adapter result documents (none yet), applies
-the expected-fail / unexpected-pass policy, and writes the markdown matrix to
-`conformance/matrix.md`. It exits nonzero on any `fail` or `unexpected-pass`.
+This builds `conformance-signalingd`, then invokes `conformance-runner`, which
+reads the test registry and any per-target manifests, starts a signaling server
+and waits for `/healthz`, aggregates adapter result documents (none yet), applies
+the expected-fail / unexpected-pass policy, tears the server down, and writes the
+markdown matrix to `conformance/matrix.md`. It exits nonzero on any `fail` or
+`unexpected-pass`.
 
-Run the runner's own unit tests with the rest of the workspace:
+Run the runner's unit tests and the signaling server's integration tests with
+the rest of the workspace:
 
 ```sh
 just test
+# or just the signaling server:
+cargo nextest run -p conformance-signalingd
+```
+
+## Signaling server (`conformance-signalingd`)
+
+A small standalone HTTP mailbox server used to relay signaling blobs between two
+peers over plain HTTP/1.1 long-poll (no WebSockets), reachable identically from
+native Rust, browser/Node `fetch`, and `wasi:http`. The full wire contract is in
+[`signaling/PROTOCOL.md`](signaling/PROTOCOL.md).
+
+Run it standalone (binds an ephemeral localhost port and prints its URL):
+
+```sh
+cargo run -p conformance-signalingd
+# or bind a fixed routable address for cross-machine / NAT-lab runs:
+cargo run -p conformance-signalingd -- --host 0.0.0.0 --port 8080
 ```
 
 ## Layout
@@ -46,7 +72,9 @@ conformance/
   manifests/               # per-target capability manifests (<target>.toml)
     example.toml.example   #   template (NOT loaded; see below)
   runner/                  # conformance-runner (Rust workspace member)
-  signaling/               # signaling server + protocol (Phase 1)
+  signaling/
+    PROTOCOL.md            # mailbox wire protocol spec
+    server/                # conformance-signalingd (Rust workspace member)
   wit/                     # conformance WIT (Phase 2); deps symlink to root wit/
   guest/                   # conformance guest component(s) (Phase 2)
   adapters/                # per-target adapters (wasmtime / jco / wasip3)

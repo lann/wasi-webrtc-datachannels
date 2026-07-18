@@ -12,8 +12,10 @@ mod manifest;
 mod plan;
 mod registry;
 mod results;
+mod signaling;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -22,6 +24,7 @@ use manifest::Manifest;
 use plan::Matrix;
 use registry::Registry;
 use results::AdapterReport;
+use signaling::SignalingServer;
 
 /// Aggregate conformance results and render the matrix.
 #[derive(Debug, Parser)]
@@ -45,6 +48,14 @@ struct Cli {
     /// omitted.
     #[arg(long)]
     matrix_out: Option<PathBuf>,
+
+    /// Path to the `conformance-signalingd` binary. When provided, the runner
+    /// starts a signaling server (ephemeral localhost port), waits for
+    /// `/healthz`, and tears it down after the run. Adapters (added in later
+    /// phases) receive its base URL. With no targets enabled this simply
+    /// exercises spawn/health/teardown.
+    #[arg(long)]
+    signaling_bin: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -52,6 +63,18 @@ fn main() -> Result<()> {
 
     let registry = Registry::load(&cli.tests)?;
     let manifests = load_manifests(&cli.manifests)?;
+
+    // Start the signaling server if requested, so it is up before adapters run.
+    let signaling = match &cli.signaling_bin {
+        Some(bin) => {
+            let server = SignalingServer::spawn(bin, Duration::from_secs(10))
+                .context("starting signaling server")?;
+            eprintln!("signaling server ready at {}", server.base_url());
+            Some(server)
+        }
+        None => None,
+    };
+
     let reports = match &cli.results {
         Some(dir) => load_reports(dir)?,
         None => Vec::new(),
@@ -59,6 +82,12 @@ fn main() -> Result<()> {
 
     let matrix = Matrix::classify(&registry, &manifests, &reports);
     let markdown = matrix.render_markdown();
+
+    // Adapters run between server startup and teardown in later phases; for now
+    // tear the server down once the (stub) aggregation is complete.
+    if let Some(server) = signaling {
+        server.shutdown();
+    }
 
     match &cli.matrix_out {
         Some(path) => {

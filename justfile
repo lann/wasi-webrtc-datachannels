@@ -37,13 +37,17 @@ test:
     cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer
 
 # Run the conformance suite runner over the currently enabled targets. In
-# Phase 0 no targets are enabled, so this passes over an empty set; it reads
-# conformance/tests.toml + conformance/manifests/ and writes the matrix to
-# conformance/matrix.md, exiting nonzero on any fail or unexpected-pass.
+# Phase 0 no targets are enabled, so this passes over an empty set. It reads
+# conformance/tests.toml + conformance/manifests/, starts the signaling server
+# (ephemeral localhost port, gated on /healthz) via the built
+# conformance-signalingd binary, and writes the matrix to conformance/matrix.md,
+# exiting nonzero on any fail or unexpected-pass.
 conformance:
+    cargo build -p conformance-signalingd
     cargo run -p conformance-runner -- \
         --tests conformance/tests.toml \
         --manifests conformance/manifests \
+        --signaling-bin target/debug/conformance-signalingd \
         --matrix-out conformance/matrix.md
 
 # Build the echo-demo guest component into examples/echo-demo/build/.

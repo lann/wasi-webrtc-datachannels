@@ -5,9 +5,11 @@ name: Conformance
 # enabled targets, including the pairwise interop matrix, uploading the matrix
 # artifact and failing on any unexpected status.
 #
-# Phase 0: no targets are enabled yet, so this job only exercises the runner
-# over an empty target set (green over the empty set). Later phases enable
-# targets, the signaling server, and additional jobs (see the workflow plan in
+# Phases enabled so far:
+#   - Phase 0: the runner over an empty target set (green over the empty set).
+#   - Phase 1: the conformance-signalingd HTTP mailbox server — its integration
+#     tests run here, and the runner starts/health-checks/stops a live server.
+# Later phases enable targets and additional jobs (see the workflow plan in
 # conformance/PLAN.md).
 
 on:
@@ -39,6 +41,9 @@ jobs:
 
       - name: Install dependencies
         run: SKIP_NODE=1 ./scripts/setup.sh
+
+      - name: Test signaling server
+        run: cargo nextest run -p conformance-signalingd
 
       - name: Run conformance suite
         run: just conformance
