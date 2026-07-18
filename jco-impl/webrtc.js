@@ -1,10 +1,9 @@
 // Host implementation of the `lann:webrtc-datachannels` imports for Node.
 //
 // This is the "browser-first" host: it is written against the standard W3C
-// WebRTC API (`RTCPeerConnection` / `RTCDataChannel`) and the WHATWG Streams
-// API (`ReadableStream`), so the same logic runs in a browser. Under Node it is
-// backed by `@roamhq/wrtc`, the maintained fork of `node-webrtc`, which
-// provides those globals-compatible classes.
+// WebRTC API (`RTCPeerConnection` / `RTCDataChannel`), so the same logic runs
+// in a browser. Under Node it is backed by `@roamhq/wrtc`, the maintained fork
+// of `node-webrtc`, which provides those globals-compatible classes.
 //
 // `jco --map` wires this module in: the transpiled component does
 //   import { openEcho } from '.../connect'      -> openEcho here

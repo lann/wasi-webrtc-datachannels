@@ -51,8 +51,8 @@ interface manual-demo {
 /// connection setup.
 ///
 /// This is a **demo-only** interface (it is not part of the
-/// `lann:webrtc-datachannels` package). Unlike that package's `signaling` (the
-/// full trickle-ICE design target), this interface gathers ICE candidates up
+/// `lann:webrtc-datachannels` package). Unlike that package's `peer-connection`
+/// (the full trickle-ICE design target), this interface gathers ICE candidates up
 /// front so a whole connection needs just **two** messages: the offerer sends
 /// one complete SDP offer (with every candidate already embedded), and the
 /// answerer replies with one complete SDP answer (likewise). That is exactly
