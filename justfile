@@ -29,6 +29,7 @@ validate-wit:
     wasm-tools component wit examples/cli-signaling/wit
     wasm-tools component wit wasip3-impl/wit
     wasm-tools component wit examples/webrtc-consumer/wit
+    wasm-tools component wit conformance/wit
 
 # Run the Rust / Wasmtime tests (includes the manual-signaling integration test).
 # nextest runs faster but does not execute doctests, so run those separately.
