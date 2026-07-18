@@ -13,6 +13,10 @@
 #   - wasm-tools, used to wrap guest modules into components and to validate WIT
 #   - just, the command runner used for development and CI recipes
 #   - cargo-nextest, the faster test runner used by `just test`
+#   - wac, the component linker used to compose the webrtc-consumer with the
+#     wasip3 provider (`just compose-webrtc`)
+#   - wasmtime, the host runtime that runs the composed in-guest WebRTC
+#     integration test (`just test-webrtc-composed`)
 #   - the Node host's npm dependencies (jco + @roamhq/wrtc)
 #
 # wasm-tools, just, and cargo-nextest are installed with cargo-binstall, which
@@ -39,6 +43,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASM_TOOLS_VERSION="${WASM_TOOLS_VERSION:-1.247.0}"
 JUST_VERSION="${JUST_VERSION:-1.40.0}"
 NEXTEST_VERSION="${NEXTEST_VERSION:-0.9.140}"
+WAC_VERSION="${WAC_VERSION:-0.10.1}"
+WASMTIME_VERSION="${WASMTIME_VERSION:-46.0.1}"
 
 log() { printf '\n==> %s\n' "$1"; }
 
@@ -88,6 +94,20 @@ if command -v cargo-nextest >/dev/null 2>&1; then
   echo "cargo-nextest already present: $(cargo-nextest --version)"
 else
   binstall "cargo-nextest@${NEXTEST_VERSION}"
+fi
+
+log "Ensuring wac ${WAC_VERSION} is installed"
+if command -v wac >/dev/null 2>&1; then
+  echo "wac already present: $(wac --version)"
+else
+  binstall "wac-cli@${WAC_VERSION}"
+fi
+
+log "Ensuring wasmtime ${WASMTIME_VERSION} is installed"
+if command -v wasmtime >/dev/null 2>&1; then
+  echo "wasmtime already present: $(wasmtime --version)"
+else
+  binstall "wasmtime-cli@${WASMTIME_VERSION}"
 fi
 
 if [ "${SKIP_NODE:-0}" = "1" ]; then

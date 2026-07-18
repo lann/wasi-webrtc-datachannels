@@ -55,6 +55,11 @@ jobs:
       - name: Run tests
         run: just test
 
+      # Build the wasip3 provider + webrtc-consumer, compose them with `wac
+      # plug`, and run the composed in-guest WebRTC round trip under wasmtime.
+      - name: Run composed WebRTC integration test
+        run: just test-webrtc-composed
+
   # Guest component build + browser (jco) host test. Runs in parallel with the
   # native Rust checks above.
   browser:

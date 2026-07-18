@@ -7,6 +7,6 @@ components = ["rustfmt", "clippy"]
 targets = [
     # echo-demo + the manual-signaling test guest
     "wasm32-unknown-unknown",
-    # cli-signaling
+    # cli-signaling, wasip3-webrtc-datachannels (provider), webrtc-consumer
     "wasm32-wasip2",
 ]

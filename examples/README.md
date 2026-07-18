@@ -1,21 +1,27 @@
 # examples
 
-Guest components (`echo-demo`, `cli-signaling`, `wasip3-cli`) and the native
+Guest components (`echo-demo`, `cli-signaling`, `webrtc-consumer`) and the native
 demo/manual-signaling driver (`wasmtime-demo`) that exercise the
 `lann:webrtc-datachannels` interfaces.
 
 - **`echo-demo`** / **`cli-signaling`** — guest components whose WebRTC work is
   performed by a **host** (`wasmtime-impl` or `jco-impl`).
-- **`wasip3-cli`** — a self-contained WASIp3 CLI component that runs the whole
-  sans-I/O WebRTC stack **in-guest** via `wasip3-impl`'s `GuestPeer`, over
-  `wasi:sockets` UDP and `wasi:clocks` timers. It connects an offerer and an
-  answerer over loopback and exchanges a message each way. Build and run it with
-  `just demo-wasip3-cli` (needs `wasmtime` v46+ on `PATH`), or directly:
+- **`webrtc-consumer`** — a minimal consumer component that **imports**
+  `lann:webrtc-datachannels/connections`. It is composed (`wac plug`) with the
+  [`wasip3-impl`](../wasip3-impl) provider component — whose in-guest sans-I/O
+  stack satisfies that import — into one self-contained component, then run under
+  `wasmtime`, standing up an offerer and an answerer that connect over loopback
+  entirely in-guest and exchange a message each way. This is the basic in-guest
+  integration test. Build, compose, and run it with `just test-webrtc-composed`
+  (needs `wasmtime` v46+ and `wac` on `PATH`), or directly:
 
   ```sh
-  cargo build --release -p wasip3-cli --target wasm32-wasip2
+  cargo build --release -p wasip3-webrtc-datachannels -p webrtc-consumer \
+      --target wasm32-wasip2
+  wac plug target/wasm32-wasip2/release/webrtc_consumer.wasm \
+      --plug target/wasm32-wasip2/release/wasip3_webrtc_datachannels.wasm \
+      -o target/webrtc-composed.wasm
   wasmtime run -W component-model-async=y -S cli -S p3 -S inherit-network \
-      target/wasm32-wasip2/release/wasip3_cli.wasm
+      target/webrtc-composed.wasm
   ```
 - **`wasmtime-demo`** — the native Rust host binaries built on `wasmtime-impl`.
-

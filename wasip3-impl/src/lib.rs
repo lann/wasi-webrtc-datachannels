@@ -1,34 +1,40 @@
-//! A sans-I/O WebRTC data-channel peer built on `rtc` 0.20 release candidates,
-//! with a native UDP reference driver.
+//! `wasip3-webrtc-datachannels`: a wasm **component** that runs the sans-I/O
+//! `rtc` WebRTC stack *in-guest* and exports the shared
+//! `lann:webrtc-datachannels` `connections` resources.
 //!
-//! This crate is the third stack alongside the `wasmtime-impl` (webrtc-rs) and
-//! `jco-impl` (browser) hosts: instead of the fully async `webrtc-rs` engine, it
-//! drives the *sans-I/O* `rtc` stack, where protocol logic is separated from
-//! I/O. That separation is what lets the same peer run in a wasm guest over
-//! `wasi:sockets`.
+//! This is the third implementation alongside the `wasmtime-impl` (webrtc-rs)
+//! and `jco-impl` (browser) hosts. Unlike those two — which run the fully async
+//! `webrtc-rs` engine host-side — this one is itself a component: it drives the
+//! sans-I/O `rtc` stack over WASIp3 `wasi:sockets` UDP and `wasi:clocks` timers,
+//! entirely inside wasm.
 //!
-//! Two layers:
+//! Because it imports only WASIp3 interfaces and exports the package surface, it
+//! can be composed (`wac plug`) with any consumer component that imports
+//! `connections`, producing a single self-contained component.
 //!
-//! - [`SansIoPeer`] — the runtime-agnostic core: signaling primitives plus the
-//!   six sans-I/O stepping calls. It performs no I/O.
-//! - [`NativePeer`] — a Tokio [`UdpSocket`](tokio::net::UdpSocket) driver that
-//!   runs the event loop natively (the `native` feature, on by default).
-//! - `GuestPeer` — a WASIp3 `wasi:sockets`/timer driver that runs the same core
-//!   inside a wasm component (the `guest` feature). This is the guest driver
-//!   `AGENTS.md` calls the natural next step.
+//! Layers:
 //!
-//! The [`interop`](../../wasip3_webrtc_datachannels/tests) test connects a
-//! `webrtc-rs` offerer to this crate's answerer and round-trips messages over a
-//! real DTLS + SCTP data channel.
+//! - [`SansIoPeer`] (`peer.rs`) — the runtime-agnostic core wrapping an `rtc`
+//!   `RTCPeerConnection`: signaling primitives, the six sans-I/O stepping calls,
+//!   and message sends. It performs no I/O.
+//! - The `runtime` module — a WASIp3 `wasi:sockets`/`wasi:clocks` pump that runs
+//!   the core in-guest.
+//! - The `provider` module — the exported `connections` resources
+//!   (`data-channel-options`, `data-channel`, `peer-connection`) implemented on
+//!   top of the driver.
 
-#[cfg(feature = "guest")]
-mod guest;
-#[cfg(feature = "native")]
-mod native;
 mod peer;
 
-#[cfg(feature = "guest")]
-pub use guest::GuestPeer;
-#[cfg(feature = "native")]
-pub use native::{Answered, InboundMessage, NativePeer};
 pub use peer::{PeerEvent, SansIoPeer, Transmit};
+
+wit_bindgen::generate!({
+    path: "wit",
+    world: "provider",
+    generate_all,
+});
+
+mod provider;
+mod runtime;
+
+use provider::Component;
+export!(Component);

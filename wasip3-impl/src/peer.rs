@@ -4,8 +4,8 @@
 //! needs — signaling primitives, the six sans-I/O stepping calls
 //! (`poll_transmit`/`handle_input`/`poll_timeout`/`handle_timeout` and the
 //! drained events), and message sends. It performs **no** I/O and awaits
-//! nothing, so the same core can be fed by a native UDP socket (see
-//! [`crate::native`]) or, in a future guest, by `wasi:sockets`.
+//! nothing, so the same core can be fed by the in-guest `wasi:sockets` driver
+//! (see [`crate::runtime`]).
 //!
 //! The sans-I/O model has no OS interface enumeration (the `rtc` fork stubs
 //! `ifaces()` out on wasm), so candidates are supplied explicitly by the driver
@@ -78,6 +78,31 @@ impl SansIoPeer {
     /// negotiation, and produce an answer.
     pub fn answerer() -> Result<Self> {
         Ok(Self { pc: build_pc()? })
+    }
+
+    /// Create a data channel that will be negotiated in-band with the peer.
+    /// Returns the channel's id, which addresses it for
+    /// [`send_text`](Self::send_text) / [`send_binary`](Self::send_binary).
+    pub fn create_data_channel(
+        &mut self,
+        label: &str,
+        ordered: bool,
+        max_retransmits: Option<u16>,
+    ) -> Result<RTCDataChannelId> {
+        let init = RTCDataChannelInit {
+            ordered,
+            max_retransmits,
+            ..Default::default()
+        };
+        Ok(self.pc.create_data_channel(label, Some(init))?.id())
+    }
+
+    /// Produce an SDP offer (already set as the local description) describing
+    /// the local peer's current channels.
+    pub fn create_offer(&mut self) -> Result<String> {
+        let offer = self.pc.create_offer(None)?;
+        self.pc.set_local_description(offer)?;
+        local_sdp(&self.pc)
     }
 
     /// Create an **offerer** with a single in-band data channel of the given

@@ -15,10 +15,11 @@ fmt-check:
 
 # Run clippy across all crates.
 clippy:
-    cargo clippy --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-cli -- -D warnings
+    cargo clippy --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer -- -D warnings
     cargo clippy -p echo-demo --target wasm32-unknown-unknown -- -D warnings
     cargo clippy -p cli-signaling --target wasm32-wasip2 -- -D warnings
-    cargo clippy -p wasip3-cli --target wasm32-wasip2 -- -D warnings
+    cargo clippy -p wasip3-webrtc-datachannels --target wasm32-wasip2 -- -D warnings
+    cargo clippy -p webrtc-consumer --target wasm32-wasip2 -- -D warnings
     cargo clippy --manifest-path wasmtime-impl/tests/manual-signaling-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
 # Validate WIT packages.
@@ -26,12 +27,14 @@ validate-wit:
     wasm-tools component wit wit
     wasm-tools component wit examples/echo-demo/wit
     wasm-tools component wit examples/cli-signaling/wit
+    wasm-tools component wit wasip3-impl/wit
+    wasm-tools component wit examples/webrtc-consumer/wit
 
 # Run the Rust / Wasmtime tests (includes the manual-signaling integration test).
 # nextest runs faster but does not execute doctests, so run those separately.
 test:
-    cargo nextest run --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-cli
-    cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-cli
+    cargo nextest run --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer
+    cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer
 
 # Build the echo-demo guest component into examples/echo-demo/build/.
 build-component:
@@ -54,14 +57,30 @@ demo-wasmtime count="1000" size="4096": build-component
     cargo run --release --bin wasmtime-webrtc-host -- \
         examples/echo-demo/build/echo-demo.component.wasm {{count}} {{size}}
 
-# Build the wasip3-cli component (the whole WebRTC stack runs in-guest) into
-# target/wasm32-wasip2/release/wasip3_cli.wasm.
-build-wasip3-cli:
-    cargo build --release -p wasip3-cli --target wasm32-wasip2
+# Build the wasip3 provider component (the whole WebRTC stack runs in-guest;
+# it exports `lann:webrtc-datachannels/connections`) into
+# target/wasm32-wasip2/release/wasip3_webrtc_datachannels.wasm.
+build-wasip3-provider:
+    cargo build --release -p wasip3-webrtc-datachannels --target wasm32-wasip2
 
-# Run the in-guest wasip3-cli demo with `wasmtime run`. Requires a `wasmtime`
-# (v46+) on PATH; the flags provision the async component-model ABI and the
-# WASIp3 host APIs (including `wasi:sockets` UDP over loopback).
-demo-wasip3-cli: build-wasip3-cli
-    wasmtime run -W component-model-async=y -S cli -S p3 -S inherit-network \
-        target/wasm32-wasip2/release/wasip3_cli.wasm
+# Build the webrtc-consumer component (imports `connections`) into
+# target/wasm32-wasip2/release/webrtc_consumer.wasm.
+build-webrtc-consumer:
+    cargo build --release -p webrtc-consumer --target wasm32-wasip2
+
+# Compose the consumer with the provider (`wac plug`) into
+# target/webrtc-composed.wasm. The consumer's `connections` import is satisfied
+# by the provider's export, yielding one self-contained component.
+compose-webrtc: build-wasip3-provider build-webrtc-consumer
+    wac plug target/wasm32-wasip2/release/webrtc_consumer.wasm \
+        --plug target/wasm32-wasip2/release/wasip3_webrtc_datachannels.wasm \
+        -o target/webrtc-composed.wasm
+
+# Basic in-guest integration test: run the composed consumer+provider under
+# `wasmtime`, standing up two peers that connect over loopback entirely inside
+# wasm and exchange a message each way. Requires `wasmtime` (v46+) and `wac`.
+# `timeout` bounds the whole run so a stuck handshake fails the recipe instead
+# of hanging CI; the guest itself also bounds `wait-connected` internally.
+test-webrtc-composed: compose-webrtc
+    timeout 120 wasmtime run -W component-model-async=y -S cli -S p3 -S inherit-network \
+        target/webrtc-composed.wasm
