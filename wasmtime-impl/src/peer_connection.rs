@@ -1,0 +1,461 @@
+//! The `webrtc-rs`-backed [`PeerConnection`] host resource.
+//!
+//! [`PeerConnection`] is the concrete host type mapped onto the
+//! `lann:webrtc-datachannels/connections.peer-connection` resource: the
+//! guest-driven signaling surface (`create-offer`/`create-answer`,
+//! `set-local-description`/`set-remote-description`, trickled ICE candidates)
+//! that lets a guest connect two separate peers.
+//!
+//! ## Deferred wiring
+//!
+//! The WIT `constructor` and `create-data-channel` are **synchronous**, but a
+//! `webrtc-rs` [`RTCPeerConnection`] can only be built on a running Tokio
+//! runtime (`webrtc-rs` panics if constructed without one). The constructor
+//! therefore spawns a build task and hands back a resource immediately; every
+//! async method awaits the shared "built" future before touching the peer
+//! connection. `create-data-channel` likewise spawns a task that opens and wires
+//! the channel once the peer connection exists, returning a
+//! [`DataChannel::deferred`] whose transport is filled in when the channel
+//! opens.
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::channel::oneshot;
+use futures::future::{FutureExt, Shared};
+use futures::lock::Mutex as AsyncMutex;
+use tokio::runtime::Handle;
+use tokio::sync::Notify;
+use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
+use webrtc::data_channel::data_channel_message::DataChannelMessage;
+use webrtc::data_channel::data_channel_state::RTCDataChannelState;
+use webrtc::data_channel::RTCDataChannel;
+use webrtc::ice_transport::ice_candidate::{RTCIceCandidate, RTCIceCandidateInit};
+use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
+use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
+use webrtc::peer_connection::RTCPeerConnection;
+
+use crate::data_channel::{
+    close_peer_connections, new_peer_connection, wiring_channel, ChannelError, InboundMessage,
+    Wired,
+};
+use crate::{DataChannel, SettingEngineHook, WiredFuture};
+
+/// How long [`PeerConnection::wait_connected`] waits before reporting a timeout.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The kind of SDP description passed to `set-local-description` /
+/// `set-remote-description`, mirroring the applicable `session-description`
+/// variants (`rollback` is rejected before reaching the host).
+#[derive(Clone, Copy, Debug)]
+pub enum SdpKind {
+    /// An SDP offer.
+    Offer,
+    /// An SDP answer.
+    Answer,
+    /// A provisional SDP answer.
+    Pranswer,
+}
+
+/// A locally gathered ICE candidate to trickle to the remote peer.
+#[derive(Clone, Debug)]
+pub struct LocalCandidate {
+    /// The `candidate` attribute value.
+    pub candidate: String,
+    /// The media stream identification tag, if any.
+    pub sdp_mid: Option<String>,
+    /// The index of the media description this candidate is associated with.
+    pub sdp_mline_index: Option<u16>,
+}
+
+/// Why [`PeerConnection::wait_connected`] gave up.
+#[derive(Clone, Debug)]
+pub enum WaitError {
+    /// The connection did not reach `connected` within [`CONNECT_TIMEOUT`].
+    TimedOut,
+    /// The connection failed or closed before reaching `connected`.
+    Closed,
+    /// The peer connection could not be built.
+    Other(String),
+}
+
+/// A future resolving to the built peer connection, or a build-error message.
+/// Shared so every async method observes the same outcome.
+type BuiltFuture =
+    Shared<Pin<Box<dyn Future<Output = Result<Arc<RTCPeerConnection>, String>> + Send>>>;
+
+/// Connection-state signalling shared with the `webrtc-rs` state-change handler.
+#[derive(Default)]
+struct ConnState {
+    /// Set once the connection reaches `connected`.
+    connected: AtomicBool,
+    /// Set once the connection reaches `failed` or `closed`.
+    failed: AtomicBool,
+    /// Woken on every state transition so `wait_connected` can re-check.
+    notify: Notify,
+}
+
+/// Shared inner state behind a `peer-connection` resource.
+struct Inner {
+    /// Resolves to the built peer connection once the spawned build task runs.
+    built: BuiltFuture,
+    /// The locally gathered ICE candidates, taken by `local-ice-candidates`.
+    candidates: Mutex<Option<UnboundedReceiver<LocalCandidate>>>,
+    /// Channels opened by the remote peer, taken by `incoming-data-channels`.
+    incoming: Mutex<Option<UnboundedReceiver<DataChannel>>>,
+    /// Connection-state signalling for `wait_connected`.
+    state: Arc<ConnState>,
+    /// The built peer connection, retained so `close` (and `Drop`) can tear down
+    /// its `webrtc-rs` background tasks. Taken on the first close.
+    pc: Arc<Mutex<Option<Arc<RTCPeerConnection>>>>,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        let pc = self.pc.lock().unwrap().take();
+        close_peer_connections(pc.into_iter().collect());
+    }
+}
+
+/// Host state behind a `peer-connection` resource.
+///
+/// Cheaply cloneable (an `Arc` around the shared state) so host methods can hold
+/// a handle without borrowing the resource table across `.await`.
+#[derive(Clone)]
+pub struct PeerConnection {
+    inner: Arc<Inner>,
+}
+
+impl PeerConnection {
+    /// Construct a peer connection, spawning the `webrtc-rs` build task.
+    ///
+    /// `hook` customizes the [`SettingEngine`](webrtc::api::setting_engine::SettingEngine)
+    /// before the connection is built. Requires a running Tokio runtime; without
+    /// one every subsequent operation fails.
+    pub fn new(hook: Option<SettingEngineHook>) -> Self {
+        let (built_tx, built_rx) = oneshot::channel::<Result<Arc<RTCPeerConnection>, String>>();
+        let (cand_tx, cand_rx) = mpsc::unbounded::<LocalCandidate>();
+        let (inc_tx, inc_rx) = mpsc::unbounded::<DataChannel>();
+        let state = Arc::new(ConnState::default());
+        let pc_slot: Arc<Mutex<Option<Arc<RTCPeerConnection>>>> = Arc::new(Mutex::new(None));
+
+        if let Ok(handle) = Handle::try_current() {
+            let state = state.clone();
+            let pc_slot = pc_slot.clone();
+            handle.spawn(async move {
+                match new_peer_connection(|engine| {
+                    if let Some(hook) = &hook {
+                        hook(engine);
+                    }
+                })
+                .await
+                {
+                    Ok(pc) => {
+                        register_handlers(&pc, cand_tx, inc_tx, state);
+                        *pc_slot.lock().unwrap() = Some(pc.clone());
+                        let _ = built_tx.send(Ok(pc));
+                    }
+                    Err(err) => {
+                        let _ = built_tx.send(Err(err.to_string()));
+                    }
+                }
+            });
+        } else {
+            let _ = built_tx.send(Err(
+                "peer connection requires a running tokio runtime".to_string()
+            ));
+        }
+
+        let built = async move {
+            built_rx
+                .await
+                .unwrap_or_else(|_| Err("peer connection build was cancelled".to_string()))
+        }
+        .boxed()
+        .shared();
+
+        Self {
+            inner: Arc::new(Inner {
+                built,
+                candidates: Mutex::new(Some(cand_rx)),
+                incoming: Mutex::new(Some(inc_rx)),
+                state,
+                pc: pc_slot,
+            }),
+        }
+    }
+
+    /// Await the built peer connection (or its build error).
+    async fn pc(&self) -> Result<Arc<RTCPeerConnection>, String> {
+        self.inner.built.clone().await
+    }
+
+    /// Create a data channel to negotiate in-band with the peer.
+    ///
+    /// Returns immediately with a [`DataChannel`] whose transport is wired once
+    /// the peer connection is built and the channel opens.
+    pub fn create_data_channel(
+        &self,
+        label: String,
+        ordered: bool,
+        max_retransmits: Option<u16>,
+    ) -> DataChannel {
+        let (wire_tx, wired) = wiring_channel();
+        let built = self.inner.built.clone();
+        let channel_label = label.clone();
+        if let Ok(handle) = Handle::try_current() {
+            handle.spawn(async move {
+                let pc = match built.await {
+                    Ok(pc) => pc,
+                    Err(err) => {
+                        let _ = wire_tx.send(Err(ChannelError::Other(err)));
+                        return;
+                    }
+                };
+                let init = RTCDataChannelInit {
+                    ordered: Some(ordered),
+                    max_retransmits,
+                    ..Default::default()
+                };
+                match pc.create_data_channel(&channel_label, Some(init)).await {
+                    Ok(channel) => install_wiring(&channel, wire_tx),
+                    Err(err) => {
+                        let _ = wire_tx.send(Err(ChannelError::Other(err.to_string())));
+                    }
+                }
+            });
+        } else {
+            let _ = wire_tx.send(Err(ChannelError::Other(
+                "peer connection requires a running tokio runtime".to_string(),
+            )));
+        }
+        DataChannel::deferred(label, wired)
+    }
+
+    /// Take the locally gathered ICE candidate stream. Returns `None` if it has
+    /// already been taken (`local-ice-candidates` is meant to be called once).
+    pub fn take_local_candidates(&self) -> Option<UnboundedReceiver<LocalCandidate>> {
+        self.inner.candidates.lock().unwrap().take()
+    }
+
+    /// Take the remote-opened data-channel stream. Returns `None` if it has
+    /// already been taken (`incoming-data-channels` is meant to be called once).
+    pub fn take_incoming_channels(&self) -> Option<UnboundedReceiver<DataChannel>> {
+        self.inner.incoming.lock().unwrap().take()
+    }
+
+    /// Produce an SDP offer. The caller applies it via `set-local-description`.
+    pub async fn create_offer(&self) -> Result<String, String> {
+        let pc = self.pc().await?;
+        pc.create_offer(None)
+            .await
+            .map(|desc| desc.sdp)
+            .map_err(|err| err.to_string())
+    }
+
+    /// Produce an SDP answer to a previously set remote offer.
+    pub async fn create_answer(&self) -> Result<String, String> {
+        let pc = self.pc().await?;
+        pc.create_answer(None)
+            .await
+            .map(|desc| desc.sdp)
+            .map_err(|err| err.to_string())
+    }
+
+    /// Apply a local description, starting ICE gathering (and, in turn, the
+    /// trickled `local-ice-candidates`).
+    pub async fn set_local_description(&self, kind: SdpKind, sdp: String) -> Result<(), String> {
+        let pc = self.pc().await?;
+        let desc = to_rtc_description(kind, sdp)?;
+        pc.set_local_description(desc)
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    /// Apply the remote peer's description.
+    pub async fn set_remote_description(&self, kind: SdpKind, sdp: String) -> Result<(), String> {
+        let pc = self.pc().await?;
+        let desc = to_rtc_description(kind, sdp)?;
+        pc.set_remote_description(desc)
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    /// Add an ICE candidate received from the remote peer.
+    pub async fn add_ice_candidate(
+        &self,
+        candidate: String,
+        sdp_mid: Option<String>,
+        sdp_mline_index: Option<u16>,
+    ) -> Result<(), String> {
+        let pc = self.pc().await?;
+        let init = RTCIceCandidateInit {
+            candidate,
+            sdp_mid,
+            sdp_mline_index,
+            username_fragment: None,
+        };
+        pc.add_ice_candidate(init)
+            .await
+            .map_err(|err| err.to_string())
+    }
+
+    /// Resolve once the connection reaches `connected`, or report a timeout /
+    /// failure.
+    pub async fn wait_connected(&self) -> Result<(), WaitError> {
+        self.pc().await.map_err(WaitError::Other)?;
+        let state = self.inner.state.clone();
+        let deadline = tokio::time::sleep(CONNECT_TIMEOUT);
+        tokio::pin!(deadline);
+        loop {
+            let notified = state.notify.notified();
+            tokio::pin!(notified);
+            // Arm the notification before checking, so a transition between the
+            // check and the wait is not missed.
+            notified.as_mut().enable();
+            if state.connected.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            if state.failed.load(Ordering::SeqCst) {
+                return Err(WaitError::Closed);
+            }
+            tokio::select! {
+                _ = &mut notified => continue,
+                _ = &mut deadline => return Err(WaitError::TimedOut),
+            }
+        }
+    }
+
+    /// Close the peer connection, tearing down its `webrtc-rs` background tasks.
+    /// Idempotent.
+    pub fn close(&self) {
+        let pc = self.inner.pc.lock().unwrap().take();
+        close_peer_connections(pc.into_iter().collect());
+    }
+}
+
+/// Register the `webrtc-rs` callbacks that feed the guest-facing streams and
+/// connection-state signalling.
+fn register_handlers(
+    pc: &Arc<RTCPeerConnection>,
+    cand_tx: UnboundedSender<LocalCandidate>,
+    inc_tx: UnboundedSender<DataChannel>,
+    state: Arc<ConnState>,
+) {
+    // Trickled local ICE candidates. `None` signals gathering is complete, which
+    // ends the stream (matching the end-of-candidates convention).
+    let cand_tx = Arc::new(Mutex::new(Some(cand_tx)));
+    pc.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
+        let cand_tx = cand_tx.clone();
+        Box::pin(async move {
+            match candidate {
+                Some(candidate) => {
+                    if let Ok(init) = candidate.to_json() {
+                        if let Some(tx) = cand_tx.lock().unwrap().as_ref() {
+                            let _ = tx.unbounded_send(LocalCandidate {
+                                candidate: init.candidate,
+                                sdp_mid: init.sdp_mid,
+                                sdp_mline_index: init.sdp_mline_index,
+                            });
+                        }
+                    }
+                }
+                None => {
+                    cand_tx.lock().unwrap().take();
+                }
+            }
+        })
+    }));
+
+    // Data channels opened by the remote peer.
+    pc.on_data_channel(Box::new(move |channel: Arc<RTCDataChannel>| {
+        let inc_tx = inc_tx.clone();
+        Box::pin(async move {
+            let label = channel.label().to_string();
+            let wired = wired_from_channel(&channel);
+            let _ = inc_tx.unbounded_send(DataChannel::deferred(label, wired));
+        })
+    }));
+
+    // Connection-state transitions drive `wait_connected`.
+    pc.on_peer_connection_state_change(Box::new(move |s: RTCPeerConnectionState| {
+        let state = state.clone();
+        Box::pin(async move {
+            match s {
+                RTCPeerConnectionState::Connected => {
+                    state.connected.store(true, Ordering::SeqCst);
+                }
+                RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
+                    state.failed.store(true, Ordering::SeqCst);
+                }
+                _ => {}
+            }
+            state.notify.notify_waiters();
+        })
+    }));
+}
+
+/// Attach message/open handlers to `channel` and fulfill `wire_tx` once the
+/// channel is open, so a [`DataChannel`]'s async methods can await its
+/// transport parts.
+fn install_wiring(
+    channel: &Arc<RTCDataChannel>,
+    wire_tx: oneshot::Sender<Result<Wired, ChannelError>>,
+) {
+    let (in_tx, in_rx) = mpsc::unbounded::<InboundMessage>();
+    channel.on_message(Box::new(move |message: DataChannelMessage| {
+        let in_tx = in_tx.clone();
+        Box::pin(async move {
+            let _ = in_tx.unbounded_send(InboundMessage {
+                is_string: message.is_string,
+                data: message.data.to_vec(),
+            });
+        })
+    }));
+
+    let wired = Wired {
+        channel: channel.clone(),
+        incoming: Arc::new(AsyncMutex::new(in_rx)),
+    };
+    let wire_tx = Arc::new(Mutex::new(Some(wire_tx)));
+    {
+        let wire_tx = wire_tx.clone();
+        let wired = wired.clone();
+        channel.on_open(Box::new(move || {
+            let wire_tx = wire_tx.clone();
+            let wired = wired.clone();
+            Box::pin(async move {
+                if let Some(tx) = wire_tx.lock().unwrap().take() {
+                    let _ = tx.send(Ok(wired));
+                }
+            })
+        }));
+    }
+    // If the channel is already open, `on_open` will not fire again; fulfill now.
+    if channel.ready_state() == RTCDataChannelState::Open {
+        if let Some(tx) = wire_tx.lock().unwrap().take() {
+            let _ = tx.send(Ok(wired));
+        }
+    }
+}
+
+/// Build a [`WiredFuture`] for a channel opened by the remote peer.
+fn wired_from_channel(channel: &Arc<RTCDataChannel>) -> WiredFuture {
+    let (wire_tx, wired) = wiring_channel();
+    install_wiring(channel, wire_tx);
+    wired
+}
+
+/// Build a `webrtc-rs` session description from a [`SdpKind`] and SDP string.
+fn to_rtc_description(kind: SdpKind, sdp: String) -> Result<RTCSessionDescription, String> {
+    let result = match kind {
+        SdpKind::Offer => RTCSessionDescription::offer(sdp),
+        SdpKind::Answer => RTCSessionDescription::answer(sdp),
+        SdpKind::Pranswer => RTCSessionDescription::pranswer(sdp),
+    };
+    result.map_err(|err| err.to_string())
+}

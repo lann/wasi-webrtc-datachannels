@@ -16,8 +16,13 @@
 pub mod bindings;
 mod data_channel;
 mod host;
+mod peer_connection;
 
-pub use data_channel::{close_peer_connections, new_peer_connection, DataChannel, InboundMessage};
+pub use data_channel::{
+    close_peer_connections, new_peer_connection, ChannelError, DataChannel, InboundMessage, Wired,
+    WiredFuture,
+};
+pub use peer_connection::{LocalCandidate, PeerConnection, SdpKind, WaitError};
 
 use std::sync::Arc;
 
@@ -146,19 +151,6 @@ impl Default for DataChannelOptions {
             max_retransmits: None,
         }
     }
-}
-
-/// Backing type for the `connections.peer-connection` resource, which this
-/// crate does **not** implement.
-///
-/// The `peer-connection` resource (the guest-driven connection design target)
-/// shares the `connections` interface with the `data-channel` resource this
-/// crate does implement, so the generated bindings still require a backing type
-/// and host impl for it. Every `peer-connection` host function traps; no value
-/// of this type is ever constructed. Implementing `peer-connection` here would
-/// replace this stub with a real peer-connection type.
-pub struct UnsupportedPeerConnection {
-    _private: (),
 }
 
 /// Add the `lann:webrtc-datachannels` interfaces implemented by this crate

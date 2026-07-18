@@ -1,12 +1,9 @@
 //! Raw `bindgen!` output for the `lann:webrtc-datachannels` package.
 //!
 //! The crate implements the `types` interface and, in the `connections`
-//! interface, the `data-channel-options` builder and the `data-channel`
-//! resource. The `connections` interface also declares a `peer-connection`
-//! resource (the guest-driven connection design target); it is not
-//! implemented here, so it is mapped to [`crate::UnsupportedPeerConnection`] and
-//! its host functions trap if a guest calls them. See [`crate`] for the public
-//! API built on top of these bindings.
+//! interface, the `data-channel-options` builder, the `data-channel` resource,
+//! and the `peer-connection` resource (the guest-driven signaling surface). See
+//! [`crate`] for the public API built on top of these bindings.
 
 #[allow(missing_docs, reason = "generated code")]
 mod generated {
@@ -30,11 +27,11 @@ mod generated {
             // synchronously. It still needs `store` to allocate the returned
             // `stream<stream-message>` on the guest's behalf.
             "lann:webrtc-datachannels/connections@0.1.0.[method]data-channel.receive-via-stream": store | trappable,
-            // The `peer-connection` resource is not implemented by this crate;
-            // its synchronous functions are bound synchronously so the stub
-            // impls can trap. The `constructor`, `create-data-channel`, and
+            // The `peer-connection` resource's synchronous functions are bound
+            // synchronously. The `constructor`, `create-data-channel`, and
             // `close` need no store access; the stream-returning functions need
-            // `store` to match the generated signature.
+            // `store` to allocate the returned stream (and, for
+            // `incoming-data-channels`, to push data-channel resources).
             "lann:webrtc-datachannels/connections@0.1.0.[constructor]peer-connection": trappable,
             "lann:webrtc-datachannels/connections@0.1.0.[method]peer-connection.create-data-channel": trappable,
             "lann:webrtc-datachannels/connections@0.1.0.[method]peer-connection.incoming-data-channels": store | trappable,
@@ -55,7 +52,7 @@ mod generated {
         with: {
             "lann:webrtc-datachannels/connections.data-channel-options": crate::DataChannelOptions,
             "lann:webrtc-datachannels/connections.data-channel": crate::DataChannel,
-            "lann:webrtc-datachannels/connections.peer-connection": crate::UnsupportedPeerConnection,
+            "lann:webrtc-datachannels/connections.peer-connection": crate::PeerConnection,
         },
     });
 }
