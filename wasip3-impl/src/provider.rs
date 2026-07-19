@@ -449,10 +449,7 @@ impl GuestPeerConnection for PeerConnection {
 
     fn close(&self) {
         let state = self.inner.borrow();
-        let mut s = state.shared.borrow_mut();
-        s.peer.close();
-        s.closed = true;
-        drop(s);
+        state.shared.borrow_mut().begin_close();
         let _ = state.waker.unbounded_send(());
     }
 }
@@ -594,5 +591,7 @@ fn dead_shared() -> Shared {
         connected: false,
         failed: true,
         closed: true,
+        shutdown_complete: true,
+        drain_deadline: None,
     }
 }
