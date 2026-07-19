@@ -89,6 +89,14 @@ via `CONFORMANCE_WASMTIME`). To run a single target in isolation, use the
 per-target recipes (`just conformance-jco-node`, `just conformance-jco-browser`,
 `just conformance-wasip3`, `just conformance-interop`).
 
+Within each adapter, tests run **in parallel by default** (4 at a time): every
+test's peers use fresh guest instances (or processes) and their own signaling
+room, so tests are independent. Each adapter exposes a `--jobs` flag to change
+the concurrency (`--jobs 1` restores serial execution). Every connection
+attempt is individually bounded (45s, retried with a fresh room), and the
+`just` recipes additionally cap each whole adapter run (`conformance-timeout`,
+600s by default) so a systemic hang fails in minutes rather than stalling CI.
+
 Run the runner's unit tests and the signaling server's integration tests with
 the rest of the workspace:
 
