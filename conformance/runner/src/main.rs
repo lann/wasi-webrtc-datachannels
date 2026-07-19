@@ -99,6 +99,15 @@ fn main() -> Result<()> {
     }
 
     if matrix.has_failures() {
+        eprintln!("\nconformance failures:");
+        for (target, test, cell) in matrix.failures() {
+            match &cell.detail {
+                Some(detail) => {
+                    eprintln!("  {target} / {test}: {} — {detail}", cell.status.symbol())
+                }
+                None => eprintln!("  {target} / {test}: {}", cell.status.symbol()),
+            }
+        }
         anyhow::bail!("conformance run has failing or unexpected-pass results");
     }
 
