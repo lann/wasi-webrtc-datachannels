@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use futures::channel::mpsc;
@@ -35,6 +35,13 @@ use crate::wasi::sockets::types::{
 /// bound on how long the pump can sleep so retransmit and keep-alive timers
 /// still fire promptly.
 const MAX_WAIT_NANOS: u64 = 50_000_000;
+
+/// How long the pump keeps draining after a local `close` when the core has not
+/// yet reported the close complete: long enough for the final queued sends (a
+/// last message still in the SCTP queue, the SCTP/DTLS close chunks) and the
+/// close handshake to finish on loopback, short enough that a peer that never
+/// answers cannot hold the pump open indefinitely.
+const CLOSE_DRAIN: Duration = Duration::from_secs(1);
 
 /// A received data-channel message, queued for the owning `data-channel`.
 #[derive(Debug, Clone)]
@@ -82,12 +89,34 @@ pub struct Shared {
     pub failed: bool,
     /// Whether the connection closed.
     pub closed: bool,
+    /// Whether the core reported the close complete (its connection state
+    /// reached `disconnected`/`closed`), as opposed to a local `close()` that
+    /// is still draining.
+    pub shutdown_complete: bool,
+    /// After a local `close()`, how long the pump keeps draining (flushing the
+    /// final sends and completing the close handshake) before giving up on a
+    /// peer that never acknowledges.
+    pub drain_deadline: Option<Instant>,
 }
 
 impl Shared {
     /// Find a channel by id.
     pub fn channel_mut(&mut self, id: RTCDataChannelId) -> Option<&mut Channel> {
         self.channels.iter_mut().find(|c| c.id == id)
+    }
+
+    /// Mark the connection locally closed and start the pump's bounded drain,
+    /// so the final queued sends and the close handshake still reach the wire.
+    pub fn begin_close(&mut self) {
+        if self.closed || self.failed {
+            return;
+        }
+        self.peer.close();
+        self.closed = true;
+        for c in &mut self.channels {
+            c.closed = true;
+        }
+        self.drain_deadline = Some(Instant::now() + CLOSE_DRAIN);
     }
 }
 
@@ -133,6 +162,8 @@ impl Runtime {
             connected: false,
             failed: false,
             closed: false,
+            shutdown_complete: false,
+            drain_deadline: None,
         }));
 
         Ok((
@@ -168,16 +199,24 @@ impl Runtime {
         loop {
             // Flush + drain while holding the borrow only between awaits.
             flush(&shared, &socket).await;
-            {
+            let done = {
                 let mut s = shared.borrow_mut();
                 for event in s.peer.drain_events() {
                     apply_event(&mut s, event);
                 }
-                if s.closed || s.failed {
-                    return;
-                }
-            }
+                // Run until the connection fails or closes. A local `close()`
+                // keeps the pump draining — flushing final sends and completing
+                // the close handshake — until the core reports the close
+                // complete or the bounded drain window lapses.
+                s.failed
+                    || (s.closed
+                        && (s.shutdown_complete
+                            || s.drain_deadline.is_none_or(|d| Instant::now() >= d)))
+            };
             flush(&shared, &socket).await;
+            if done {
+                return;
+            }
 
             // The stack's next timer deadline (if any). Wake at that instant,
             // capped by the safety net so retransmit/keep-alive timers fire even
@@ -242,6 +281,7 @@ fn apply_event(s: &mut Shared, event: PeerEvent) {
         }
         PeerEvent::Closed => {
             s.closed = true;
+            s.shutdown_complete = true;
             for c in &mut s.channels {
                 c.closed = true;
             }

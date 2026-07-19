@@ -19,7 +19,14 @@ name: Conformance
 #     `wasmtime`<->`jco-node` in both orders. jco's async ABI always uses JSPI
 #     (WebAssembly.Suspending), so the Node driver requires Node 24+ with
 #     --experimental-wasm-jspi (the browser gets JSPI natively).
-# Later phases enable more targets and additional jobs (see the workflow plan
+#   - Phase 4: the wasip3-guest adapter — the conformance guest composed
+#     (`wac plug`) with the wasip3-impl provider (the sans-I/O rtc stack over
+#     WASIp3 wasi:sockets), an in-guest wasi:http mailbox client, and a CLI
+#     driver, run under `wasmtime run` (installed by scripts/setup.sh) — plus
+#     the cross-runtime interop pair `wasmtime`<->`wasip3-guest` in both
+#     orders (wired but disabled by default pending a wasip3 teardown-flush
+#     fix; see TODO.md item E3).
+# Later phases enable more scenarios and additional jobs (see the workflow plan
 # in conformance/PLAN.md).
 
 on:
@@ -33,8 +40,8 @@ permissions:
 
 jobs:
   # Job 1: every PR. Builds the conformance guest and runs the enabled targets
-  # (wasmtime, jco-node, jco-browser, and the wasmtime<->jco-node interop pair)
-  # over loopback via `just conformance`.
+  # (wasmtime, jco-node, jco-browser, wasip3-guest, and the wasmtime<->jco-node
+  # interop pair) over loopback via `just conformance`.
   matrix:
     runs-on: ubuntu-latest
     # WebRTC handshakes can hang; cap the job so a stuck run fails fast.

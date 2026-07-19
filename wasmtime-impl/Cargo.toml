@@ -12,15 +12,18 @@ description = "Wasmtime host implementation of the lann:webrtc-datachannels inte
 wasmtime = { version = "46", features = ["component-model", "component-model-async", "async", "runtime"] }
 # `webrtc-rs`: a pure-Rust WebRTC stack. Provides the RTCPeerConnection /
 # RTCDataChannel implementation that backs the host's data channels.
-webrtc = "0.17"
+webrtc = "0.20.0-rc.3"
 futures = "0.3"
 anyhow = "1"
 bytes = "1"
+# The `webrtc` 0.20 `PeerConnectionEventHandler` trait is defined with
+# `#[async_trait]`, so implementing it requires the same attribute macro.
+async-trait = "0.1"
 # `webrtc-rs` peer connections require a Tokio runtime; the host spawns their
 # async `close()` from `Drop` to tear down ICE/DTLS/SCTP background tasks, spawns
 # the peer-connection build/channel-wiring tasks, and uses `sync`/`time` for the
 # `wait-connected` connection-state signalling and its timeout.
-tokio = { version = "1", features = ["rt", "sync", "time"] }
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use bytes::Bytes;
+use bytes::BytesMut;
 use futures::channel::mpsc::{self, UnboundedReceiver};
 use futures::channel::oneshot;
 use futures::lock::Mutex as AsyncMutex;
@@ -34,7 +34,7 @@ use crate::{
     SdpKind, WaitError, WasiWebrtc, WasiWebrtcCtxView, WasiWebrtcView, WiredFuture,
 };
 
-use webrtc::data_channel::RTCDataChannel;
+use webrtc::data_channel::DataChannel as WebrtcDataChannel;
 
 // --- types -----------------------------------------------------------------
 
@@ -92,7 +92,7 @@ impl<T: Send> connections::HostDataChannelOptionsWithStore<T> for WasiWebrtc {
 
 /// Send one message over a data channel, honoring its `binary`/`string` kind.
 async fn send_channel_message(
-    channel: &Arc<RTCDataChannel>,
+    channel: &Arc<dyn WebrtcDataChannel>,
     is_string: bool,
     data: Vec<u8>,
 ) -> std::result::Result<(), Error> {
@@ -105,9 +105,9 @@ async fn send_channel_message(
                 )))
             }
         };
-        channel.send_text(text).await
+        channel.send_text(&text).await
     } else {
-        channel.send(&Bytes::from(data)).await
+        channel.send(BytesMut::from(&data[..])).await
     };
     result.map(|_| ()).map_err(|e| Error::Other(e.to_string()))
 }

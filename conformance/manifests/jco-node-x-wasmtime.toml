@@ -5,15 +5,7 @@
 # The pair runs the two-peer behavioral subset over one shared mailbox and a real
 # cross-runtime WebRTC data channel, so a green row proves the two runtimes
 # interoperate rather than merely each passing against itself.
-#
-# `zero-length-message` is an expected-fail: the wasmtime peer runs on webrtc-rs,
-# whose read_loop treats a zero-byte read as EOF, so it cannot receive an empty
-# message regardless of which runtime sent it.
 
 [target]
 id = "jco-node-x-wasmtime"
 
-[[expected-fail]]
-test = "zero-length-message"
-reason = "The wasmtime peer runs on webrtc-rs, whose read_loop treats a zero-byte read as EOF and closes the channel, so it cannot receive an empty message from the jco-node peer."
-tracking = "TODO.md item B6"
