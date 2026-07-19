@@ -17,6 +17,8 @@ members = [
 resolver = "2"
 
 # Pin the sans-I/O WebRTC stack once, here, so every member (and any future wasm
-# build) resolves the same published 0.20 release-candidate source.
+# build) resolves the same source. Tracks the `lann/rtc` fork's `master`, which
+# carries the empty-message receive fix (upstream PR webrtc-rs/rtc#131) on top of
+# the published 0.20.0-rc.3 release candidate.
 [workspace.dependencies]
-rtc = "0.20.0-rc.3"
+rtc = { git = "https://github.com/lann/rtc.git", rev = "e3046a97c9f32965e2ae85d70a7104727f7d226b" }
