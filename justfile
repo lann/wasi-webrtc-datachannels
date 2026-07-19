@@ -2,6 +2,11 @@
 default:
     @just --list
 
+# The whole-run safety cap (seconds) for each conformance adapter invocation.
+# Every attempt inside an adapter is already individually bounded (45s), but
+# this caps the entire run so a systemic hang fails in minutes, not hours.
+conformance-timeout := "600"
+
 # Run every CI check locally, in the same order as .github/workflows/ci.yml.
 ci: fmt-check clippy validate-wit build-component transpile test-browser test
 
@@ -57,7 +62,8 @@ test:
 # browser target, a Chrome 137+ binary (auto-detected, or set CHROME_PATH).
 conformance: build-conformance-guest transpile-conformance-guest
     cargo build -p conformance-signalingd
-    cargo run --release -p conformance-adapter-wasmtime --bin conformance-adapter-wasmtime -- \
+    cargo build --release -p conformance-adapter-wasmtime --bin conformance-adapter-wasmtime
+    timeout {{conformance-timeout}} target/release/conformance-adapter-wasmtime \
         --guest conformance/guest/build/conformance-guest.component.wasm \
         --out conformance/results
     just conformance-jco-node
@@ -110,7 +116,8 @@ build-conformance-wasip3: build-conformance-guest
 # and signaling through the in-guest wasi:http mailbox client. Writes
 # conformance/results/wasip3-guest.json.
 conformance-wasip3: build-conformance-wasip3
-    cargo run --release -p conformance-adapter-wasip3 --bin conformance-adapter-wasip3 -- \
+    cargo build --release -p conformance-adapter-wasip3 --bin conformance-adapter-wasip3
+    timeout {{conformance-timeout}} target/release/conformance-adapter-wasip3 \
         --component conformance/adapters/wasip3/build/conformance-wasip3.composed.wasm \
         --out conformance/results
 
@@ -120,14 +127,14 @@ conformance-wasip3: build-conformance-wasip3
 # WebAssembly.Suspending). Writes conformance/results/jco-node.json.
 conformance-jco-node: transpile-conformance-guest
     cargo build -p conformance-signalingd
-    cd conformance/adapters/jco && npm run run:node
+    cd conformance/adapters/jco && timeout {{conformance-timeout}} npm run run:node
 
 # Run the jco-browser conformance adapter (the same guest + host modules inside
 # headless Chromium; Chrome 137+ ships JSPI). Writes
 # conformance/results/jco-browser.json.
 conformance-jco-browser: transpile-conformance-guest
     cargo build -p conformance-signalingd
-    cd conformance/adapters/jco && npm run run:browser
+    cd conformance/adapters/jco && timeout {{conformance-timeout}} npm run run:browser
 
 # Run the enabled interop pairs (each in both orders): wasmtime<->jco-node —
 # one peer per runtime shares a signaling room and a real WebRTC data channel.
@@ -138,7 +145,8 @@ conformance-jco-browser: transpile-conformance-guest
 # stalls the wasmtime peer indefinitely (see TODO.md item E3).
 conformance-interop: transpile-conformance-guest build-conformance-wasip3
     cargo build -p conformance-signalingd
-    cargo run --release -p conformance-adapter-wasmtime --bin conformance-interop -- \
+    cargo build --release -p conformance-adapter-wasmtime --bin conformance-interop
+    timeout {{conformance-timeout}} target/release/conformance-interop \
         --pair wasmtime-x-jco-node --pair jco-node-x-wasmtime
 
 # Build the echo-demo guest component into examples/echo-demo/build/.

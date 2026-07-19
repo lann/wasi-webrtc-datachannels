@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use clap::Parser;
+use futures::StreamExt as _;
 use serde_json::Value;
 use wasmtime::component::Component;
 use wasmtime::Engine;
@@ -331,6 +332,13 @@ struct Cli {
     /// Run only these test ids (repeatable). When empty, run every test.
     #[arg(long = "only")]
     only: Vec<String>,
+
+    /// How many tests to run concurrently within a pair direction. Each test's
+    /// peers use their own signaling room and ephemeral ports, so tests are
+    /// independent; the default keeps the number of concurrent peer processes
+    /// modest.
+    #[arg(long, default_value_t = 4)]
+    jobs: usize,
 }
 
 #[tokio::main]
@@ -383,19 +391,32 @@ async fn main() -> Result<()> {
             continue;
         }
         eprintln!("== interop {} ==", direction.target);
-        let mut results = Vec::with_capacity(INTEROP_TESTS.len());
-        for test_id in INTEROP_TESTS {
-            if !cli.only.is_empty() && !cli.only.iter().any(|t| t == test_id) {
-                continue;
+        // Tests are independent (fresh instances/processes, a fresh room per
+        // attempt), so run them concurrently, bounded by `--jobs`. `buffered`
+        // preserves the registry order of the results.
+        let results: Vec<RawResult> = futures::stream::iter(
+            INTEROP_TESTS
+                .iter()
+                .filter(|test_id| cli.only.is_empty() || cli.only.iter().any(|t| &t == test_id)),
+        )
+        .map(|test_id| {
+            let cli = &cli;
+            let engine = &engine;
+            let component = &component;
+            let base_url = &base_url;
+            let room_seq = &room_seq;
+            async move {
+                let result = run_interop_test(
+                    cli, engine, component, base_url, direction, test_id, room_seq,
+                )
+                .await;
+                eprintln!("{test_id} … {:?}", result.status);
+                result
             }
-            eprint!("running {test_id} … ");
-            let result = run_interop_test(
-                &cli, &engine, &component, &base_url, direction, test_id, &room_seq,
-            )
-            .await;
-            eprintln!("{:?}", result.status);
-            results.push(result);
-        }
+        })
+        .buffered(cli.jobs.max(1))
+        .collect()
+        .await;
 
         let report = AdapterReport {
             target: direction.target.to_string(),

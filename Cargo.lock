@@ -609,6 +609,7 @@ dependencies = [
  "anyhow",
  "clap",
  "conformance-signalingd",
+ "futures",
  "serde",
  "serde_json",
  "tokio",

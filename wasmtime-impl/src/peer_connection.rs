@@ -114,9 +114,49 @@ struct Inner {
     incoming: Mutex<Option<UnboundedReceiver<DataChannel>>>,
     /// Connection-state signalling for `wait_connected`.
     state: Arc<ConnState>,
+    /// The number of `create-data-channel` calls whose spawned registration
+    /// task has not yet reached `webrtc-rs`. `create-offer` / `create-answer`
+    /// wait for this to reach zero so the produced SDP covers every channel
+    /// the guest created before asking for it.
+    pending_channels: Arc<PendingOps>,
     /// The built peer connection, retained so `close` (and `Drop`) can tear down
     /// its `webrtc-rs` background tasks. Taken on the first close.
     pc: Arc<Mutex<Option<Arc<dyn WebrtcPeerConnection>>>>,
+}
+
+/// A counter of in-flight spawned operations, awaitable at zero.
+#[derive(Default)]
+struct PendingOps {
+    count: std::sync::atomic::AtomicUsize,
+    notify: Notify,
+}
+
+impl PendingOps {
+    /// Record one newly spawned operation.
+    fn begin(&self) {
+        self.count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Record one finished operation, waking any waiters.
+    fn end(&self) {
+        self.count.fetch_sub(1, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+
+    /// Resolve once no operations are in flight.
+    async fn settled(&self) {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            // Arm the notification before checking, so an `end` between the
+            // check and the wait is not missed.
+            notified.as_mut().enable();
+            if self.count.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 impl Drop for Inner {
@@ -193,6 +233,7 @@ impl PeerConnection {
                 candidates: Mutex::new(Some(cand_rx)),
                 incoming: Mutex::new(Some(inc_rx)),
                 state,
+                pending_channels: Arc::new(PendingOps::default()),
                 pc: pc_slot,
             }),
         }
@@ -217,10 +258,13 @@ impl PeerConnection {
         let built = self.inner.built.clone();
         let channel_label = label.clone();
         if let Ok(handle) = Handle::try_current() {
+            let pending = self.inner.pending_channels.clone();
+            pending.begin();
             handle.spawn(async move {
                 let pc = match built.await {
                     Ok(pc) => pc,
                     Err(err) => {
+                        pending.end();
                         let _ = wire_tx.send(Err(ChannelError::Other(err)));
                         return;
                     }
@@ -230,7 +274,12 @@ impl PeerConnection {
                     max_retransmits,
                     ..Default::default()
                 };
-                match pc.create_data_channel(&channel_label, Some(init)).await {
+                let created = pc.create_data_channel(&channel_label, Some(init)).await;
+                // The channel is registered with the peer connection (or has
+                // failed) as soon as `create_data_channel` returns, so an offer
+                // produced from here on covers it.
+                pending.end();
+                match created {
                     Ok(channel) => spawn_channel_wiring(channel, wire_tx),
                     Err(err) => {
                         let _ = wire_tx.send(Err(ChannelError::Other(err.to_string())));
@@ -260,6 +309,9 @@ impl PeerConnection {
     /// Produce an SDP offer. The caller applies it via `set-local-description`.
     pub async fn create_offer(&self) -> Result<String, String> {
         let pc = self.pc().await?;
+        // Wait for any spawned `create-data-channel` registrations, so the
+        // offer's SDP covers every channel created before this call.
+        self.inner.pending_channels.settled().await;
         pc.create_offer(None)
             .await
             .map(|desc| desc.sdp)
@@ -269,6 +321,9 @@ impl PeerConnection {
     /// Produce an SDP answer to a previously set remote offer.
     pub async fn create_answer(&self) -> Result<String, String> {
         let pc = self.pc().await?;
+        // Wait for any spawned `create-data-channel` registrations, so the
+        // answer's SDP covers every channel created before this call.
+        self.inner.pending_channels.settled().await;
         pc.create_answer(None)
             .await
             .map(|desc| desc.sdp)

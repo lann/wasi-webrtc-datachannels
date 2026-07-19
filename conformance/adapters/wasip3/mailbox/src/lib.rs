@@ -127,6 +127,27 @@ async fn round_trip(
     Ok(HttpOutcome { status, done, body })
 }
 
+/// Send one request through the WASIp3 HTTP client and collect the response,
+/// retrying transient transport-level failures. Only used for retry-safe
+/// requests: fetches are idempotent by protocol, and marking a mailbox done is
+/// idempotent on the server. Publishes are **not** retried (each `POST` to a
+/// mailbox appends a new blob).
+async fn round_trip_retrying(
+    method: http::Method,
+    url: &str,
+    body: Option<Vec<u8>>,
+) -> Result<HttpOutcome, Error> {
+    const ATTEMPTS: u32 = 3;
+    let mut last = None;
+    for _ in 0..ATTEMPTS {
+        match round_trip(method.clone(), url, body.clone()).await {
+            Ok(outcome) => return Ok(outcome),
+            Err(err) => last = Some(err),
+        }
+    }
+    Err(last.expect("at least one attempt ran"))
+}
+
 impl GuestSession for MailboxSession {
     async fn open(server: String, room: String, as_role: Role) -> Result<SessionResource, Error> {
         Ok(SessionResource::new(MailboxSession {
@@ -163,7 +184,7 @@ impl GuestSession for MailboxSession {
         // before it. `304 Not Modified` means "not yet; retry the same seq" and
         // is safe to retry indefinitely (the runner bounds the whole test).
         loop {
-            let outcome = round_trip(http::Method::GET, &url, None).await?;
+            let outcome = round_trip_retrying(http::Method::GET, &url, None).await?;
             match outcome.status.as_u16() {
                 200 => {
                     self.recv_seq.set(seq + 1);
@@ -178,7 +199,7 @@ impl GuestSession for MailboxSession {
 
     async fn done(&self) -> Result<(), Error> {
         let url = format!("{}/rooms/{}/{}/done", self.base, self.room, self.own_role());
-        let outcome = round_trip(http::Method::POST, &url, Some(Vec::new())).await?;
+        let outcome = round_trip_retrying(http::Method::POST, &url, Some(Vec::new())).await?;
         if outcome.status.is_success() {
             Ok(())
         } else {
