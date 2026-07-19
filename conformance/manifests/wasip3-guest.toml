@@ -15,10 +15,11 @@
 # the remaining error-taxonomy probes) need no entries here: a raw `skip` is
 # classified `skip-unsupported` without manifest involvement.
 
+# `zero-length-message` used to be an expected-fail here (the `rtc` receive path
+# kept the one-zero-byte SCTP placeholder payload for the BinaryEmpty/StringEmpty
+# PPIDs), but the `lann/rtc` fork now maps those PPIDs back to an empty message
+# (upstream PR webrtc-rs/rtc#131), so the wasip3-guest target passes it and it is
+# deliberately NOT an expected-fail.
+
 [target]
 id = "wasip3-guest"
-
-[[expected-fail]]
-test = "zero-length-message"
-reason = "The rtc receive path keeps the one-zero-byte SCTP placeholder payload for the BinaryEmpty/StringEmpty PPIDs instead of mapping it back to an empty message, so a received empty message arrives as a single zero byte."
-tracking = "TODO.md item E3"

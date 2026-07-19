@@ -8,7 +8,3 @@
 [target]
 id = "wasmtime"
 
-[[expected-fail]]
-test = "zero-length-message"
-reason = "webrtc-rs's read_loop treats a zero-byte read as EOF and closes the channel, so a received empty message tears the channel down instead of surfacing it."
-tracking = "TODO.md item B6"

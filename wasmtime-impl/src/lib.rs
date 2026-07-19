@@ -19,15 +19,16 @@ mod host;
 mod peer_connection;
 
 pub use data_channel::{
-    close_peer_connections, new_peer_connection, ChannelError, DataChannel, InboundMessage, Wired,
-    WiredFuture,
+    close_peer_connections, new_peer_connection, spawn_channel_pump, spawn_channel_wiring,
+    wire_open_channel, wiring_channel, CallbackHandler, ChannelError, ChannelPump, DataChannel,
+    InboundMessage, Wired, WiredFuture,
 };
 pub use peer_connection::{LocalCandidate, PeerConnection, SdpError, SdpKind, WaitError};
 
 use std::sync::Arc;
 
 use wasmtime::component::{HasData, Linker, ResourceTable};
-use webrtc::api::setting_engine::SettingEngine;
+use webrtc::peer_connection::SettingEngine;
 
 /// A hook run against a fresh [`SettingEngine`] before each peer connection is
 /// created. See [`WasiWebrtcCtx::set_setting_engine_hook`].

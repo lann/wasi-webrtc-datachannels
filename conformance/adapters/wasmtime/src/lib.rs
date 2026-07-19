@@ -273,15 +273,14 @@ pub fn build_engine() -> Result<Engine> {
 }
 
 /// A fresh store whose WebRTC host restricts ICE to loopback so two same-host
-/// peers pair deterministically. `set_include_loopback_candidate` gathers the
-/// loopback candidates and the IP filter drops every non-loopback address, so
-/// the peers avoid the flaky LAN / container / link-local candidate pairs that
-/// otherwise stall the handshake.
+/// peers pair deterministically. Peers bind on IPv4 loopback, so only loopback
+/// candidates are gathered, and `set_include_loopback_candidate` keeps them
+/// rather than discarding them; this avoids the flaky LAN / container /
+/// link-local candidate pairs that otherwise stall the handshake.
 pub fn new_store(engine: &Engine) -> Store<Ctx> {
     let mut webrtc = WasiWebrtcCtx::new();
     webrtc.set_setting_engine_hook(|engine| {
         engine.set_include_loopback_candidate(true);
-        engine.set_ip_filter(Box::new(|ip| ip.is_loopback()));
     });
     Store::new(
         engine,

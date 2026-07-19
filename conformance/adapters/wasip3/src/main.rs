@@ -138,15 +138,17 @@ async fn run_test(
                     let (offerer, answerer) = tokio::join!(offerer, answerer);
                     Ok(fold_two(offerer?, answerer?))
                 }
-                Plan::InProcess => peer.run(base_url, test_id, &room, "both", count, size).await,
+                Plan::InProcess => {
+                    peer.run(base_url, test_id, &room, "both", count, size)
+                        .await
+                }
                 Plan::Skip => {
                     peer.run(base_url, test_id, &room, "offerer", count, size)
                         .await
                 }
             }
         };
-        let result: Result<PeerOutcome> = match tokio::time::timeout(ATTEMPT_TIMEOUT, attempt)
-            .await
+        let result: Result<PeerOutcome> = match tokio::time::timeout(ATTEMPT_TIMEOUT, attempt).await
         {
             Ok(result) => result,
             // A stalled attempt is treated like a flaky handshake: retry with a

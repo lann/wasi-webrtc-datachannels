@@ -41,8 +41,9 @@ guest, the `conformance-signalingd` mailbox, adapters for `wasmtime`,
 `jco-node`, `jco-browser`, and `wasip3-guest` (the guest composed with the
 in-guest `wasip3-impl` provider, run under `wasmtime run`), and the
 `wasmtime`<->`jco-node` interop pair (both orders) — all run in CI over
-loopback via `just conformance`, with real divergences pinned as manifest
-expected-fails (e.g. `zero-length-message`, items B6/E3). The
+loopback via `just conformance`. The `zero-length-message` divergence previously
+pinned as a manifest expected-fail (item B6) is now fixed, so no manifest
+expected-fails remain. The
 `wasmtime`<->`wasip3-guest` pairs are wired into `conformance-interop` but
 disabled by default pending the teardown-flush fix (item E3). Still open from
 the plan: Phase 5's ICE lab (netns/veth `lan`,
@@ -114,19 +115,29 @@ edge case (Drop after the runtime stops), but a production host should not rely
 on runtime presence for cleanup. Consider a dedicated close path or documenting
 the invariant.
 
-### B6. Wasmtime host cannot receive zero-length messages (upstream webrtc-rs bug)
+### B6. Wasmtime host cannot receive zero-length messages (upstream webrtc-rs bug) — Fixed
 
-`webrtc-rs`'s `RTCDataChannel::read_loop` treats any zero-byte read from
-`read_data_channel` as EOF and closes the channel
-(`webrtc-0.17/src/data_channel/mod.rs`, the `Ok((0, _))` arm) — but per RFC
-8831 §6.6 a zero-length message legitimately arrives as a zero-byte read with a
-`StringEmpty`/`BinaryEmpty` PPID, which `webrtc-data` correctly decodes to
-`n = 0`. So a peer that receives an empty message through the callback API has
-its channel torn down instead of observing the message. Sending empty messages
-works (`webrtc-data` maps them onto the empty PPIDs); only receiving is broken.
-Tracked by the `zero-length-message` expected-fail in
-`conformance/manifests/wasmtime.toml`; fixing it needs an upstream patch or
-detached data channels with a host-side read loop.
+**Fixed** by moving the wasmtime host off the async `webrtc` 0.17 crate onto
+`webrtc` 0.20 (`wasmtime-impl/Cargo.toml`, `examples/wasmtime-demo/Cargo.toml`),
+which is rebuilt on the sans-I/O `rtc` crate. The workspace patches `rtc` to the
+`lann/rtc` fork carrying the empty-message receive fix (`Cargo.toml`,
+`[patch.crates-io] rtc = { git = "https://github.com/lann/rtc.git", … }`; upstream
+PR [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)), so the host
+now surfaces a received zero-length message instead of tearing the channel down.
+The `zero-length-message` expected-fail has been removed from
+`conformance/manifests/wasmtime.toml` and the wasmtime interop-pair manifests.
+
+Original analysis, kept for context: `webrtc-rs`'s 0.17 `RTCDataChannel::read_loop`
+treated any zero-byte read from `read_data_channel` as EOF and closed the channel
+(`webrtc-0.17/src/data_channel/mod.rs`, the `Ok((0, _))` arm) — but per RFC 8831
+§6.6 a zero-length message legitimately arrives as a zero-byte read with a
+`StringEmpty`/`BinaryEmpty` PPID, which `webrtc-data` correctly decoded to
+`n = 0`, so a peer that received an empty message had its channel torn down
+instead of observing the message (sending empty messages already worked). In
+0.20 the data channel is driven by a per-channel poll loop
+(`wasmtime-impl/src/data_channel.rs`) that delivers every `OnMessage` event —
+including an empty payload — rather than conflating a zero-byte read with
+end-of-stream.
 
 ## C. WIT interface design
 
@@ -219,9 +230,16 @@ a dev-dependency by the test and by the demo binary).
   sans-I/O timing issue; `examples/webrtc-consumer` retries a bounded number of
   fresh attempts to keep the integration test reliable. Root-cause and fix in the
   fork (or its driving contract) to make a single attempt deterministic.
-- Zero-length messages arrive corrupted: a received empty message surfaces as a
-  single `0x00` byte. Upstream `rtc` bug (present in `0.20.0-rc.3`), receive
-  side only — the send side is correct. Detail for an upstream fix:
+- ~~Zero-length messages arrive corrupted: a received empty message surfaces as
+  a single `0x00` byte.~~ **Fixed** on the `lann/rtc` fork the workspace now
+  tracks (`Cargo.toml`, `rtc = { git = "https://github.com/lann/rtc.git", …
+  }`): `rtc`'s `DataChannelHandler::handle_read` now maps the `BinaryEmpty` /
+  `StringEmpty` PPIDs back to an empty payload before surfacing the message.
+  `zero-length-message` passes on `wasip3-guest` and is no longer an
+  expected-fail there. Submitted upstream as
+  [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131); drop the fork
+  and return to a published `rtc` once that merges and ships (tracked with the
+  release-candidate bullet below). Original analysis, kept for the upstream PR:
   - RFC 8831 §6.6: SCTP cannot carry empty user messages, so an empty data
     channel message is sent as a **single zero byte** with PPID
     `WebRTC String Empty` (56) or `WebRTC Binary Empty` (57), and "the receiver
@@ -240,15 +258,15 @@ a dev-dependency by the test and by the demo binary).
     compute `is_string` (`ppi == PayloadProtocolIdentifier::String ||
     ppi == PayloadProtocolIdentifier::StringEmpty`) but still forwards
     `data: data_channel_message.payload`, i.e. the `[0x00]` placeholder.
-  - Fix: when `ppi` is `BinaryEmpty` or `StringEmpty`, replace the payload with
-    an empty buffer before surfacing the message (either in
-    `rtc-datachannel`'s `handle_read`, symmetric with
-    `get_data_channel_message`, or in `rtc`'s `DataChannelHandler` where
+  - Fix (implemented on the fork, upstream PR
+    [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)): when `ppi`
+    is `BinaryEmpty` or `StringEmpty`, replace the payload with an empty buffer
+    before surfacing the message (done in `rtc`'s `DataChannelHandler` where
     `is_string` is already derived from the PPID).
 
-  `zero-length-message` is expected-fail in
-  `conformance/manifests/wasip3-guest.toml` (and in the wasmtime interop-pair
-  manifests, where the wasmtime peer has the analogous B6 receive bug).
+  `zero-length-message` now also passes in the wasmtime interop-pair manifests:
+  the wasmtime peer's analogous B6 receive bug is fixed (see item B6), so its
+  expected-fail entries there have been removed.
 - The `wasmtime`<->`wasip3-guest` interop pair stalls deterministically (every
   test, every attempt): packet capture shows the full ICE/DTLS/SCTP handshake
   and both 16-message payload bursts complete within ~120 ms, but the wasip3
@@ -264,10 +282,14 @@ a dev-dependency by the test and by the demo binary).
   emit) the SCTP/DTLS close before the driver exits — e.g. drain
   `poll_transmit` to quiescence after `close()` and only then return from
   `wasi:cli/run`. Until then the pair cannot be enabled in CI.
-- The `rtc` dependency is pinned to a `0.20` release candidate
-  (`Cargo.toml`, `rtc = "0.20.0-rc.3"`). Published on crates.io, but a
-  pre-release on the critical path — track moving to a stable `0.20` once it
-  ships.
+- The `rtc` dependency is pinned to the `lann/rtc` fork's `master`
+  (`Cargo.toml`, `rtc = { git = "https://github.com/lann/rtc.git", rev = … }`),
+  which carries the empty-message receive fix (upstream PR
+  [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)) on top of the
+  published `0.20.0-rc.3` release candidate. Two things on the critical path to
+  unwind: a git fork instead of a crates.io release, and a pre-release base.
+  Return to a published, stable `0.20` once PR #131 merges upstream and a release
+  including it ships.
 
 ## F. Examples
 
