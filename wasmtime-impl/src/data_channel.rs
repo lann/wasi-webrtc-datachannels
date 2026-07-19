@@ -2,7 +2,7 @@
 //!
 //! [`DataChannel`] is the concrete host type mapped onto the
 //! `lann:webrtc-datachannels/connections.data-channel` resource. It wraps an
-//! open `webrtc-rs` [`RTCDataChannel`], its inbound-message stream, and the peer
+//! open `webrtc-rs` data channel, its inbound-message stream, and the peer
 //! connection(s) that must outlive it.
 //!
 //! A channel may be **wired** immediately (the echo/manual hosts build the
@@ -11,25 +11,32 @@
 //! resource right away, then wires it once the peer connection has been built
 //! and the channel opened). Both share the same [`DataChannel`] type; the async
 //! methods await [`DataChannel::wired`] before touching the transport.
+//!
+//! The `webrtc` 0.20 data channel has no `on_open`/`on_message` callbacks;
+//! instead each channel is driven by a per-channel **pump** task that loops on
+//! [`webrtc::data_channel::DataChannel::poll`] and turns its
+//! [`DataChannelEvent`]s into an open signal plus a stream of
+//! [`InboundMessage`]s. Because every message (including a zero-length payload)
+//! arrives as an `OnMessage` event rather than being conflated with
+//! end-of-stream, empty messages are delivered to the guest.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::Result;
-use futures::channel::mpsc::UnboundedReceiver;
+use anyhow::{anyhow, Result};
+use futures::channel::mpsc::{self, UnboundedReceiver};
 use futures::channel::oneshot;
 use futures::future::Shared;
 use futures::lock::Mutex as AsyncMutex;
 use futures::{FutureExt, TryFutureExt};
-use webrtc::api::media_engine::MediaEngine;
-use webrtc::api::setting_engine::SettingEngine;
-use webrtc::api::APIBuilder;
-use webrtc::data_channel::RTCDataChannel;
-use webrtc::interceptor::registry::Registry;
-use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::data_channel::{DataChannel as WebrtcDataChannel, DataChannelEvent};
+use webrtc::peer_connection::{
+    PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCConfigurationBuilder,
+    SettingEngine,
+};
+use webrtc::runtime::default_runtime;
 
 /// A single inbound data-channel message together with its kind.
 ///
@@ -78,7 +85,7 @@ pub enum ChannelError {
 #[derive(Clone)]
 pub struct Wired {
     /// The open `webrtc-rs` data channel.
-    pub channel: Arc<RTCDataChannel>,
+    pub channel: Arc<dyn WebrtcDataChannel>,
     /// Inbound messages, delivered one per `receive` call. Behind an async mutex
     /// so concurrent receivers serialize and each takes the next message.
     pub incoming: Arc<AsyncMutex<UnboundedReceiver<InboundMessage>>>,
@@ -93,6 +100,81 @@ fn ready_wired(wired: Wired) -> WiredFuture {
     let fut: Pin<Box<dyn Future<Output = Result<Wired, ChannelError>> + Send>> =
         Box::pin(futures::future::ready(Ok(wired)));
     fut.shared()
+}
+
+/// The open signal and inbound-message stream produced by a channel's pump task.
+pub struct ChannelPump {
+    /// Inbound messages drained from the channel, in arrival order.
+    pub incoming: UnboundedReceiver<InboundMessage>,
+    /// Resolves once the channel reports `open`.
+    pub open: oneshot::Receiver<()>,
+}
+
+/// Spawn the per-channel pump task that drives a `webrtc` 0.20 data channel.
+///
+/// The task loops on [`webrtc::data_channel::DataChannel::poll`] and translates
+/// its [`DataChannelEvent`]s: `OnOpen` fires the open signal, each `OnMessage`
+/// (including a zero-length payload) is forwarded as an [`InboundMessage`], and
+/// `OnClose` (or a `None` poll) ends the pump, dropping the inbound sender so
+/// receivers observe end-of-stream.
+pub fn spawn_channel_pump(channel: Arc<dyn WebrtcDataChannel>) -> ChannelPump {
+    let (in_tx, in_rx) = mpsc::unbounded::<InboundMessage>();
+    let (open_tx, open_rx) = oneshot::channel::<()>();
+    tokio::spawn(async move {
+        let mut open_tx = Some(open_tx);
+        while let Some(event) = channel.poll().await {
+            match event {
+                DataChannelEvent::OnOpen => {
+                    if let Some(tx) = open_tx.take() {
+                        let _ = tx.send(());
+                    }
+                }
+                DataChannelEvent::OnMessage(message) => {
+                    let _ = in_tx.unbounded_send(InboundMessage {
+                        is_string: message.is_string,
+                        data: message.data.to_vec(),
+                    });
+                }
+                DataChannelEvent::OnClose => break,
+                _ => {}
+            }
+        }
+    });
+    ChannelPump {
+        incoming: in_rx,
+        open: open_rx,
+    }
+}
+
+/// Drive an open (or soon-to-open) channel into an existing wiring `oneshot`,
+/// fulfilling it with the channel's transport parts once it opens, or
+/// [`ChannelError::Closed`] if it closes first.
+pub fn spawn_channel_wiring(
+    channel: Arc<dyn WebrtcDataChannel>,
+    wire_tx: oneshot::Sender<Result<Wired, ChannelError>>,
+) {
+    let pump = spawn_channel_pump(channel.clone());
+    let incoming = Arc::new(AsyncMutex::new(pump.incoming));
+    tokio::spawn(async move {
+        match pump.open.await {
+            Ok(()) => {
+                let _ = wire_tx.send(Ok(Wired { channel, incoming }));
+            }
+            Err(_) => {
+                let _ = wire_tx.send(Err(ChannelError::Closed));
+            }
+        }
+    });
+}
+
+/// Wire an open (or soon-to-open) channel into a [`WiredFuture`] that resolves
+/// with the channel's transport parts once it opens, or [`ChannelError::Closed`]
+/// if it closes first. Used by the `peer-connection` resource's deferred and
+/// remote-opened channel paths.
+pub fn wire_open_channel(channel: Arc<dyn WebrtcDataChannel>) -> WiredFuture {
+    let (wire_tx, wired) = wiring_channel();
+    spawn_channel_wiring(channel, wire_tx);
+    wired
 }
 
 /// Host state behind a `data-channel` resource.
@@ -122,19 +204,21 @@ pub struct DataChannel {
     /// down its ICE/DTLS/SCTP background tasks instead of leaking them. Empty on
     /// the deferred `peer-connection` path, where the `peer-connection` resource
     /// owns and closes the connection.
-    keep_alive: Vec<Arc<RTCPeerConnection>>,
+    keep_alive: Vec<Arc<dyn PeerConnection>>,
 }
 
 impl DataChannel {
     /// Wrap an already-open data channel and its inbound-message receiver,
     /// retaining the given peer connections so they outlive the channel. Used by
-    /// the echo/manual hosts, which build the channel before the resource.
+    /// the echo/manual hosts, which build the channel before the resource. The
+    /// `label` is supplied by the caller (the `webrtc` 0.20 channel exposes it
+    /// only through an async accessor).
     pub fn new(
-        channel: Arc<RTCDataChannel>,
+        label: String,
+        channel: Arc<dyn WebrtcDataChannel>,
         incoming: UnboundedReceiver<InboundMessage>,
-        keep_alive: Vec<Arc<RTCPeerConnection>>,
+        keep_alive: Vec<Arc<dyn PeerConnection>>,
     ) -> Self {
-        let label = channel.label().to_string();
         let wired = ready_wired(Wired {
             channel,
             incoming: Arc::new(AsyncMutex::new(incoming)),
@@ -154,7 +238,7 @@ impl DataChannel {
     fn from_parts(
         label: String,
         wired: WiredFuture,
-        keep_alive: Vec<Arc<RTCPeerConnection>>,
+        keep_alive: Vec<Arc<dyn PeerConnection>>,
     ) -> Self {
         let (started_tx, started_rx) = oneshot::channel();
         Self {
@@ -228,11 +312,11 @@ impl Drop for DataChannel {
 /// Close each peer connection so `webrtc-rs` tears down its ICE/DTLS/SCTP
 /// background tasks.
 ///
-/// `RTCPeerConnection::close` is async, so the closes are spawned onto the
+/// [`PeerConnection::close`] is async, so the closes are spawned onto the
 /// current Tokio runtime; dropping the `Arc`s alone would leak those tasks for
 /// the process lifetime. Called from `Drop` impls, where awaiting is not
 /// possible; if no runtime is running the connections are simply dropped.
-pub fn close_peer_connections(connections: Vec<Arc<RTCPeerConnection>>) {
+pub fn close_peer_connections(connections: Vec<Arc<dyn PeerConnection>>) {
     if connections.is_empty() {
         return;
     }
@@ -246,32 +330,146 @@ pub fn close_peer_connections(connections: Vec<Arc<RTCPeerConnection>>) {
 }
 
 /// Create a peer connection, giving the caller a chance to customize the
-/// `webrtc-rs` [`SettingEngine`] first.
+/// `webrtc-rs` [`SettingEngine`] first and supplying the event `handler` that
+/// receives its callbacks (ICE candidates, remote data channels, connection
+/// state). The `webrtc` 0.20 builder takes a single
+/// [`PeerConnectionEventHandler`] at build time, so callbacks cannot be attached
+/// after construction.
 ///
 /// The crate deliberately does **not** hardcode any environment-driven ICE
 /// tweaks. Instead, `configure` is run against a fresh [`SettingEngine`] before
 /// the peer connection is built, mirroring the customization hook
-/// wasmtime-wasi-http exposes via its `WasiHttpHooks`. Demo and test hosts use
-/// this to, for example, opt into loopback ICE candidates when both peers share
-/// one host (see [`WasiWebrtcCtx::set_setting_engine_hook`]); passing a no-op
-/// closure yields host ICE candidates only.
+/// wasmtime-wasi-http exposes via its `WasiHttpHooks`.
 ///
-/// [`SettingEngine`]: webrtc::api::setting_engine::SettingEngine
-/// [`WasiWebrtcCtx::set_setting_engine_hook`]: crate::WasiWebrtcCtx::set_setting_engine_hook
+/// Peers bind on IPv4 loopback (`127.0.0.1`), which gathers a loopback host
+/// candidate so two peers sharing one host connect. Demo and test hosts use the
+/// `configure` hook to opt into loopback ICE candidates via
+/// [`WasiWebrtcCtx::set_setting_engine_hook`](crate::WasiWebrtcCtx::set_setting_engine_hook).
 pub async fn new_peer_connection(
     configure: impl FnOnce(&mut SettingEngine),
-) -> Result<Arc<RTCPeerConnection>> {
-    let media = MediaEngine::default();
-    // Data channels don't need media codecs, but the API builder wants a media
-    // engine; a default one is sufficient for SCTP.
-    let registry = Registry::new();
+    handler: Arc<dyn PeerConnectionEventHandler>,
+) -> Result<Arc<dyn PeerConnection>> {
     let mut setting = SettingEngine::default();
     configure(&mut setting);
-    let api = APIBuilder::new()
-        .with_media_engine(media)
-        .with_interceptor_registry(registry)
+    let runtime = default_runtime().ok_or_else(|| anyhow!("no async runtime found"))?;
+    let pc = PeerConnectionBuilder::new()
+        .with_configuration(RTCConfigurationBuilder::new().build())
         .with_setting_engine(setting)
-        .build();
-    let config = RTCConfiguration::default();
-    Ok(Arc::new(api.new_peer_connection(config).await?))
+        .with_handler(handler)
+        .with_runtime(runtime)
+        .with_udp_addrs(vec!["127.0.0.1:0"])
+        .build()
+        .await?;
+    Ok(Arc::new(pc))
+}
+
+/// A [`PeerConnectionEventHandler`] built from optional callback senders.
+///
+/// The `webrtc` 0.20 builder takes one handler at build time; this type lets the
+/// crate and its demo/test hosts assemble a handler from just the callbacks they
+/// need without each defining a bespoke trait impl.
+#[allow(clippy::type_complexity)]
+#[derive(Default)]
+pub struct CallbackHandler {
+    on_ice_candidate:
+        Option<Box<dyn Fn(webrtc::peer_connection::RTCPeerConnectionIceEvent) + Send + Sync>>,
+    on_gathering_complete: Option<Box<dyn Fn() + Send + Sync>>,
+    on_data_channel: Option<Box<dyn Fn(Arc<dyn WebrtcDataChannel>) + Send + Sync>>,
+    on_connection_state:
+        Option<Box<dyn Fn(webrtc::peer_connection::RTCPeerConnectionState) + Send + Sync>>,
+    on_ice_connection_state:
+        Option<Box<dyn Fn(webrtc::peer_connection::RTCIceConnectionState) + Send + Sync>>,
+}
+
+impl CallbackHandler {
+    /// A handler with no callbacks registered.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a callback for each locally gathered ICE candidate.
+    pub fn on_ice_candidate(
+        mut self,
+        f: impl Fn(webrtc::peer_connection::RTCPeerConnectionIceEvent) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_ice_candidate = Some(Box::new(f));
+        self
+    }
+
+    /// Register a callback fired once ICE gathering reaches `complete`.
+    pub fn on_gathering_complete(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_gathering_complete = Some(Box::new(f));
+        self
+    }
+
+    /// Register a callback for each data channel opened by the remote peer.
+    pub fn on_data_channel(
+        mut self,
+        f: impl Fn(Arc<dyn WebrtcDataChannel>) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_data_channel = Some(Box::new(f));
+        self
+    }
+
+    /// Register a callback for peer-connection state transitions.
+    pub fn on_connection_state(
+        mut self,
+        f: impl Fn(webrtc::peer_connection::RTCPeerConnectionState) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_connection_state = Some(Box::new(f));
+        self
+    }
+
+    /// Register a callback for ICE-connection state transitions.
+    pub fn on_ice_connection_state(
+        mut self,
+        f: impl Fn(webrtc::peer_connection::RTCIceConnectionState) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_ice_connection_state = Some(Box::new(f));
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl PeerConnectionEventHandler for CallbackHandler {
+    async fn on_ice_candidate(&self, event: webrtc::peer_connection::RTCPeerConnectionIceEvent) {
+        if let Some(f) = &self.on_ice_candidate {
+            f(event);
+        }
+    }
+
+    async fn on_ice_gathering_state_change(
+        &self,
+        state: webrtc::peer_connection::RTCIceGatheringState,
+    ) {
+        if state == webrtc::peer_connection::RTCIceGatheringState::Complete {
+            if let Some(f) = &self.on_gathering_complete {
+                f();
+            }
+        }
+    }
+
+    async fn on_data_channel(&self, data_channel: Arc<dyn WebrtcDataChannel>) {
+        if let Some(f) = &self.on_data_channel {
+            f(data_channel);
+        }
+    }
+
+    async fn on_connection_state_change(
+        &self,
+        state: webrtc::peer_connection::RTCPeerConnectionState,
+    ) {
+        if let Some(f) = &self.on_connection_state {
+            f(state);
+        }
+    }
+
+    async fn on_ice_connection_state_change(
+        &self,
+        state: webrtc::peer_connection::RTCIceConnectionState,
+    ) {
+        if let Some(f) = &self.on_ice_connection_state {
+            f(state);
+        }
+    }
 }

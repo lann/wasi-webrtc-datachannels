@@ -8,20 +8,19 @@
 //! implements the demo-only `connect` convenience, which wires a channel to a
 //! host-provided echo endpoint via a local helper.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::anyhow;
-use futures::channel::{mpsc, oneshot};
+use futures::channel::mpsc;
+use futures::StreamExt;
 use wasmtime::component::{Accessor, Component, HasData, Linker, Resource, ResourceTable};
 use wasmtime::{Config, Engine, Result, Store};
 use wasmtime_webrtc_datachannels::{
-    self as webrtc_host, new_peer_connection, DataChannel, InboundMessage, WasiWebrtcCtx,
-    WasiWebrtcCtxView, WasiWebrtcView,
+    self as webrtc_host, new_peer_connection, spawn_channel_pump, CallbackHandler, DataChannel,
+    WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
 };
-use webrtc::api::setting_engine::SettingEngine;
-use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
-use webrtc::data_channel::data_channel_message::DataChannelMessage;
-use webrtc::data_channel::RTCDataChannel;
+use webrtc::data_channel::{DataChannelEvent, RTCDataChannelInit};
+use webrtc::peer_connection::{RTCIceCandidateInit, SettingEngine};
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -108,72 +107,68 @@ async fn build_echo(
     max_retransmits: Option<u16>,
     configure: impl Fn(&mut SettingEngine),
 ) -> anyhow::Result<DataChannel> {
-    let near = new_peer_connection(&configure).await?;
-    let far = new_peer_connection(&configure).await?;
+    // The two echo peers share this process and reach each other only over
+    // loopback ICE; trickle each peer's gathered candidates to the other.
+    let (near_ice_tx, mut near_ice_rx) = mpsc::unbounded::<RTCIceCandidateInit>();
+    let (far_ice_tx, mut far_ice_rx) = mpsc::unbounded::<RTCIceCandidateInit>();
 
-    let far_for_ice = far.clone();
-    near.on_ice_candidate(Box::new(move |candidate| {
-        let far = far_for_ice.clone();
-        Box::pin(async move {
-            if let Some(candidate) = candidate {
-                if let Ok(init) = candidate.to_json() {
-                    let _ = far.add_ice_candidate(init).await;
-                }
-            }
-        })
-    }));
-    let near_for_ice = near.clone();
-    far.on_ice_candidate(Box::new(move |candidate| {
-        let near = near_for_ice.clone();
-        Box::pin(async move {
-            if let Some(candidate) = candidate {
-                if let Ok(init) = candidate.to_json() {
-                    let _ = near.add_ice_candidate(init).await;
-                }
-            }
-        })
+    let near_handler = Arc::new(CallbackHandler::new().on_ice_candidate(move |event| {
+        if let Ok(init) = event.candidate.to_json() {
+            let _ = near_ice_tx.unbounded_send(init);
+        }
     }));
 
-    far.on_data_channel(Box::new(move |channel: Arc<RTCDataChannel>| {
-        Box::pin(async move {
-            let echo_channel = channel.clone();
-            channel.on_message(Box::new(move |message: DataChannelMessage| {
-                let echo_channel = echo_channel.clone();
-                Box::pin(async move {
-                    let _ = echo_channel.send(&message.data).await;
-                })
-            }));
-        })
-    }));
+    // The far peer echoes every message it receives back over the same channel.
+    let far_handler = Arc::new(
+        CallbackHandler::new()
+            .on_ice_candidate(move |event| {
+                if let Ok(init) = event.candidate.to_json() {
+                    let _ = far_ice_tx.unbounded_send(init);
+                }
+            })
+            .on_data_channel(move |channel| {
+                tokio::spawn(async move {
+                    while let Some(event) = channel.poll().await {
+                        match event {
+                            DataChannelEvent::OnMessage(message) => {
+                                let _ = channel.send(message.data).await;
+                            }
+                            DataChannelEvent::OnClose => break,
+                            _ => {}
+                        }
+                    }
+                });
+            }),
+    );
+
+    let near = new_peer_connection(&configure, near_handler).await?;
+    let far = new_peer_connection(&configure, far_handler).await?;
+
+    {
+        let far = far.clone();
+        tokio::spawn(async move {
+            while let Some(init) = near_ice_rx.next().await {
+                let _ = far.add_ice_candidate(init).await;
+            }
+        });
+    }
+    {
+        let near = near.clone();
+        tokio::spawn(async move {
+            while let Some(init) = far_ice_rx.next().await {
+                let _ = near.add_ice_candidate(init).await;
+            }
+        });
+    }
 
     let init = RTCDataChannelInit {
-        ordered: Some(ordered),
+        ordered,
         max_retransmits,
         ..Default::default()
     };
     let channel = near.create_data_channel(label, Some(init)).await?;
 
-    let (in_tx, in_rx) = mpsc::unbounded::<InboundMessage>();
-    channel.on_message(Box::new(move |message: DataChannelMessage| {
-        let in_tx = in_tx.clone();
-        Box::pin(async move {
-            let _ = in_tx.unbounded_send(InboundMessage {
-                is_string: message.is_string,
-                data: message.data.to_vec(),
-            });
-        })
-    }));
-
-    let (open_tx, open_rx) = oneshot::channel::<()>();
-    let open_tx = Arc::new(Mutex::new(Some(open_tx)));
-    channel.on_open(Box::new(move || {
-        let open_tx = open_tx.clone();
-        Box::pin(async move {
-            if let Some(tx) = open_tx.lock().unwrap().take() {
-                let _ = tx.send(());
-            }
-        })
-    }));
+    let pump = spawn_channel_pump(channel.clone());
 
     let offer = near.create_offer(None).await?;
     near.set_local_description(offer.clone()).await?;
@@ -182,11 +177,16 @@ async fn build_echo(
     far.set_local_description(answer.clone()).await?;
     near.set_remote_description(answer).await?;
 
-    open_rx
+    pump.open
         .await
         .map_err(|_| anyhow!("data channel closed before opening"))?;
 
-    Ok(DataChannel::new(channel, in_rx, vec![near, far]))
+    Ok(DataChannel::new(
+        label.to_string(),
+        channel,
+        pump.incoming,
+        vec![near, far],
+    ))
 }
 
 fn engine() -> Result<Engine> {

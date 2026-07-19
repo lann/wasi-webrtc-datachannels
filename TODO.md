@@ -41,8 +41,9 @@ guest, the `conformance-signalingd` mailbox, adapters for `wasmtime`,
 `jco-node`, `jco-browser`, and `wasip3-guest` (the guest composed with the
 in-guest `wasip3-impl` provider, run under `wasmtime run`), and the
 `wasmtime`<->`jco-node` interop pair (both orders) — all run in CI over
-loopback via `just conformance`, with real divergences pinned as manifest
-expected-fails (e.g. `zero-length-message`, items B6/E3). The
+loopback via `just conformance`. The `zero-length-message` divergence previously
+pinned as a manifest expected-fail (item B6) is now fixed, so no manifest
+expected-fails remain. The
 `wasmtime`<->`wasip3-guest` pairs are wired into `conformance-interop` but
 disabled by default pending the teardown-flush fix (item E3). Still open from
 the plan: Phase 5's ICE lab (netns/veth `lan`,
@@ -114,19 +115,29 @@ edge case (Drop after the runtime stops), but a production host should not rely
 on runtime presence for cleanup. Consider a dedicated close path or documenting
 the invariant.
 
-### B6. Wasmtime host cannot receive zero-length messages (upstream webrtc-rs bug)
+### B6. Wasmtime host cannot receive zero-length messages (upstream webrtc-rs bug) — Fixed
 
-`webrtc-rs`'s `RTCDataChannel::read_loop` treats any zero-byte read from
-`read_data_channel` as EOF and closes the channel
-(`webrtc-0.17/src/data_channel/mod.rs`, the `Ok((0, _))` arm) — but per RFC
-8831 §6.6 a zero-length message legitimately arrives as a zero-byte read with a
-`StringEmpty`/`BinaryEmpty` PPID, which `webrtc-data` correctly decodes to
-`n = 0`. So a peer that receives an empty message through the callback API has
-its channel torn down instead of observing the message. Sending empty messages
-works (`webrtc-data` maps them onto the empty PPIDs); only receiving is broken.
-Tracked by the `zero-length-message` expected-fail in
-`conformance/manifests/wasmtime.toml`; fixing it needs an upstream patch or
-detached data channels with a host-side read loop.
+**Fixed** by moving the wasmtime host off the async `webrtc` 0.17 crate onto
+`webrtc` 0.20 (`wasmtime-impl/Cargo.toml`, `examples/wasmtime-demo/Cargo.toml`),
+which is rebuilt on the sans-I/O `rtc` crate. The workspace patches `rtc` to the
+`lann/rtc` fork carrying the empty-message receive fix (`Cargo.toml`,
+`[patch.crates-io] rtc = { git = "https://github.com/lann/rtc.git", … }`; upstream
+PR [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)), so the host
+now surfaces a received zero-length message instead of tearing the channel down.
+The `zero-length-message` expected-fail has been removed from
+`conformance/manifests/wasmtime.toml` and the wasmtime interop-pair manifests.
+
+Original analysis, kept for context: `webrtc-rs`'s 0.17 `RTCDataChannel::read_loop`
+treated any zero-byte read from `read_data_channel` as EOF and closed the channel
+(`webrtc-0.17/src/data_channel/mod.rs`, the `Ok((0, _))` arm) — but per RFC 8831
+§6.6 a zero-length message legitimately arrives as a zero-byte read with a
+`StringEmpty`/`BinaryEmpty` PPID, which `webrtc-data` correctly decoded to
+`n = 0`, so a peer that received an empty message had its channel torn down
+instead of observing the message (sending empty messages already worked). In
+0.20 the data channel is driven by a per-channel poll loop
+(`wasmtime-impl/src/data_channel.rs`) that delivers every `OnMessage` event —
+including an empty payload — rather than conflating a zero-byte read with
+end-of-stream.
 
 ## C. WIT interface design
 
@@ -253,8 +264,9 @@ a dev-dependency by the test and by the demo binary).
     before surfacing the message (done in `rtc`'s `DataChannelHandler` where
     `is_string` is already derived from the PPID).
 
-  `zero-length-message` still fails in the wasmtime interop-pair manifests,
-  where the wasmtime peer has the analogous B6 receive bug.
+  `zero-length-message` now also passes in the wasmtime interop-pair manifests:
+  the wasmtime peer's analogous B6 receive bug is fixed (see item B6), so its
+  expected-fail entries there have been removed.
 - The `wasmtime`<->`wasip3-guest` interop pair stalls deterministically (every
   test, every attempt): packet capture shows the full ICE/DTLS/SCTP handshake
   and both 16-message payload bursts complete within ~120 ms, but the wasip3

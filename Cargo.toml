@@ -17,8 +17,16 @@ members = [
 resolver = "2"
 
 # Pin the sans-I/O WebRTC stack once, here, so every member (and any future wasm
-# build) resolves the same source. Tracks the `lann/rtc` fork's `master`, which
-# carries the empty-message receive fix (upstream PR webrtc-rs/rtc#131) on top of
-# the published 0.20.0-rc.3 release candidate.
+# build) resolves the same source.
 [workspace.dependencies]
+rtc = "0.20.0-rc.3"
+
+# Redirect every `rtc` resolution — the direct dependency of `wasip3-impl` and,
+# crucially, the *transitive* dependency of the async `webrtc` 0.20 crate the
+# Wasmtime host is built on — to the `lann/rtc` fork's `master`. That fork
+# carries the empty-message receive fix (upstream PR webrtc-rs/rtc#131) on top of
+# the published 0.20.0-rc.3 release candidate, so the Wasmtime host can receive
+# zero-length messages (TODO.md item B6). Using `[patch]` rather than a direct
+# git dependency is what lets the fix reach `webrtc`'s own copy of `rtc`.
+[patch.crates-io]
 rtc = { git = "https://github.com/lann/rtc.git", rev = "e3046a97c9f32965e2ae85d70a7104727f7d226b" }

@@ -4,18 +4,15 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
-use futures::channel::mpsc::{self, UnboundedReceiver};
+use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot;
 use wasmtime::component::{Accessor, HasData, Linker, Resource};
-use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
-use webrtc::data_channel::data_channel_message::DataChannelMessage;
-use webrtc::data_channel::RTCDataChannel;
-use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::data_channel::{DataChannel as WebrtcDataChannel, RTCDataChannelInit};
+use webrtc::peer_connection::{PeerConnection, RTCSessionDescription};
 
 use wasmtime_webrtc_datachannels::{
-    close_peer_connections, new_peer_connection, DataChannel, InboundMessage, SettingEngineHook,
-    WasiWebrtcCtxView, WasiWebrtcView,
+    close_peer_connections, new_peer_connection, spawn_channel_pump, CallbackHandler, DataChannel,
+    InboundMessage, SettingEngineHook, WasiWebrtcCtxView, WasiWebrtcView,
 };
 
 mod bindings {
@@ -67,10 +64,16 @@ where
     Ok(())
 }
 
+/// A callback invoked with each data channel opened by the remote peer.
+type OnDataChannel = Box<dyn Fn(Arc<dyn WebrtcDataChannel>) + Send + Sync>;
+
 /// Everything captured for the negotiated data channel.
 #[derive(Default)]
 struct Negotiated {
-    channel: Option<Arc<RTCDataChannel>>,
+    /// The negotiated channel label (the offerer knows it up front; the answerer
+    /// resolves it from the arriving channel, whose accessor is async).
+    label: String,
+    channel: Option<Arc<dyn WebrtcDataChannel>>,
     incoming: Option<UnboundedReceiver<InboundMessage>>,
     /// Resolves once the channel reports `open`. A oneshot (rather than a bare
     /// notify) so an early open is not missed if `connect` awaits later.
@@ -87,12 +90,16 @@ pub struct ManualPeer {
     /// Created lazily on the first `create-offer`/`create-answer` call, because
     /// the WIT `constructor` is synchronous but building a `webrtc-rs` peer
     /// connection is async.
-    pc: Arc<Mutex<Option<Arc<RTCPeerConnection>>>>,
+    pc: Arc<Mutex<Option<Arc<dyn PeerConnection>>>>,
     negotiated: Arc<Mutex<Negotiated>>,
     /// (Answerer only) resolves once the offerer's data channel has arrived via
     /// `on_data_channel` and populated `negotiated`. `None` for the offerer,
     /// which creates its channel synchronously in `create_offer`.
     channel_arrived: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
+    /// Resolves once ICE gathering reports `complete`, so the local description
+    /// read back afterwards already carries every candidate. Set up in
+    /// `init_pc` and awaited by `await_gathering`.
+    gather_complete: Arc<Mutex<Option<oneshot::Receiver<()>>>>,
     /// Hook applied to each peer connection's `SettingEngine` (e.g. to enable
     /// loopback ICE candidates for two same-host peers).
     setting_engine_hook: Option<SettingEngineHook>,
@@ -106,42 +113,67 @@ impl Default for ManualPeer {
 
 impl ManualPeer {
     /// Construct an uninitialized peer (the resource `constructor`). The backing
-    /// `RTCPeerConnection` is created on first use, with `setting_engine_hook`
+    /// peer connection is created on first use, with `setting_engine_hook`
     /// applied to its `SettingEngine`.
     pub fn new(setting_engine_hook: Option<SettingEngineHook>) -> Self {
         Self {
             pc: Arc::new(Mutex::new(None)),
             negotiated: Arc::new(Mutex::new(Negotiated::default())),
             channel_arrived: Arc::new(Mutex::new(None)),
+            gather_complete: Arc::new(Mutex::new(None)),
             setting_engine_hook,
         }
     }
 
     /// Create the backing peer connection and store it, returning a handle.
-    async fn init_pc(&self) -> Result<Arc<RTCPeerConnection>> {
+    ///
+    /// The `webrtc` 0.20 builder takes one event handler at build time, so the
+    /// callbacks are assembled here: an ICE-gathering-complete signal feeding
+    /// [`ManualPeer::await_gathering`], the answerer's optional `on_data_channel`
+    /// (which wires the arriving channel), and debug state logging.
+    async fn init_pc(
+        &self,
+        on_data_channel: Option<OnDataChannel>,
+    ) -> Result<Arc<dyn PeerConnection>> {
         let hook = self.setting_engine_hook.clone();
-        let pc = new_peer_connection(|engine| {
-            if let Some(hook) = &hook {
-                hook(engine);
+
+        let (gather_tx, gather_rx) = oneshot::channel::<()>();
+        *self.gather_complete.lock().unwrap() = Some(gather_rx);
+        let gather_tx = Arc::new(Mutex::new(Some(gather_tx)));
+
+        let mut handler = CallbackHandler::new().on_gathering_complete(move || {
+            if let Some(tx) = gather_tx.lock().unwrap().take() {
+                let _ = tx.send(());
             }
-        })
-        .await?;
-        if std::env::var_os("WEBRTC_SIGNALING_DEBUG").is_some() {
-            pc.on_ice_connection_state_change(Box::new(|state| {
-                eprintln!("[manual] ice-connection-state: {state}");
-                Box::pin(async {})
-            }));
-            pc.on_peer_connection_state_change(Box::new(|state| {
-                eprintln!("[manual] peer-connection-state: {state}");
-                Box::pin(async {})
-            }));
+        });
+        if let Some(callback) = on_data_channel {
+            handler = handler.on_data_channel(callback);
         }
+        if std::env::var_os("WEBRTC_SIGNALING_DEBUG").is_some() {
+            handler = handler
+                .on_ice_connection_state(|state| {
+                    eprintln!("[manual] ice-connection-state: {state}");
+                })
+                .on_connection_state(|state| {
+                    eprintln!("[manual] peer-connection-state: {state}");
+                });
+        }
+
+        let pc = new_peer_connection(
+            |engine| {
+                if let Some(hook) = &hook {
+                    hook(engine);
+                }
+            },
+            Arc::new(handler),
+        )
+        .await?;
         *self.pc.lock().unwrap() = Some(pc.clone());
         Ok(pc)
     }
 
     /// Return the backing peer connection, erroring if signaling has not started.
-    fn pc(&self) -> Result<Arc<RTCPeerConnection>> {
+    fn pc(&self) -> Result<Arc<dyn PeerConnection>> {
         self.pc
             .lock()
             .unwrap()
@@ -166,18 +198,18 @@ impl ManualPeer {
         max_retransmits: Option<u16>,
     ) -> Result<String> {
         let init = RTCDataChannelInit {
-            ordered: Some(ordered),
+            ordered,
             max_retransmits,
             ..Default::default()
         };
-        let pc = self.init_pc().await?;
+        let pc = self.init_pc(None).await?;
         let channel = pc.create_data_channel(label, Some(init)).await?;
-        let negotiated = wire_channel(&channel);
+        let negotiated = wire_channel(label.to_string(), &channel);
         *self.negotiated.lock().unwrap() = negotiated;
 
         let offer = pc.create_offer(None).await?;
         pc.set_local_description(offer).await?;
-        self.await_gathering(&pc).await;
+        self.await_gathering().await;
         local_sdp(&pc).await
     }
 
@@ -191,32 +223,34 @@ impl ManualPeer {
     /// (Answerer) Apply the peer's complete SDP offer, produce a complete SDP
     /// answer with all ICE candidates gathered, and return it.
     pub async fn create_answer(&self, offer_sdp: String) -> Result<String> {
-        let pc = self.init_pc().await?;
-
         // The offerer's data channel arrives via `on_data_channel` some time
         // after the connection opens; capture it and signal its arrival so
-        // `connect` can wait for it.
+        // `connect` can wait for it. The channel's label accessor is async, so
+        // wiring runs in a spawned task that also fills the `negotiated` slot.
         let (arrived_tx, arrived_rx) = oneshot::channel::<()>();
         *self.channel_arrived.lock().unwrap() = Some(arrived_rx);
         let arrived_tx = Arc::new(Mutex::new(Some(arrived_tx)));
         let slot = self.negotiated.clone();
-        pc.on_data_channel(Box::new(move |channel: Arc<RTCDataChannel>| {
+        let on_data_channel = move |channel: Arc<dyn WebrtcDataChannel>| {
             let slot = slot.clone();
             let arrived_tx = arrived_tx.clone();
-            Box::pin(async move {
-                let negotiated = wire_channel(&channel);
+            tokio::spawn(async move {
+                let label = channel.label().await.unwrap_or_default();
+                let negotiated = wire_channel(label, &channel);
                 *slot.lock().unwrap() = negotiated;
                 if let Some(tx) = arrived_tx.lock().unwrap().take() {
                     let _ = tx.send(());
                 }
-            })
-        }));
+            });
+        };
+
+        let pc = self.init_pc(Some(Box::new(on_data_channel))).await?;
 
         let offer = RTCSessionDescription::offer(offer_sdp)?;
         pc.set_remote_description(offer).await?;
         let answer = pc.create_answer(None).await?;
         pc.set_local_description(answer).await?;
-        self.await_gathering(&pc).await;
+        self.await_gathering().await;
         local_sdp(&pc).await
     }
 
@@ -242,6 +276,7 @@ impl ManualPeer {
         }
 
         let mut negotiated = self.negotiated.lock().unwrap();
+        let label = negotiated.label.clone();
         let channel = negotiated
             .channel
             .clone()
@@ -250,19 +285,21 @@ impl ManualPeer {
             .incoming
             .take()
             .ok_or_else(|| anyhow!("data channel has no inbound stream"))?;
-        Ok(DataChannel::new(channel, incoming, vec![self.pc()?]))
+        Ok(DataChannel::new(label, channel, incoming, vec![self.pc()?]))
     }
 
     /// Block until ICE gathering has completed so the local description carries
     /// every candidate.
-    async fn await_gathering(&self, pc: &Arc<RTCPeerConnection>) {
-        let mut gather_complete = pc.gathering_complete_promise().await;
-        let _ = gather_complete.recv().await;
+    async fn await_gathering(&self) {
+        let gather = self.gather_complete.lock().unwrap().take();
+        if let Some(gather) = gather {
+            let _ = gather.await;
+        }
     }
 }
 
 /// Read back a peer connection's complete local description (with candidates).
-async fn local_sdp(pc: &Arc<RTCPeerConnection>) -> Result<String> {
+async fn local_sdp(pc: &Arc<dyn PeerConnection>) -> Result<String> {
     let description = pc
         .local_description()
         .await
@@ -270,35 +307,15 @@ async fn local_sdp(pc: &Arc<RTCPeerConnection>) -> Result<String> {
     Ok(description.sdp)
 }
 
-/// Attach open/message handlers to `channel` and return its negotiated state
-/// (the channel, its inbound-message receiver, and an open signal).
-fn wire_channel(channel: &Arc<RTCDataChannel>) -> Negotiated {
-    let (in_tx, in_rx) = mpsc::unbounded::<InboundMessage>();
-    channel.on_message(Box::new(move |message: DataChannelMessage| {
-        let in_tx = in_tx.clone();
-        Box::pin(async move {
-            let _ = in_tx.unbounded_send(InboundMessage {
-                is_string: message.is_string,
-                data: message.data.to_vec(),
-            });
-        })
-    }));
-
-    let (open_tx, open_rx) = oneshot::channel::<()>();
-    let open_tx = Arc::new(Mutex::new(Some(open_tx)));
-    channel.on_open(Box::new(move || {
-        let open_tx = open_tx.clone();
-        Box::pin(async move {
-            if let Some(tx) = open_tx.lock().unwrap().take() {
-                let _ = tx.send(());
-            }
-        })
-    }));
-
+/// Spawn `channel`'s pump task and return its negotiated state (the channel, its
+/// inbound-message receiver, and an open signal).
+fn wire_channel(label: String, channel: &Arc<dyn WebrtcDataChannel>) -> Negotiated {
+    let pump = spawn_channel_pump(channel.clone());
     Negotiated {
+        label,
         channel: Some(channel.clone()),
-        incoming: Some(in_rx),
-        open: Some(open_rx),
+        incoming: Some(pump.incoming),
+        open: Some(pump.open),
     }
 }
 
