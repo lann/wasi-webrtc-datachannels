@@ -122,25 +122,66 @@ pub struct DataChannel {
     label: String,
 }
 
+/// The channel's state as observed through the shared state: usable, still
+/// opening, or gone.
+enum ChannelState {
+    /// The channel opened and has not closed.
+    Open,
+    /// The channel is not yet tracked but the connection is alive: a locally
+    /// created channel whose open the pump has not yet observed.
+    Opening,
+    /// The channel (or its connection) closed or failed.
+    Closed,
+}
+
+/// Observe `id`'s state. A channel enters `Shared::channels` only when the pump
+/// drains its open event, so a locally created channel is `Opening` — not
+/// closed — until then (or until the connection itself dies).
+fn channel_state(s: &mut Shared, id: rtc::data_channel::RTCDataChannelId) -> ChannelState {
+    let dead = s.closed || s.failed;
+    match s.channel_mut(id) {
+        Some(channel) if channel.closed => ChannelState::Closed,
+        Some(_) => ChannelState::Open,
+        None if dead => ChannelState::Closed,
+        None => ChannelState::Opening,
+    }
+}
+
+impl DataChannel {
+    /// Wait until the channel is open (or learn it closed), then run `op` on the
+    /// shared state.
+    async fn when_open<T>(
+        &self,
+        mut op: impl FnMut(&mut Shared) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        loop {
+            {
+                let mut s = self.shared.borrow_mut();
+                match channel_state(&mut s, self.id) {
+                    ChannelState::Open => return op(&mut s),
+                    ChannelState::Closed => return Err(Error::Closed),
+                    ChannelState::Opening => {}
+                }
+            }
+            crate::wasi::clocks::monotonic_clock::wait_for(POLL_NANOS).await;
+        }
+    }
+}
+
 impl GuestDataChannel for DataChannel {
     fn label(&self) -> String {
         self.label.clone()
     }
 
     async fn send(&self, message: Message) -> Result<(), Error> {
-        {
-            let mut s = self.shared.borrow_mut();
-            if s.channel_mut(self.id).map(|c| c.closed).unwrap_or(true) {
-                return Err(Error::Closed);
-            }
+        self.when_open(|s| {
             let result = match &message {
                 Message::Binary(data) => s.peer.send_binary(self.id, data),
                 Message::String(text) => s.peer.send_text(self.id, text),
             };
-            if let Err(e) = result {
-                return Err(Error::Other(e.to_string()));
-            }
-        }
+            result.map_err(|e| Error::Other(e.to_string()))
+        })
+        .await?;
         let _ = self.waker.unbounded_send(());
         Ok(())
     }
@@ -149,6 +190,7 @@ impl GuestDataChannel for DataChannel {
         loop {
             {
                 let mut s = self.shared.borrow_mut();
+                let dead = s.closed || s.failed;
                 match s.channel_mut(self.id) {
                     Some(channel) => {
                         if let Some(msg) = channel.inbox.pop_front() {
@@ -162,7 +204,9 @@ impl GuestDataChannel for DataChannel {
                             return Err(Error::Closed);
                         }
                     }
-                    None => return Err(Error::Closed),
+                    // Not yet tracked: still opening unless the connection died.
+                    None if dead => return Err(Error::Closed),
+                    None => {}
                 }
             }
             crate::wasi::clocks::monotonic_clock::wait_for(POLL_NANOS).await;
@@ -180,25 +224,18 @@ impl GuestDataChannel for DataChannel {
             for stream_message in batch {
                 let bytes = drain_stream(stream_message.data, stream_message.length as usize).await;
                 let is_text = matches!(stream_message.kind, MessageKind::String);
-                {
-                    let mut s = self.shared.borrow_mut();
-                    if s.channel_mut(self.id).map(|c| c.closed).unwrap_or(true) {
-                        return Err(SendViaStreamError {
-                            error: Error::Closed,
-                            sent,
-                        });
-                    }
-                    let result = if is_text {
-                        s.peer.send_text(self.id, &String::from_utf8_lossy(&bytes))
-                    } else {
-                        s.peer.send_binary(self.id, &bytes)
-                    };
-                    if let Err(e) = result {
-                        return Err(SendViaStreamError {
-                            error: Error::Other(e.to_string()),
-                            sent,
-                        });
-                    }
+                let result = self
+                    .when_open(|s| {
+                        let result = if is_text {
+                            s.peer.send_text(self.id, &String::from_utf8_lossy(&bytes))
+                        } else {
+                            s.peer.send_binary(self.id, &bytes)
+                        };
+                        result.map_err(|e| Error::Other(e.to_string()))
+                    })
+                    .await;
+                if let Err(error) = result {
+                    return Err(SendViaStreamError { error, sent });
                 }
                 let _ = self.waker.unbounded_send(());
                 sent += 1;
@@ -216,7 +253,7 @@ impl GuestDataChannel for DataChannel {
     fn receive_via_stream(&self) -> Result<wit_bindgen::StreamReader<StreamMessage>, Error> {
         {
             let mut s = self.shared.borrow_mut();
-            if s.channel_mut(self.id).map(|c| c.closed).unwrap_or(true) {
+            if matches!(channel_state(&mut s, self.id), ChannelState::Closed) {
                 return Err(Error::Closed);
             }
         }
@@ -544,13 +581,16 @@ async fn pump_receive(
         }
         let next = {
             let mut s = shared.borrow_mut();
+            let dead = s.closed || s.failed;
             match s.channel_mut(id) {
                 Some(channel) => match channel.inbox.pop_front() {
                     Some(msg) => Next::Message(msg),
                     None if channel.closed => Next::Done,
                     None => Next::Wait,
                 },
-                None => Next::Done,
+                // Not yet tracked: still opening unless the connection died.
+                None if dead => Next::Done,
+                None => Next::Wait,
             }
         };
 

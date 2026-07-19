@@ -198,18 +198,28 @@ async function runTest(newInstance, base, testId, roomSeq) {
  * @param {() => Promise<{ runner: { runTest: Function } }>} opts.newInstance
  *   factory producing a fresh guest instance
  * @param {string[]} [opts.only] run only these test ids (empty => all)
+ * @param {number} [opts.jobs] how many tests to run concurrently; each test's
+ *   peers use their own signaling room, so tests are independent
  * @param {(msg: string) => void} [opts.log] progress logger
  * @returns {Promise<Array<{ test_id: string, status: string, detail?: string }>>}
  */
-export async function runCorpus({ base, newInstance, only = [], log = () => {} }) {
+export async function runCorpus({ base, newInstance, only = [], jobs = 4, log = () => {} }) {
   const roomSeq = { n: 0 };
-  const results = [];
-  for (const testId of TESTS) {
-    if (only.length && !only.includes(testId)) continue;
-    log(`running ${testId} … `);
-    const result = await runTest(newInstance, base, testId, roomSeq);
-    log(`${result.status}\n`);
-    results.push(result);
-  }
+  const ids = TESTS.filter((testId) => !only.length || only.includes(testId));
+  const results = new Array(ids.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= ids.length) return;
+      const testId = ids[index];
+      const result = await runTest(newInstance, base, testId, roomSeq);
+      log(`${testId} … ${result.status}\n`);
+      results[index] = result;
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.max(1, jobs) }, () => worker()),
+  );
   return results;
 }

@@ -47,6 +47,9 @@ const { values } = parseArgs({
       default: join(REPO_ROOT, "target", "debug", "conformance-signalingd"),
     },
     only: { type: "string", multiple: true, default: [] },
+    // How many tests to run concurrently (each test's peers use their own
+    // signaling room, so tests are independent).
+    jobs: { type: "string", default: "4" },
   },
 });
 
@@ -188,7 +191,7 @@ async function spawnSignaling(bin) {
  * The corpus run performed inside the browser page. Serialized and evaluated via
  * `page.evaluate`; `base` is this adapter's same-origin static/proxy server.
  */
-async function runInPage({ base, only }) {
+async function runInPage({ base, only, jobs }) {
   // Unlock non-filtered host ICE candidates (see file header).
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   stream.getTracks().forEach((t) => t.stop());
@@ -220,6 +223,7 @@ async function runInPage({ base, only }) {
     base,
     newInstance,
     only,
+    jobs,
     log: (msg) => console.log(msg.trimEnd()),
   });
 }
@@ -263,7 +267,7 @@ async function main() {
     page.on("pageerror", (err) => console.error(`[browser error] ${err.stack ?? err.message}`));
     await page.goto(`${base}/`);
 
-    results = await page.evaluate(runInPage, { base, only: values.only });
+    results = await page.evaluate(runInPage, { base, only: values.only, jobs: Number(values.jobs) });
   } finally {
     await browser.close();
     server.close();

@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use clap::Parser;
+use futures::StreamExt as _;
 
 use conformance_adapter_wasip3::{
     fold_two, params_for, AdapterReport, PeerOutcome, RawResult, RawStatus, Wasip3Peer,
@@ -229,6 +230,13 @@ struct Cli {
     /// Run only these test ids (repeatable). When empty, run every test.
     #[arg(long = "only")]
     only: Vec<String>,
+
+    /// How many tests to run concurrently. Each test's peers are separate
+    /// `wasmtime run` processes with their own signaling room and ephemeral
+    /// ports, so tests are independent; the default keeps the number of
+    /// concurrent processes (two per test) modest.
+    #[arg(long, default_value_t = 4)]
+    jobs: usize,
 }
 
 #[tokio::main]
@@ -256,16 +264,27 @@ async fn main() -> Result<()> {
     eprintln!("signaling server ready at {base_url}");
 
     let room_seq = AtomicU64::new(0);
-    let mut results = Vec::with_capacity(TESTS.len());
-    for test_id in TESTS {
-        if !cli.only.is_empty() && !cli.only.iter().any(|t| t == test_id) {
-            continue;
+    // Tests are independent (fresh processes, a fresh room per attempt), so run
+    // them concurrently, bounded by `--jobs`. `buffered` preserves the registry
+    // order of the results.
+    let results: Vec<RawResult> = futures::stream::iter(
+        TESTS
+            .iter()
+            .filter(|test_id| cli.only.is_empty() || cli.only.iter().any(|t| &t == test_id)),
+    )
+    .map(|test_id| {
+        let peer = &peer;
+        let base_url = &base_url;
+        let room_seq = &room_seq;
+        async move {
+            let result = run_test(peer, base_url, test_id, room_seq).await;
+            eprintln!("{test_id} … {:?}", result.status);
+            result
         }
-        eprint!("running {test_id} … ");
-        let result = run_test(&peer, &base_url, test_id, &room_seq).await;
-        eprintln!("{:?}", result.status);
-        results.push(result);
-    }
+    })
+    .buffered(cli.jobs.max(1))
+    .collect()
+    .await;
 
     server.shutdown().await;
 

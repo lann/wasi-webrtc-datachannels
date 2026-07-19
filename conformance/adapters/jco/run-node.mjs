@@ -39,6 +39,9 @@ const { values } = parseArgs({
       default: join(REPO_ROOT, "target", "debug", "conformance-signalingd"),
     },
     only: { type: "string", multiple: true, default: [] },
+    // How many tests to run concurrently (each test's peers use their own
+    // signaling room, so tests are independent).
+    jobs: { type: "string", default: "4" },
     // Single-instance interop mode: run exactly one guest instance for one
     // `--test`/`--role`/`--room` against an already-running `--server`, printing
     // the raw `test-result` (`{ "tag": ... }`) as JSON to stdout. Used by the
@@ -150,6 +153,7 @@ async function main() {
       base,
       newInstance,
       only: values.only,
+      jobs: Number(values.jobs),
       log: (msg) => process.stderr.write(msg),
     });
 
