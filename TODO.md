@@ -219,12 +219,35 @@ a dev-dependency by the test and by the demo binary).
   sans-I/O timing issue; `examples/webrtc-consumer` retries a bounded number of
   fresh attempts to keep the integration test reliable. Root-cause and fix in the
   fork (or its driving contract) to make a single attempt deterministic.
-- Zero-length messages arrive corrupted: the `rtc` receive path
-  (`rtc/src/peer_connection/handler/datachannel.rs`) keeps the one-zero-byte
-  SCTP placeholder payload for the `BinaryEmpty`/`StringEmpty` PPIDs instead of
-  mapping it back to an empty message, so a received empty message surfaces as a
-  single zero byte. Upstream `rtc` bug; `zero-length-message` is expected-fail
-  in `conformance/manifests/wasip3-guest.toml` (and in the wasmtime interop-pair
+- Zero-length messages arrive corrupted: a received empty message surfaces as a
+  single `0x00` byte. Upstream `rtc` bug (present in `0.20.0-rc.3`), receive
+  side only — the send side is correct. Detail for an upstream fix:
+  - RFC 8831 §6.6: SCTP cannot carry empty user messages, so an empty data
+    channel message is sent as a **single zero byte** with PPID
+    `WebRTC String Empty` (56) or `WebRTC Binary Empty` (57), and "the receiver
+    MUST ignore the SCTP user message and process it as an empty message".
+  - The `rtc-datachannel` **send** path implements this correctly:
+    `DataChannel::get_data_channel_message`
+    (`rtc-datachannel/src/data_channel/mod.rs`, with the RFC quoted in a
+    comment) maps an empty payload to `PayloadProtocolIdentifier::BinaryEmpty` /
+    `StringEmpty` and substitutes the one-zero-byte placeholder payload.
+  - No layer ever inverts that mapping on **receive**:
+    `DataChannel::handle_read` / `poll_read` in the same file queue the
+    `DataChannelMessage` with its placeholder payload untouched, and
+    `DataChannelHandler::handle_read` in
+    `rtc/src/peer_connection/handler/datachannel.rs` builds the user-facing
+    `RTCDataChannelMessage` from it — it even inspects the Empty PPIDs to
+    compute `is_string` (`ppi == PayloadProtocolIdentifier::String ||
+    ppi == PayloadProtocolIdentifier::StringEmpty`) but still forwards
+    `data: data_channel_message.payload`, i.e. the `[0x00]` placeholder.
+  - Fix: when `ppi` is `BinaryEmpty` or `StringEmpty`, replace the payload with
+    an empty buffer before surfacing the message (either in
+    `rtc-datachannel`'s `handle_read`, symmetric with
+    `get_data_channel_message`, or in `rtc`'s `DataChannelHandler` where
+    `is_string` is already derived from the PPID).
+
+  `zero-length-message` is expected-fail in
+  `conformance/manifests/wasip3-guest.toml` (and in the wasmtime interop-pair
   manifests, where the wasmtime peer has the analogous B6 receive bug).
 - The `wasmtime`<->`wasip3-guest` interop pair stalls deterministically (every
   test, every attempt): packet capture shows the full ICE/DTLS/SCTP handshake

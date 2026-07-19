@@ -46,9 +46,19 @@ impl wasip3::exports::cli::run::Guest for Component {
             TestResult::Skipped(reason) => serde_json::json!({ "tag": "skipped", "val": reason }),
         };
         println!("{json}");
+        // Linger briefly before returning: the provider's `close` is a sync
+        // export, so its detached pump flushes the final sends (the barrier
+        // sentinel, the SCTP/DTLS close handshake) only while this task
+        // yields. Returning immediately would end the process and cut the
+        // pump off mid-teardown, stalling the remote peer.
+        wasip3::clocks::monotonic_clock::wait_for(CLOSE_GRACE_NANOS).await;
         Ok(())
     }
 }
+
+/// How long `run` yields after the test completes so the provider's pump can
+/// finish the connection teardown before the process exits.
+const CLOSE_GRACE_NANOS: u64 = 500_000_000;
 
 wasip3::cli::command::export!(Component);
 
