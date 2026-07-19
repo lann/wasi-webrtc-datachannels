@@ -37,7 +37,11 @@ pub struct Row {
 impl Row {
     /// The cell-map key for a test in this row.
     fn key(&self, test: &str) -> (String, String, String) {
-        (self.target.clone(), self.environment.clone(), test.to_string())
+        (
+            self.target.clone(),
+            self.environment.clone(),
+            test.to_string(),
+        )
     }
 }
 
@@ -96,12 +100,8 @@ impl Matrix {
                     environment,
                 };
                 for entry in &registry.test {
-                    let cell = classify_one(
-                        manifest,
-                        &entry.id,
-                        &entry.tags,
-                        raw.get(entry.id.as_str()),
-                    );
+                    let cell =
+                        classify_one(manifest, &entry.id, &entry.tags, raw.get(entry.id.as_str()));
                     cells.insert(row.key(&entry.id), cell);
                 }
                 rows.push(row);

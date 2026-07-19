@@ -398,6 +398,25 @@ the reviewer directs otherwise.
 - **Done when:** `lan`, `stun-srflx`, `turn-relay` green in CI Job 2 for
   wasmtime + jco-node (wasip3-guest where its manifest allows).
 
+  **Status (partial — reviewer sign-off needed):** the lab is built and wired —
+  the `scenarios/` scripts, the host per-peer-connection ICE config, the
+  `conformance-peer` / `conformance-ice` orchestrator, the runner's
+  `(target, environment)` rows + environment matrix column, `just
+  conformance-ice`, CI Job 2 (`ice-lab`), and the `setup.sh` / README docs. Two
+  deviations from the done-when, left for the reviewer to confirm:
+  - **`stun-srflx` is provisioned but not asserted:** without NAT a peer's
+    server-reflexive address equals its host address, so blocking the direct
+    path also blocks srflx — a meaningful srflx run needs the Phase 6 NAT
+    topology. CI Job 2 asserts only `lan` and `turn-relay`.
+  - **wasmtime only:** the lab orchestrator runs the wasmtime host per peer.
+    jco-node in the lab is deferred (it needs a per-peer Node runner placed in a
+    namespace).
+
+  The data path (real veth / TURN relay) is validated on CI Job 2 runners; it
+  cannot be exercised where non-loopback traffic is blocked, so everything else
+  is verified statically (Rust build/clippy/fmt/unit tests, shellcheck, and
+  provisioning up/down).
+
 ### Phase 6 — NAT matrix
 - nftables NAT simulations (port-restricted, symmetric); assertions that
   srflx connects where expected and relay fallback engages where required;

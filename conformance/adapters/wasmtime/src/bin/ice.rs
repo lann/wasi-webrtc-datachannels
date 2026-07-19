@@ -109,7 +109,9 @@ struct Cli {
     #[arg(long, default_value = "10.79.3.2")]
     server_addr: String,
 
-    /// Signaling HTTP port and TURN/STUN port in the signaling namespace.
+    /// Signaling HTTP port and TURN/STUN port in the signaling namespace. Each
+    /// test uses its own signaling server on a distinct port (base + index) so
+    /// tests stay independent and can run concurrently.
     #[arg(long, default_value_t = 8080)]
     signaling_port: u16,
     #[arg(long, default_value_t = 3478)]
@@ -146,10 +148,6 @@ impl Cli {
             turn_pass: self.turn_pass.clone(),
         }
     }
-
-    fn signaling_url(&self) -> String {
-        format!("http://{}:{}", self.server_addr, self.signaling_port)
-    }
 }
 
 /// A live child process wrapped so it is killed when dropped (used for the
@@ -182,24 +180,15 @@ async fn main() -> Result<()> {
         enabled: cli.provision,
     };
 
-    // Start the signaling server inside the signaling namespace, reachable from
-    // both peers through the router. It is killed when `_signaling` drops.
-    let _signaling = start_signaling(&cli).context("starting signaling server")?;
-    // Give the server a moment to bind before the first peers connect; peer-side
-    // long-poll retries and the per-test room churn cover any residual race.
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    let result = run_corpus(&cli, scenario).await;
-
-    // Explicit teardown before returning so its logs precede our exit; the guard
-    // is a fallback for the error paths above.
-    result
+    // Each test starts its own short-lived signaling server (in the signaling
+    // namespace, on its own port) around its handshake, so a server only ever
+    // brokers one room — matching the mailbox's per-room lifecycle.
+    run_corpus(&cli, scenario).await
 }
 
 /// Run the whole corpus for the scenario and write the result document.
 async fn run_corpus(cli: &Cli, scenario: Scenario) -> Result<()> {
     let lab = cli.lab();
-    let signaling_url = cli.signaling_url();
     let room_seq = AtomicU64::new(0);
 
     eprintln!(
@@ -218,10 +207,9 @@ async fn run_corpus(cli: &Cli, scenario: Scenario) -> Result<()> {
     .map(|test_id| {
         let cli = &cli;
         let lab = &lab;
-        let signaling_url = &signaling_url;
         let room_seq = &room_seq;
         async move {
-            let result = run_ice_test(cli, scenario, lab, signaling_url, test_id, room_seq).await;
+            let result = run_ice_test(cli, scenario, lab, test_id, room_seq).await;
             eprintln!("{test_id} … {:?}", result.status);
             result
         }
@@ -247,11 +235,14 @@ async fn run_corpus(cli: &Cli, scenario: Scenario) -> Result<()> {
 }
 
 /// Run one test to a raw result, retrying flaky handshakes with fresh rooms.
+///
+/// Each attempt gets its own signaling server (in the signaling namespace, on
+/// its own port) brokering a single room, so a server never has to survive more
+/// than one handshake and concurrent tests never share one.
 async fn run_ice_test(
     cli: &Cli,
     scenario: Scenario,
     lab: &LabConfig,
-    signaling_url: &str,
     test_id: &str,
     room_seq: &AtomicU64,
 ) -> RawResult {
@@ -259,18 +250,29 @@ async fn run_ice_test(
     let mut last_detail = None;
 
     for _ in 0..MAX_ATTEMPTS {
-        let room = format!(
-            "ice-{}-{}-{}",
-            scenario.as_str(),
-            test_id,
-            room_seq.fetch_add(1, Ordering::SeqCst)
-        );
+        let n = room_seq.fetch_add(1, Ordering::SeqCst);
+        let room = format!("ice-{}-{}-{}", scenario.as_str(), test_id, n);
+        let port = cli.signaling_port.wrapping_add(n as u16);
+        let signaling_url = format!("http://{}:{}", cli.server_addr, port);
+
+        // Bring up this attempt's signaling server; killed when `_signaling`
+        // drops at the end of the iteration.
+        let _signaling = match start_signaling(cli, port) {
+            Ok(guard) => guard,
+            Err(err) => {
+                last_detail = Some(format!("signaling server error: {err:#}"));
+                break;
+            }
+        };
+        // Let it bind before the peers connect; peer-side long-poll retries cover
+        // any residual race.
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         let offerer = run_peer(
             cli,
             scenario,
             lab,
-            signaling_url,
+            &signaling_url,
             test_id,
             &room,
             Role::Offerer,
@@ -281,7 +283,7 @@ async fn run_ice_test(
             cli,
             scenario,
             lab,
-            signaling_url,
+            &signaling_url,
             test_id,
             &room,
             Role::Answerer,
@@ -432,13 +434,13 @@ fn parse_result(value: &Value) -> Result<TestResult> {
     })
 }
 
-/// Start the signaling server inside the signaling namespace.
-fn start_signaling(cli: &Cli) -> Result<Guard> {
+/// Start a signaling server on `port` inside the signaling namespace.
+fn start_signaling(cli: &Cli, port: u16) -> Result<Guard> {
     let child = std::process::Command::new("ip")
         .args(["netns", "exec", &cli.signaling_ns])
         .arg(&cli.signaling_bin)
         .args(["--host", &cli.server_addr])
-        .args(["--port", &cli.signaling_port.to_string()])
+        .args(["--port", &port.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
