@@ -219,9 +219,16 @@ a dev-dependency by the test and by the demo binary).
   sans-I/O timing issue; `examples/webrtc-consumer` retries a bounded number of
   fresh attempts to keep the integration test reliable. Root-cause and fix in the
   fork (or its driving contract) to make a single attempt deterministic.
-- Zero-length messages arrive corrupted: a received empty message surfaces as a
-  single `0x00` byte. Upstream `rtc` bug (present in `0.20.0-rc.3`), receive
-  side only — the send side is correct. Detail for an upstream fix:
+- ~~Zero-length messages arrive corrupted: a received empty message surfaces as
+  a single `0x00` byte.~~ **Fixed** on the `lann/rtc` fork the workspace now
+  tracks (`Cargo.toml`, `rtc = { git = "https://github.com/lann/rtc.git", …
+  }`): `rtc`'s `DataChannelHandler::handle_read` now maps the `BinaryEmpty` /
+  `StringEmpty` PPIDs back to an empty payload before surfacing the message.
+  `zero-length-message` passes on `wasip3-guest` and is no longer an
+  expected-fail there. Submitted upstream as
+  [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131); drop the fork
+  and return to a published `rtc` once that merges and ships (tracked with the
+  release-candidate bullet below). Original analysis, kept for the upstream PR:
   - RFC 8831 §6.6: SCTP cannot carry empty user messages, so an empty data
     channel message is sent as a **single zero byte** with PPID
     `WebRTC String Empty` (56) or `WebRTC Binary Empty` (57), and "the receiver
@@ -240,15 +247,14 @@ a dev-dependency by the test and by the demo binary).
     compute `is_string` (`ppi == PayloadProtocolIdentifier::String ||
     ppi == PayloadProtocolIdentifier::StringEmpty`) but still forwards
     `data: data_channel_message.payload`, i.e. the `[0x00]` placeholder.
-  - Fix: when `ppi` is `BinaryEmpty` or `StringEmpty`, replace the payload with
-    an empty buffer before surfacing the message (either in
-    `rtc-datachannel`'s `handle_read`, symmetric with
-    `get_data_channel_message`, or in `rtc`'s `DataChannelHandler` where
+  - Fix (implemented on the fork, upstream PR
+    [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)): when `ppi`
+    is `BinaryEmpty` or `StringEmpty`, replace the payload with an empty buffer
+    before surfacing the message (done in `rtc`'s `DataChannelHandler` where
     `is_string` is already derived from the PPID).
 
-  `zero-length-message` is expected-fail in
-  `conformance/manifests/wasip3-guest.toml` (and in the wasmtime interop-pair
-  manifests, where the wasmtime peer has the analogous B6 receive bug).
+  `zero-length-message` still fails in the wasmtime interop-pair manifests,
+  where the wasmtime peer has the analogous B6 receive bug.
 - The `wasmtime`<->`wasip3-guest` interop pair stalls deterministically (every
   test, every attempt): packet capture shows the full ICE/DTLS/SCTP handshake
   and both 16-message payload bursts complete within ~120 ms, but the wasip3
@@ -264,10 +270,14 @@ a dev-dependency by the test and by the demo binary).
   emit) the SCTP/DTLS close before the driver exits — e.g. drain
   `poll_transmit` to quiescence after `close()` and only then return from
   `wasi:cli/run`. Until then the pair cannot be enabled in CI.
-- The `rtc` dependency is pinned to a `0.20` release candidate
-  (`Cargo.toml`, `rtc = "0.20.0-rc.3"`). Published on crates.io, but a
-  pre-release on the critical path — track moving to a stable `0.20` once it
-  ships.
+- The `rtc` dependency is pinned to the `lann/rtc` fork's `master`
+  (`Cargo.toml`, `rtc = { git = "https://github.com/lann/rtc.git", rev = … }`),
+  which carries the empty-message receive fix (upstream PR
+  [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)) on top of the
+  published `0.20.0-rc.3` release candidate. Two things on the critical path to
+  unwind: a git fork instead of a crates.io release, and a pre-release base.
+  Return to a published, stable `0.20` once PR #131 merges upstream and a release
+  including it ships.
 
 ## F. Examples
 

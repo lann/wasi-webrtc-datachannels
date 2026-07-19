@@ -89,7 +89,16 @@ impl Wasip3Peer {
         let output = tokio::process::Command::new(&self.wasmtime_bin)
             .arg("run")
             .args(["-W", "component-model-async=y"])
-            .args(["-S", "cli", "-S", "p3", "-S", "http", "-S", "inherit-network"])
+            .args([
+                "-S",
+                "cli",
+                "-S",
+                "p3",
+                "-S",
+                "http",
+                "-S",
+                "inherit-network",
+            ])
             .arg(&self.component)
             .args(["--test", test_id])
             .args(["--role", role])

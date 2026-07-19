@@ -8,11 +8,11 @@
 # cross-runtime WebRTC data channel, so a green row proves the two runtimes
 # interoperate rather than merely each passing against itself.
 #
-# `zero-length-message` is an expected-fail: both peers have an empty-message
-# receive bug — the wasmtime peer runs on webrtc-rs, whose read_loop treats a
-# zero-byte read as EOF (TODO.md item B6), and the wasip3 peer runs on `rtc`,
-# whose receive path keeps the one-zero-byte SCTP placeholder payload for the
-# BinaryEmpty/StringEmpty PPIDs (TODO.md item E3).
+# `zero-length-message` is an expected-fail: the wasmtime peer runs on
+# webrtc-rs, whose read_loop treats a zero-byte read as EOF and closes the
+# channel, so it cannot receive an empty message (TODO.md item B6). The wasip3
+# peer's `rtc` receive bug has been fixed on the `lann/rtc` fork (upstream PR
+# webrtc-rs/rtc#131), so only the wasmtime side now diverges.
 
 # NOTE: this pair is wired into `conformance-interop` but disabled by default
 # (the `just conformance-interop` recipe passes --pair for the jco pairs only):
@@ -25,5 +25,5 @@ id = "wasip3-guest-x-wasmtime"
 
 [[expected-fail]]
 test = "zero-length-message"
-reason = "Neither peer can receive an empty message: the wasmtime peer's webrtc-rs read_loop treats a zero-byte read as EOF and closes the channel, and the wasip3 peer's rtc receive path surfaces the one-zero-byte SCTP placeholder payload instead of an empty message."
-tracking = "TODO.md items B6 and E3"
+reason = "The wasmtime peer cannot receive an empty message: its webrtc-rs read_loop treats a zero-byte read as EOF and closes the channel. The wasip3 peer's rtc receive bug is fixed on the lann/rtc fork (upstream PR webrtc-rs/rtc#131)."
+tracking = "TODO.md item B6"

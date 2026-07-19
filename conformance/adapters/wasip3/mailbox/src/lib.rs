@@ -104,8 +104,8 @@ async fn round_trip(
             .map_err(mailbox_error)?,
     };
 
-    let wasi_request =
-        wasip3::http_compat::http_into_wasi_request(request).map_err(|e| mailbox_error(format!("{e:?}")))?;
+    let wasi_request = wasip3::http_compat::http_into_wasi_request(request)
+        .map_err(|e| mailbox_error(format!("{e:?}")))?;
     let wasi_response = wasip3::http::client::send(wasi_request)
         .await
         .map_err(|e| mailbox_error(format!("{e:?}")))?;
@@ -143,7 +143,10 @@ impl GuestSession for MailboxSession {
         if outcome.status.is_success() {
             Ok(())
         } else {
-            Err(mailbox_error(format!("publish returned {}", outcome.status)))
+            Err(mailbox_error(format!(
+                "publish returned {}",
+                outcome.status
+            )))
         }
     }
 
