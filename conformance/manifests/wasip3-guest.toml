@@ -1,0 +1,24 @@
+# Capability manifest for the `wasip3-guest` target (the whole WebRTC stack in
+# wasm: the conformance guest composed via `wac plug` with the `wasip3-impl`
+# provider — the sans-I/O `rtc` stack over WASIp3 `wasi:sockets` — an in-guest
+# `wasi:http` mailbox client, and a CLI driver; adapter:
+# conformance/adapters/wasip3, run under `wasmtime run`).
+#
+# Partial-surface notes (see TODO.md item E3):
+# - The provider supplies its own host candidate from the socket it binds —
+#   `ifaces()` is `Unsupported` on wasm, so there is no OS interface
+#   enumeration or mDNS gathering.
+# - `peer-connection` binds on IPv4 loopback only, which is exactly what the
+#   loopback scenario needs; non-loopback scenarios are future work.
+#
+# Tests the conformance guest itself reports `skipped` (the streaming forms and
+# the remaining error-taxonomy probes) need no entries here: a raw `skip` is
+# classified `skip-unsupported` without manifest involvement.
+
+[target]
+id = "wasip3-guest"
+
+[[expected-fail]]
+test = "zero-length-message"
+reason = "The rtc receive path keeps the one-zero-byte SCTP placeholder payload for the BinaryEmpty/StringEmpty PPIDs instead of mapping it back to an empty message, so a received empty message arrives as a single zero byte."
+tracking = "TODO.md item E3"

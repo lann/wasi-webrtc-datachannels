@@ -216,6 +216,13 @@ a dev-dependency by the test and by the demo binary).
   sans-I/O timing issue; `examples/webrtc-consumer` retries a bounded number of
   fresh attempts to keep the integration test reliable. Root-cause and fix in the
   fork (or its driving contract) to make a single attempt deterministic.
+- Zero-length messages arrive corrupted: the `rtc` receive path
+  (`rtc/src/peer_connection/handler/datachannel.rs`) keeps the one-zero-byte
+  SCTP placeholder payload for the `BinaryEmpty`/`StringEmpty` PPIDs instead of
+  mapping it back to an empty message, so a received empty message surfaces as a
+  single zero byte. Upstream `rtc` bug; `zero-length-message` is expected-fail
+  in `conformance/manifests/wasip3-guest.toml` (and in the wasmtime interop-pair
+  manifests, where the wasmtime peer has the analogous B6 receive bug).
 - The `rtc` dependency is pinned to a `0.20` release candidate
   (`Cargo.toml`, `rtc = "0.20.0-rc.3"`). Published on crates.io, but a
   pre-release on the critical path — track moving to a stable `0.20` once it

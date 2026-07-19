@@ -1,17 +1,21 @@
 //! Cross-runtime interop orchestrator for the conformance suite.
 //!
-//! It runs the first interop pair — `wasmtime` <-> `jco-node` — in both orders.
-//! One peer is a native wasmtime guest instance (provisioned by
-//! [`conformance_adapter_wasmtime`]) and the other is a jco-node guest instance
-//! driven out-of-process via `conformance/adapters/jco/run-node.mjs --interop`.
-//! Both peers share one in-process `conformance-signalingd` room and connect over
-//! a real WebRTC data channel, so a green result proves the two runtimes are
-//! genuinely interoperable — not merely that each passes against itself.
+//! It runs the interop pairs — `wasmtime` <-> `jco-node` and `wasmtime` <->
+//! `wasip3-guest` — each in both orders. One peer is a native wasmtime guest
+//! instance (provisioned by [`conformance_adapter_wasmtime`]) and the other is
+//! driven out-of-process: the jco-node peer via
+//! `conformance/adapters/jco/run-node.mjs --interop`, the wasip3-guest peer via
+//! `wasmtime run` over the fully composed component
+//! ([`conformance_adapter_wasip3::Wasip3Peer`]). Both peers of a pair share one
+//! in-process `conformance-signalingd` room and connect over a real WebRTC data
+//! channel, so a green result proves the two runtimes are genuinely
+//! interoperable — not merely that each passes against itself.
 //!
 //! It writes one adapter result document per direction
-//! (`wasmtime-x-jco-node.json`, `jco-node-x-wasmtime.json`) that the conformance
-//! runner classifies against the matching manifests, exactly like a single-target
-//! adapter.
+//! (`wasmtime-x-jco-node.json`, `jco-node-x-wasmtime.json`,
+//! `wasmtime-x-wasip3-guest.json`, `wasip3-guest-x-wasmtime.json`) that the
+//! conformance runner classifies against the matching manifests, exactly like a
+//! single-target adapter.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -24,6 +28,7 @@ use serde_json::Value;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
+use conformance_adapter_wasip3::{PeerOutcome, Wasip3Peer};
 use conformance_adapter_wasmtime::{
     build_engine, fold_two, make_config, params_for, run_instance, AdapterReport, RawResult,
     RawStatus, Role, TestResult,
@@ -50,14 +55,25 @@ const INTEROP_TESTS: &[&str] = &[
 const MAX_ATTEMPTS: u32 = 3;
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// One direction of the pair: which role the wasmtime peer plays (the jco-node
-/// peer plays the other), and the target id the result document records.
+/// One direction of a pair: which runtime the non-wasmtime peer runs on, which
+/// role the wasmtime peer plays (the other peer plays the opposite), and the
+/// target id the result document records.
 struct Direction {
     target: &'static str,
+    peer: PeerKind,
     wasmtime_role: Role,
 }
 
-/// The jco-node peer's role, given the wasmtime peer's role.
+/// The runtime driving the non-wasmtime peer of a pair.
+#[derive(Clone, Copy)]
+enum PeerKind {
+    /// The jco-node host, via `run-node.mjs --interop`.
+    JcoNode,
+    /// The composed wasip3-guest component, via `wasmtime run`.
+    Wasip3,
+}
+
+/// The non-wasmtime peer's role, given the wasmtime peer's role.
 fn peer_role(wasmtime_role: Role) -> &'static str {
     match wasmtime_role {
         Role::Offerer => "answerer",
@@ -126,12 +142,43 @@ fn parse_result(value: &Value) -> Result<TestResult> {
     })
 }
 
+/// Run the non-wasmtime peer for one test/role/room, parsing its single-line
+/// JSON `test-result` from stdout.
+#[allow(clippy::too_many_arguments)]
+async fn run_peer(
+    cli: &Cli,
+    kind: PeerKind,
+    base_url: &str,
+    test_id: &str,
+    room: &str,
+    role: &str,
+    count: u32,
+    size: u32,
+) -> Result<TestResult> {
+    match kind {
+        PeerKind::JcoNode => run_jco_peer(cli, base_url, test_id, room, role, count, size).await,
+        PeerKind::Wasip3 => {
+            let peer = Wasip3Peer {
+                wasmtime_bin: cli.wasmtime_bin.clone(),
+                component: cli.wasip3_component.clone(),
+            };
+            Ok(
+                match peer.run(base_url, test_id, room, role, count, size).await? {
+                    PeerOutcome::Pass => TestResult::Pass,
+                    PeerOutcome::Fail(detail) => TestResult::Fail(detail),
+                    PeerOutcome::Skipped(reason) => TestResult::Skipped(reason),
+                },
+            )
+        }
+    }
+}
+
 /// Fold results into the raw offerer/answerer order the [`fold_two`] helper
 /// expects, then classify: any fail loses, else any skip, else pass.
-fn fold_pair(wasmtime_role: Role, wasmtime: TestResult, jco: TestResult) -> TestResult {
+fn fold_pair(wasmtime_role: Role, wasmtime: TestResult, peer: TestResult) -> TestResult {
     match wasmtime_role {
-        Role::Offerer | Role::Both => fold_two(wasmtime, jco),
-        Role::Answerer => fold_two(jco, wasmtime),
+        Role::Offerer | Role::Both => fold_two(wasmtime, peer),
+        Role::Answerer => fold_two(peer, wasmtime),
     }
 }
 
@@ -147,7 +194,7 @@ async fn run_interop_test(
     room_seq: &AtomicU64,
 ) -> RawResult {
     let (count, size) = params_for(test_id);
-    let jco_role = peer_role(direction.wasmtime_role);
+    let peer_role = peer_role(direction.wasmtime_role);
     let mut last_detail = None;
 
     for _ in 0..MAX_ATTEMPTS {
@@ -164,10 +211,19 @@ async fn run_interop_test(
             test_id,
             make_config(direction.wasmtime_role, base_url, &room, count, size),
         );
-        let jco_peer = run_jco_peer(cli, base_url, test_id, &room, jco_role, count, size);
+        let other_peer = run_peer(
+            cli,
+            direction.peer,
+            base_url,
+            test_id,
+            &room,
+            peer_role,
+            count,
+            size,
+        );
 
-        let attempt = async { tokio::join!(wasmtime_peer, jco_peer) };
-        let (wasmtime_result, jco_result) =
+        let attempt = async { tokio::join!(wasmtime_peer, other_peer) };
+        let (wasmtime_result, peer_result) =
             match tokio::time::timeout(ATTEMPT_TIMEOUT, attempt).await {
                 Ok(pair) => pair,
                 Err(_) => {
@@ -183,15 +239,15 @@ async fn run_interop_test(
                 break;
             }
         };
-        let jco_result = match jco_result {
+        let peer_result = match peer_result {
             Ok(result) => result,
             Err(err) => {
-                last_detail = Some(format!("jco-node peer error: {err:#}"));
+                last_detail = Some(format!("interop peer error: {err:#}"));
                 break;
             }
         };
 
-        match fold_pair(direction.wasmtime_role, wasmtime_result, jco_result) {
+        match fold_pair(direction.wasmtime_role, wasmtime_result, peer_result) {
             TestResult::Pass => {
                 return RawResult {
                     test_id: test_id.to_string(),
@@ -207,7 +263,12 @@ async fn run_interop_test(
                 }
             }
             TestResult::Fail(detail) => {
-                let flaky = detail.contains("timed-out") || detail.contains("wait-connected");
+                // Handshake stalls are retried with a fresh room; the wasip3
+                // peer can additionally lose the data-channel open after
+                // connecting (TODO.md item E3).
+                let flaky = detail.contains("timed-out")
+                    || detail.contains("wait-connected")
+                    || detail.contains("no incoming data channel");
                 last_detail = Some(detail);
                 if !flaky {
                     break;
@@ -250,6 +311,26 @@ struct Cli {
     /// Path to the jco-node adapter's `run-node.mjs`.
     #[arg(long, default_value = "conformance/adapters/jco/run-node.mjs")]
     jco_run_node: PathBuf,
+
+    /// The `wasmtime` binary that drives the wasip3-guest peer (v46+).
+    #[arg(long, env = "CONFORMANCE_WASMTIME", default_value = "wasmtime")]
+    wasmtime_bin: String,
+
+    /// Path to the fully composed wasip3-guest component
+    /// (see `just build-conformance-wasip3`).
+    #[arg(
+        long,
+        default_value = "conformance/adapters/wasip3/build/conformance-wasip3.composed.wasm"
+    )]
+    wasip3_component: PathBuf,
+
+    /// Run only these pair target ids (repeatable). When empty, run every pair.
+    #[arg(long = "pair")]
+    pairs: Vec<String>,
+
+    /// Run only these test ids (repeatable). When empty, run every test.
+    #[arg(long = "only")]
+    only: Vec<String>,
 }
 
 #[tokio::main]
@@ -273,10 +354,22 @@ async fn main() -> Result<()> {
     let directions = [
         Direction {
             target: "wasmtime-x-jco-node",
+            peer: PeerKind::JcoNode,
             wasmtime_role: Role::Offerer,
         },
         Direction {
             target: "jco-node-x-wasmtime",
+            peer: PeerKind::JcoNode,
+            wasmtime_role: Role::Answerer,
+        },
+        Direction {
+            target: "wasmtime-x-wasip3-guest",
+            peer: PeerKind::Wasip3,
+            wasmtime_role: Role::Offerer,
+        },
+        Direction {
+            target: "wasip3-guest-x-wasmtime",
+            peer: PeerKind::Wasip3,
             wasmtime_role: Role::Answerer,
         },
     ];
@@ -286,9 +379,15 @@ async fn main() -> Result<()> {
 
     let room_seq = AtomicU64::new(0);
     for direction in &directions {
+        if !cli.pairs.is_empty() && !cli.pairs.iter().any(|p| p == direction.target) {
+            continue;
+        }
         eprintln!("== interop {} ==", direction.target);
         let mut results = Vec::with_capacity(INTEROP_TESTS.len());
         for test_id in INTEROP_TESTS {
+            if !cli.only.is_empty() && !cli.only.iter().any(|t| t == test_id) {
+                continue;
+            }
             eprint!("running {test_id} … ");
             let result = run_interop_test(
                 &cli, &engine, &component, &base_url, direction, test_id, &room_seq,

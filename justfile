@@ -15,12 +15,14 @@ fmt-check:
 
 # Run clippy across all crates.
 clippy:
-    cargo clippy --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest -- -D warnings
+    cargo clippy --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest --exclude conformance-wasip3-mailbox --exclude conformance-wasip3-driver -- -D warnings
     cargo clippy -p echo-demo --target wasm32-unknown-unknown -- -D warnings
     cargo clippy -p conformance-guest --target wasm32-unknown-unknown -- -D warnings
     cargo clippy -p cli-signaling --target wasm32-wasip2 -- -D warnings
     cargo clippy -p wasip3-webrtc-datachannels --target wasm32-wasip2 -- -D warnings
     cargo clippy -p webrtc-consumer --target wasm32-wasip2 -- -D warnings
+    cargo clippy -p conformance-wasip3-mailbox --target wasm32-wasip2 -- -D warnings
+    cargo clippy -p conformance-wasip3-driver --target wasm32-wasip2 -- -D warnings
     cargo clippy --manifest-path wasmtime-impl/tests/manual-signaling-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
 # Validate WIT packages.
@@ -35,8 +37,8 @@ validate-wit:
 # Run the Rust / Wasmtime tests (includes the manual-signaling integration test).
 # nextest runs faster but does not execute doctests, so run those separately.
 test:
-    cargo nextest run --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest
-    cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest
+    cargo nextest run --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest --exclude conformance-wasip3-mailbox --exclude conformance-wasip3-driver
+    cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest --exclude conformance-wasip3-mailbox --exclude conformance-wasip3-driver
 
 # Run the conformance suite over the currently enabled targets (see
 # conformance/PLAN.md). Builds the shared conformance guest component, runs each
@@ -48,9 +50,11 @@ test:
 #
 # Enabled targets: wasmtime (native webrtc-rs), jco-node and jco-browser (the
 # browser-first host transpiled by jco, run under Node and headless Chromium),
-# plus the wasmtime<->jco-node interop pair. The jco targets need a JSPI-capable
-# Node (24+; see conformance-jco-node) and, for the browser target, a Chrome
-# 137+ binary (auto-detected, or set CHROME_PATH).
+# wasip3-guest (the whole WebRTC stack in wasm: the guest composed with the
+# wasip3-impl provider, run under `wasmtime run`), plus the interop pairs
+# wasmtime<->jco-node and wasmtime<->wasip3-guest (both orders each). The jco
+# targets need a JSPI-capable Node (24+; see conformance-jco-node) and, for the
+# browser target, a Chrome 137+ binary (auto-detected, or set CHROME_PATH).
 conformance: build-conformance-guest transpile-conformance-guest
     cargo build -p conformance-signalingd
     cargo run --release -p conformance-adapter-wasmtime --bin conformance-adapter-wasmtime -- \
@@ -58,6 +62,7 @@ conformance: build-conformance-guest transpile-conformance-guest
         --out conformance/results
     just conformance-jco-node
     just conformance-jco-browser
+    just conformance-wasip3
     just conformance-interop
     cargo run -p conformance-runner -- \
         --tests conformance/tests.toml \
@@ -80,6 +85,35 @@ build-conformance-guest:
 transpile-conformance-guest: build-conformance-guest
     cd conformance/adapters/jco && npm run transpile
 
+# Build the fully composed wasip3-guest conformance component into
+# conformance/adapters/wasip3/build/conformance-wasip3.composed.wasm: the shared
+# conformance guest is composed (`wac plug`) with the wasip3-impl provider
+# (exports `connections` over wasi:sockets UDP), the in-guest wasi:http mailbox
+# client, and the CLI driver that exports an async `wasi:cli/run` and reports
+# the single-test result on stdout. Rebuilds the guest component first.
+build-conformance-wasip3: build-conformance-guest
+    cargo build --release -p wasip3-webrtc-datachannels --target wasm32-wasip2
+    cargo build --release -p conformance-wasip3-mailbox --target wasm32-wasip2
+    cargo build --release -p conformance-wasip3-driver --target wasm32-wasip2
+    mkdir -p conformance/adapters/wasip3/build
+    wac plug conformance/guest/build/conformance-guest.component.wasm \
+        --plug target/wasm32-wasip2/release/wasip3_webrtc_datachannels.wasm \
+        --plug target/wasm32-wasip2/release/conformance_wasip3_mailbox.wasm \
+        -o conformance/adapters/wasip3/build/conformance-wasip3.guest.wasm
+    wac plug target/wasm32-wasip2/release/conformance_wasip3_driver.wasm \
+        --plug conformance/adapters/wasip3/build/conformance-wasip3.guest.wasm \
+        -o conformance/adapters/wasip3/build/conformance-wasip3.composed.wasm
+
+# Run the wasip3-guest conformance adapter: the composed component above runs
+# under `wasmtime run` (v46+; component-model async + WASIp3 + wasi:http), one
+# process per peer, connecting over wasi:sockets UDP loopback across processes
+# and signaling through the in-guest wasi:http mailbox client. Writes
+# conformance/results/wasip3-guest.json.
+conformance-wasip3: build-conformance-wasip3
+    cargo run --release -p conformance-adapter-wasip3 --bin conformance-adapter-wasip3 -- \
+        --component conformance/adapters/wasip3/build/conformance-wasip3.composed.wasm \
+        --out conformance/results
+
 # Run the jco-node conformance adapter (guest transpiled by jco, run under Node
 # with @roamhq/wrtc). jco's async ABI needs JavaScript Promise Integration, so
 # this uses `node --experimental-wasm-jspi` and requires Node 24+ (which ships
@@ -95,11 +129,12 @@ conformance-jco-browser: transpile-conformance-guest
     cargo build -p conformance-signalingd
     cd conformance/adapters/jco && npm run run:browser
 
-# Run the wasmtime<->jco-node interop pair (both orders): one peer per runtime
-# shares a signaling room and a real WebRTC data channel. Writes
-# conformance/results/wasmtime-x-jco-node.json and
-# conformance/results/jco-node-x-wasmtime.json.
-conformance-interop: transpile-conformance-guest
+# Run the interop pairs (each in both orders): wasmtime<->jco-node and
+# wasmtime<->wasip3-guest — one peer per runtime shares a signaling room and a
+# real WebRTC data channel. Writes conformance/results/wasmtime-x-jco-node.json,
+# jco-node-x-wasmtime.json, wasmtime-x-wasip3-guest.json, and
+# wasip3-guest-x-wasmtime.json.
+conformance-interop: transpile-conformance-guest build-conformance-wasip3
     cargo build -p conformance-signalingd
     cargo run --release -p conformance-adapter-wasmtime --bin conformance-interop
 

@@ -1,0 +1,24 @@
+[package]
+name = "conformance-adapter-wasip3"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Conformance adapter for the wasip3-guest target: runs the composed conformance guest (guest + wasip3-impl provider + in-guest wasi:http mailbox client + CLI driver) under `wasmtime run`, one process per peer, and emits an adapter result document the conformance runner consumes."
+
+[lib]
+name = "conformance_adapter_wasip3"
+path = "src/lib.rs"
+
+[[bin]]
+name = "conformance-adapter-wasip3"
+path = "src/main.rs"
+
+[dependencies]
+# The suite-owned signaling server, started in-process so each run owns its own
+# mailbox without managing a subprocess.
+conformance-signalingd = { path = "../../signaling/server" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "process"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive", "env"] }

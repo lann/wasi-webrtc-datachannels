@@ -1,0 +1,21 @@
+[package]
+name = "conformance-wasip3-mailbox"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "In-guest wasi:http mailbox client for the wasip3-guest conformance target: exports conformance:signaling/mailbox, relaying blobs to and from conformance-signalingd over the WASIp3 async HTTP client."
+
+[lib]
+# A component: built for `wasm32-wasip2` and composed (`wac plug`) under the
+# conformance guest's `mailbox` import.
+crate-type = ["cdylib"]
+
+[dependencies]
+# The async `wasi:http` outgoing client (`wasip3::http::client::send`) plus the
+# `http-compat` bridge to the idiomatic `http` types.
+wasip3 = { version = "0.7", features = ["async-spawn", "http-compat"] }
+# The exported `mailbox` bindings.
+wit-bindgen = { version = "0.57", features = ["async", "async-spawn"] }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
