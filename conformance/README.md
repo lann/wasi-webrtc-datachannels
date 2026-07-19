@@ -42,6 +42,22 @@ Phases in place so far:
   targets (`jco-node` and the jco-node half of the interop pair) require **Node
   24+** run with `--experimental-wasm-jspi`; the `jco-browser` target runs the
   guest in headless Chrome, which has JSPI natively.
+- **Phase 4 (wasip3-guest adapter + second interop pair):** the whole WebRTC
+  stack in wasm (`adapters/wasip3/`): the shared conformance guest is composed
+  (`wac plug`) with the `wasip3-impl` provider component (the sans-I/O `rtc`
+  stack driven over WASIp3 `wasi:sockets` UDP), an in-guest `wasi:http` mailbox
+  client (`mailbox/`), and a CLI driver exporting an async `wasi:cli/run`
+  (`driver/`) that reports each test's single-line JSON result on stdout. The
+  `conformance-adapter-wasip3` orchestrator runs the composed component under
+  `wasmtime run` (v46+; component-model async + WASIp3 + `wasi:http`) — one
+  process per peer for the two-peer behavioral tests, connecting over
+  `wasi:sockets` UDP loopback across processes and signaling through the suite
+  mailbox — and writes `results/wasip3-guest.json`. The `conformance-interop`
+  binary drives the `wasmtime`<->`wasip3-guest` pair in both orders the same
+  way it drives the jco-node pair (currently disabled by default in the
+  `conformance-interop` recipe — see TODO.md item E3). Classified against
+  `manifests/wasip3-guest.toml`, `manifests/wasmtime-x-wasip3-guest.toml`, and
+  `manifests/wasip3-guest-x-wasmtime.toml`.
 
 ## Running
 
@@ -54,20 +70,24 @@ just conformance
 This builds the conformance guest component and `conformance-signalingd`, runs
 the `wasmtime` adapter (which starts its own in-process signaling server and
 writes `conformance/results/wasmtime.json`), transpiles the guest for the jco
-adapters and runs the `jco-node` and `jco-browser` targets, runs the
-`wasmtime`<->`jco-node` interop pair (both orders), then invokes
+adapters and runs the `jco-node` and `jco-browser` targets, composes and runs
+the `wasip3-guest` target under `wasmtime run`, runs the enabled interop pairs
+(`wasmtime`<->`jco-node`, both orders; the `wasmtime`<->`wasip3-guest` pairs
+are wired but disabled by default — see TODO.md item E3), then invokes
 `conformance-runner`, which reads the test registry, the per-target manifests,
 and those adapter result documents, starts and health-checks a standalone
 signaling server, applies the expected-fail / unexpected-pass policy, tears the
 server down, and writes the markdown matrix to `conformance/matrix.md`. It exits
 nonzero on any `fail` or `unexpected-pass`.
 
-The jco targets and the interop pair invoke `node --experimental-wasm-jspi`, so
+The jco targets and their interop pair invoke `node --experimental-wasm-jspi`, so
 a JSPI-capable **Node 24+** must be on `PATH` (see the Phase 3 note above). The
 `conformance-interop` binary honours the `CONFORMANCE_NODE` environment variable
-if a specific node binary is needed. To run a single target in isolation, use the
+if a specific node binary is needed. The `wasip3-guest` target and its interop
+pair invoke `wasmtime run` (v46+, installed by `scripts/setup.sh`; overridable
+via `CONFORMANCE_WASMTIME`). To run a single target in isolation, use the
 per-target recipes (`just conformance-jco-node`, `just conformance-jco-browser`,
-`just conformance-interop`).
+`just conformance-wasip3`, `just conformance-interop`).
 
 Run the runner's unit tests and the signaling server's integration tests with
 the rest of the workspace:

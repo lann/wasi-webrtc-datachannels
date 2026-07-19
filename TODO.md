@@ -34,17 +34,20 @@ shortcut, where the host builds *both* peers internally. Implement
 `peer-connection` in at least one of the two hosts so the interface is proven
 host-side too, and settle its open design questions (item C1).
 
-### A3. No cross-host conformance is executed; the suite is a plan only
+### A3. Cross-host conformance: loopback matrix in place; ICE lab still open
 
-`conformance/PLAN.md` (21 KB) describes a behavioral + interop conformance suite,
-but `conformance/` contains **only** that plan — no runner, guest, adapters, or
-`just conformance` recipe, and no workspace members for it. Meanwhile real
-divergences between the two working hosts already exist and are unguarded:
-typed-error taxonomy (item D1), `send-via-stream`/`receive-via-stream` presence
-(item B4), and channel-close/peer-close semantics (items B2/B3). Stand up at
-least Phase 0 of the plan — one shared conformance guest asserting WIT-level
-outcomes (variant tags, payload bytes, ordering under `ordered:true`, resource
-lifecycle) against both hosts in CI — so divergences fail fast.
+`conformance/PLAN.md` is now implemented through Phase 4: a shared conformance
+guest, the `conformance-signalingd` mailbox, adapters for `wasmtime`,
+`jco-node`, `jco-browser`, and `wasip3-guest` (the guest composed with the
+in-guest `wasip3-impl` provider, run under `wasmtime run`), and the
+`wasmtime`<->`jco-node` interop pair (both orders) — all run in CI over
+loopback via `just conformance`, with real divergences pinned as manifest
+expected-fails (e.g. `zero-length-message`, items B6/E3). The
+`wasmtime`<->`wasip3-guest` pairs are wired into `conformance-interop` but
+disabled by default pending the teardown-flush fix (item E3). Still open from
+the plan: Phase 5's ICE lab (netns/veth `lan`,
+`stun-srflx`, `turn-relay` scenarios) so the matrix also covers non-loopback
+connectivity.
 
 ## B. Correctness bugs (both hosts unless noted)
 
@@ -223,6 +226,21 @@ a dev-dependency by the test and by the demo binary).
   single zero byte. Upstream `rtc` bug; `zero-length-message` is expected-fail
   in `conformance/manifests/wasip3-guest.toml` (and in the wasmtime interop-pair
   manifests, where the wasmtime peer has the analogous B6 receive bug).
+- The `wasmtime`<->`wasip3-guest` interop pair stalls deterministically (every
+  test, every attempt): packet capture shows the full ICE/DTLS/SCTP handshake
+  and both 16-message payload bursts complete within ~120 ms, but the wasip3
+  peer's barrier sentinel never reaches the wire and no SCTP/DTLS close is
+  sent — the guest's `peer.close()` returns after queueing, the driver exits,
+  and the process death cuts the detached runtime pump before the sentinel or
+  the close handshake flushes. Meanwhile the wasip3 peer itself reports
+  **pass** (its `receive` surfaced `closed` early), so the failure is
+  one-sided: the wasmtime (webrtc-rs) peer retransmits its own unacked
+  sentinel forever (no receive timeout, item B2) and the whole attempt hits the
+  orchestrator's timeout. Fix direction: make the wasip3 provider's
+  close/drop path flush the pending SCTP send queue and complete (or at least
+  emit) the SCTP/DTLS close before the driver exits — e.g. drain
+  `poll_transmit` to quiescence after `close()` and only then return from
+  `wasi:cli/run`. Until then the pair cannot be enabled in CI.
 - The `rtc` dependency is pinned to a `0.20` release candidate
   (`Cargo.toml`, `rtc = "0.20.0-rc.3"`). Published on crates.io, but a
   pre-release on the critical path — track moving to a stable `0.20` once it
