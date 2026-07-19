@@ -1,6 +1,14 @@
 //! Planning and classification: combine the registry, the manifests, and the
-//! adapter reports into a per-(target, test) final status, and render the
-//! markdown conformance matrix.
+//! adapter reports into a per-(target, environment, test) final status, and
+//! render the markdown conformance matrix.
+//!
+//! A target can run in more than one *environment* — the loopback path the
+//! default adapters use, plus the ICE-lab scenarios (`lan`, `stun-srflx`,
+//! `turn-relay`; see `conformance/PLAN.md` Phase 5) that route each peer through
+//! its own network namespace. Each `(target, environment)` pair reported by an
+//! adapter is its own matrix row, so a scenario's outcome is classified against
+//! the same manifest policy as its target's loopback run without being merged
+//! into it.
 
 use std::collections::BTreeMap;
 
@@ -18,58 +26,89 @@ pub struct Cell {
     pub detail: Option<String>,
 }
 
-/// The classified matrix: rows are targets, columns are tests.
+/// One matrix row: a target running in a particular environment. An empty
+/// `environment` marks a planning-only row (a manifest with no adapter report).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    pub target: String,
+    pub environment: String,
+}
+
+impl Row {
+    /// The cell-map key for a test in this row.
+    fn key(&self, test: &str) -> (String, String, String) {
+        (self.target.clone(), self.environment.clone(), test.to_string())
+    }
+}
+
+/// The classified matrix: rows are (target, environment) pairs, columns tests.
 pub struct Matrix {
-    /// Target ids in the order their manifests were supplied.
-    pub targets: Vec<String>,
+    /// Rows in the order their reports/manifests were supplied.
+    pub rows: Vec<Row>,
     /// Test ids in registry order.
     pub tests: Vec<String>,
-    /// (target, test) -> classified cell.
-    pub cells: BTreeMap<(String, String), Cell>,
+    /// (target, environment, test) -> classified cell.
+    pub cells: BTreeMap<(String, String, String), Cell>,
 }
 
 impl Matrix {
-    /// Classify every (target, test) pair from the registry, the per-target
-    /// manifests, and the collected adapter reports.
+    /// Classify every (target, environment, test) triple from the registry, the
+    /// per-target manifests, and the collected adapter reports.
     ///
-    /// A target with no adapter report is still planned from its manifest: its
-    /// tests appear as `skip-unsupported` (where a tag is declared unsupported)
-    /// or `missing` (otherwise), which is exactly the empty-target state Phase 0
-    /// relies on.
+    /// Each environment an adapter reports for a target becomes its own row,
+    /// classified against that target's manifest. A target with no adapter
+    /// report is still planned from its manifest as a single planning-only row
+    /// (empty environment): its tests appear as `skip-unsupported` (where a tag
+    /// is declared unsupported) or `missing` (otherwise), which is exactly the
+    /// empty-target state Phase 0 relies on.
     pub fn classify(
         registry: &Registry,
         manifests: &[Manifest],
         reports: &[AdapterReport],
     ) -> Self {
         let tests: Vec<String> = registry.test.iter().map(|t| t.id.clone()).collect();
-        let targets: Vec<String> = manifests.iter().map(|m| m.target.id.clone()).collect();
+        let mut rows = Vec::new();
         let mut cells = BTreeMap::new();
 
         for manifest in manifests {
             let target = &manifest.target.id;
-            // Merge all raw results reported for this target (across environments).
-            let mut raw: BTreeMap<&str, (RawStatus, Option<String>)> = BTreeMap::new();
+            // Group this target's raw results by the environment they ran in.
+            let mut by_env: BTreeMap<String, BTreeMap<&str, (RawStatus, Option<String>)>> =
+                BTreeMap::new();
             for report in reports.iter().filter(|r| &r.target == target) {
+                let env = by_env.entry(report.environment.clone()).or_default();
                 for result in &report.results {
-                    raw.insert(
+                    env.insert(
                         result.test_id.as_str(),
                         (result.status, result.detail.clone()),
                     );
                 }
             }
 
-            for entry in &registry.test {
-                let cell =
-                    classify_one(manifest, &entry.id, &entry.tags, raw.get(entry.id.as_str()));
-                cells.insert((target.clone(), entry.id.clone()), cell);
+            if by_env.is_empty() {
+                // Planning-only: no adapter ran this target.
+                by_env.insert(String::new(), BTreeMap::new());
+            }
+
+            for (environment, raw) in by_env {
+                let row = Row {
+                    target: target.clone(),
+                    environment,
+                };
+                for entry in &registry.test {
+                    let cell = classify_one(
+                        manifest,
+                        &entry.id,
+                        &entry.tags,
+                        raw.get(entry.id.as_str()),
+                    );
+                    cells.insert(row.key(&entry.id), cell);
+                }
+                rows.push(row);
             }
         }
 
-        Matrix {
-            targets,
-            tests,
-            cells,
-        }
+        Matrix { rows, tests, cells }
     }
 
     /// True if any classified cell is a failure (fail or unexpected-pass).
@@ -77,12 +116,13 @@ impl Matrix {
         self.cells.values().any(|c| c.status.is_failure())
     }
 
-    /// Render the matrix as a markdown table (target rows × test columns).
+    /// Render the matrix as a markdown table (rows × test columns), with a
+    /// `target` and an `environment` column identifying each row.
     pub fn render_markdown(&self) -> String {
         let mut out = String::new();
         out.push_str("# Conformance matrix\n\n");
 
-        if self.targets.is_empty() {
+        if self.rows.is_empty() {
             out.push_str("_No targets enabled._\n");
             return out;
         }
@@ -91,23 +131,28 @@ impl Matrix {
             return out;
         }
 
-        out.push_str("| target |");
+        out.push_str("| target | environment |");
         for test in &self.tests {
             out.push_str(&format!(" {test} |"));
         }
         out.push('\n');
-        out.push_str("| --- |");
+        out.push_str("| --- | --- |");
         for _ in &self.tests {
             out.push_str(" --- |");
         }
         out.push('\n');
 
-        for target in &self.targets {
-            out.push_str(&format!("| {target} |"));
+        for row in &self.rows {
+            let environment = if row.environment.is_empty() {
+                "—"
+            } else {
+                &row.environment
+            };
+            out.push_str(&format!("| {} | {environment} |", row.target));
             for test in &self.tests {
                 let symbol = self
                     .cells
-                    .get(&(target.clone(), test.clone()))
+                    .get(&row.key(test))
                     .map(|c| c.status.symbol())
                     .unwrap_or("—");
                 out.push_str(&format!(" {symbol} |"));

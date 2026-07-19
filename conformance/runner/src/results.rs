@@ -12,9 +12,8 @@ use serde::Deserialize;
 pub struct AdapterReport {
     /// Target id (must match a manifest `[target].id`).
     pub target: String,
-    /// Scenario/environment the adapter ran in, e.g. `loopback`. Retained for
-    /// per-scenario matrix columns added in a later phase.
-    #[allow(dead_code)]
+    /// Scenario/environment the adapter ran in, e.g. `loopback`, `lan`, or
+    /// `turn-relay`. Each `(target, environment)` pair is its own matrix row.
     pub environment: String,
     /// Raw per-test outcomes.
     #[serde(default)]

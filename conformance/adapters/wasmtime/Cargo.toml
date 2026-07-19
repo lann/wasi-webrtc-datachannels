@@ -19,6 +19,19 @@ path = "src/main.rs"
 name = "conformance-interop"
 path = "src/bin/interop.rs"
 
+# A single wasmtime peer, launched as a process (inside a network namespace) by
+# the ICE-lab orchestrator so the two peers of a test connect over a real path.
+[[bin]]
+name = "conformance-peer"
+path = "src/bin/peer.rs"
+
+# The ICE-lab orchestrator: provisions a scenario's namespace topology, starts
+# the signaling (and STUN/TURN) servers, runs the two-peer corpus with each peer
+# in its own namespace, and writes a per-scenario result document.
+[[bin]]
+name = "conformance-ice"
+path = "src/bin/ice.rs"
+
 [dependencies]
 # The wasmtime host under test: satisfies the guest's `connections`/`types`
 # imports with a real webrtc-rs data channel and peer connection.

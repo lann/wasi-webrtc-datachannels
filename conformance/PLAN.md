@@ -376,7 +376,7 @@ the reviewer directs otherwise.
   orders).
 - **Done when:** three target rows + the first interop rows green in CI Job 1.
 
-### Phase 4 — wasip3-guest adapter
+### Phase 4 — wasip3-guest adapter (**COMPLETED**)
 - `adapters/wasip3`: the conformance guest composed (`wac plug`) with the
   `wasip3-impl` provider (which exports `connections`) + an in-guest
   `wasi:http` mailbox client; runner invokes `wasmtime run` with the async/p3
