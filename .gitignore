@@ -9,4 +9,6 @@ build/
 jco-impl/generated/
 conformance/adapters/jco/generated/
 conformance/matrix.md
+conformance/nat-matrix.md
+conformance/shadow-matrix.md
 conformance/results/

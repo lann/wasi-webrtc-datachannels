@@ -191,6 +191,40 @@ CI runs the lab in a dedicated job (`ice-lab` in
 [`.github/workflows/conformance.yml`](../.github/workflows/conformance.yml)),
 because network namespaces need privileges a typical sandbox does not grant.
 
+## Shadow lab (`just conformance-shadow`)
+
+The **Shadow lab** gives the same "two peers on separate hosts over a
+non-loopback path" property as the ICE lab, but runs the peers inside the
+[Shadow](https://github.com/shadow/shadow) discrete-event network simulator
+instead of network namespaces. Shadow runs the *unmodified* `conformance-peer`
+and `conformance-signalingd` binaries under a single deterministic simulation,
+intercepting their syscalls to model the network in user space — so it needs
+**no root and no network namespaces**, which makes it reproducible in
+sandboxes and hosted CI where the netns ICE lab cannot run.
+
+An orchestrator (`conformance-shadow`) generates a Shadow YAML config with three
+hosts per test (a signaling server, an offerer, and an answerer, each on its own
+simulated IP), runs `shadow` once over the whole corpus, parses the per-host
+process stdout, folds the two peer results, and writes
+`conformance/results/wasmtime-shadow.json` (environment `shadow`), so it appears
+as its own matrix row.
+
+Run it from the repository root (needs `shadow` on `PATH`, installed by
+[`scripts/setup.sh`](../scripts/setup.sh)):
+
+```sh
+just conformance-shadow
+```
+
+Shadow does not implement UDP `SO_REUSEADDR`/`SO_REUSEPORT`, which webrtc's mDNS
+multicast socket sets, so the peers run with `--disable-mdns` (they connect over
+explicit host candidates, so mDNS is unused). Only the Shadow peers pass the
+flag; the netns ICE lab, which runs on a real kernel, is unchanged.
+
+CI runs the Shadow lab in a dedicated job (`shadow-lab` in
+[`.github/workflows/conformance.yml`](../.github/workflows/conformance.yml));
+Shadow ships no prebuilt binary, so it is built from source (cached by ref).
+
 ## Layout
 
 ```
@@ -243,7 +277,8 @@ loads only `*.toml`) does not treat it as an enabled target.
 `conformance-runner` renders a markdown table with one row per
 `(target, environment)` and one column per test. Most targets run only in the
 `loopback` environment; the ICE lab (above) adds `lan` / `stun-srflx` /
-`turn-relay` / `nat-symmetric` rows for the `wasmtime` target. Cell values:
+`turn-relay` / `nat-symmetric` rows, and the Shadow lab a `shadow` row, for the
+`wasmtime` target. Cell values:
 
 | Symbol | Meaning |
 | --- | --- |
