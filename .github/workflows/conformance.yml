@@ -244,13 +244,14 @@ jobs:
           shared-key: cargo
           cache-all-crates: true
 
-      # Cache the built Shadow (~/.local/bin/shadow + ~/.local/lib) keyed on the
-      # pinned SHADOW_REF so it is built from source only when the ref changes.
+      # Cache the built Shadow (~/.local/bin/shadow + ~/.local/lib). The key is
+      # derived from scripts/setup.sh, which pins SHADOW_REF, so bumping the ref
+      # (or the install steps) invalidates the cache and rebuilds from source.
       - name: Cache Shadow
         uses: actions/cache@v4
         with:
           path: ~/.local
-          key: shadow-${{ runner.os }}-e2829ed32acde66124ce9c14cb5d2337cad7f8e0
+          key: shadow-${{ runner.os }}-${{ hashFiles('scripts/setup.sh') }}
 
       # Make a cached Shadow visible to setup.sh's guard (which skips the build
       # when `shadow` is already on PATH) and to the run step below.
