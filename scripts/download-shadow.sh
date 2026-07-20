@@ -43,6 +43,8 @@ if command -v apt-get >/dev/null 2>&1 && ! ldconfig -p 2>/dev/null | grep -q 'li
   APT_SUDO=""
   [ "$(id -u)" -eq 0 ] || APT_SUDO="sudo"
   ${APT_SUDO} apt-get update -y
+  # Ubuntu 24.04+ renamed the package to libglib2.0-0t64 (the time_t transition);
+  # older releases still use libglib2.0-0. Try the new name first, fall back.
   DEBIAN_FRONTEND=noninteractive ${APT_SUDO} apt-get install -y --no-install-recommends \
     libglib2.0-0t64 || \
   DEBIAN_FRONTEND=noninteractive ${APT_SUDO} apt-get install -y --no-install-recommends \
