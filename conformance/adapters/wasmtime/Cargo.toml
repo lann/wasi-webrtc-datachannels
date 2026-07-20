@@ -32,14 +32,6 @@ path = "src/bin/peer.rs"
 name = "conformance-ice"
 path = "src/bin/ice.rs"
 
-# The Shadow-lab orchestrator: generates a Shadow network-simulator config
-# placing each two-peer test on its own simulated hosts, runs `shadow` once, and
-# writes the `wasmtime-shadow.json` result document. Unlike the ICE lab it needs
-# no root or network namespaces.
-[[bin]]
-name = "conformance-shadow"
-path = "src/bin/shadow.rs"
-
 [dependencies]
 # The shared adapter building blocks: outcomes, the peer-subprocess invocation,
 # the retry loop, the corpus runner, and the result document.

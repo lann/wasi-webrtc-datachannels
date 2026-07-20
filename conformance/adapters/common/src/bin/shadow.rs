@@ -1,6 +1,6 @@
-//! The conformance Shadow-lab orchestrator.
+//! The conformance Shadow-lab environment executor.
 //!
-//! It runs the two-peer behavioral corpus for the wasmtime target inside the
+//! It runs the two-peer behavioral corpus for one target inside the
 //! [Shadow](https://github.com/shadow/shadow) network simulator, which gives the
 //! same "two peers on separate hosts over a routed, non-loopback path" property
 //! as the netns ICE lab (`conformance-ice`) but **without root, network
@@ -9,21 +9,32 @@
 //! this environment reproducible and runnable in restricted sandboxes and in CI
 //! where raw `ip netns` traffic is unavailable.
 //!
-//! Unlike the netns orchestrator — which `exec`s each peer into a namespace and
+//! Unlike the netns executor — which `exec`s each peer into a namespace and
 //! drives the corpus itself with retries — Shadow owns the whole run: this binary
 //! generates a single Shadow configuration describing, for each test, a signaling
 //! host plus an offerer and an answerer host (each on its own simulated IP), runs
 //! `shadow` once, then reads each peer's single-line JSON `test-result` from the
 //! per-host stdout file Shadow captures. The run is deterministic, so no retries
-//! are needed. The result document it writes (`wasmtime-shadow.json`,
+//! are needed. The result document it writes (`<target>-shadow.json`,
 //! `environment = shadow`) is classified by the conformance runner exactly like
 //! any other adapter report.
 //!
-//! The peers gather host candidates from their simulated interface address and
-//! run with `--disable-mdns`: Shadow's simulated stack does not implement the
-//! multicast-socket options (`SO_REUSEADDR`/`SO_REUSEPORT`) that multicast-DNS
-//! candidate gathering binds with, and the peers connect over their explicit host
-//! candidates rather than `.local` names, so mDNS is unnecessary here.
+//! The executor is target-neutral: `--peer-kind` selects how each peer host's
+//! command line is built. Any peer that honours the shared single-peer contract
+//! (`--test`/`--role`/`--server`/`--room`/…, one JSON result line on stdout) and
+//! can bind a configured non-loopback address fits:
+//!
+//! - `wasmtime` runs the native `conformance-peer` binary. Its peers gather host
+//!   candidates from their simulated interface address (`--bind-addr`) and run
+//!   with `--disable-mdns`: Shadow's simulated stack does not implement the
+//!   multicast-socket options (`SO_REUSEADDR`/`SO_REUSEPORT`) that multicast-DNS
+//!   candidate gathering binds with, and the peers connect over their explicit
+//!   host candidates rather than `.local` names, so mDNS is unnecessary here.
+//! - `wasip3-guest` runs the fully composed wasip3 conformance component under
+//!   `wasmtime run` (the same invocation as the loopback adapter), pointing the
+//!   in-guest provider at the host's simulated address through the
+//!   `WEBRTC_UDP_BIND_ADDR` environment variable. The sans-I/O stack has no
+//!   mDNS, so no equivalent of `--disable-mdns` is needed.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -37,24 +48,51 @@ use conformance_adapter_common::{
     TestOutcome, TWO_PEER_TESTS,
 };
 
+/// How a peer host's command line is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum PeerKind {
+    /// The native `conformance-peer` binary (the wasmtime host + webrtc-rs).
+    Wasmtime,
+    /// The composed wasip3 conformance component under `wasmtime run`.
+    Wasip3Guest,
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "conformance-shadow", version)]
 struct Cli {
-    /// Target id recorded in the result document (only `wasmtime` is supported
-    /// by this orchestrator so far; the peer binary is the wasmtime host).
+    /// Target id recorded in the result document, matching the manifest
+    /// `[target].id`.
     #[arg(long, default_value = "wasmtime")]
     target: String,
+
+    /// How each peer host's command line is built (which target's peer runs).
+    #[arg(long, value_enum, default_value_t = PeerKind::Wasmtime)]
+    peer_kind: PeerKind,
 
     /// Environment id recorded in the result document (the matrix column).
     #[arg(long, default_value = "shadow")]
     environment: String,
 
-    /// Path to the conformance guest component (`*.component.wasm`).
+    /// Path to the conformance guest component (`*.component.wasm`), used by
+    /// the `wasmtime` peer kind.
     #[arg(
         long,
         default_value = "conformance/guest/build/conformance-guest.component.wasm"
     )]
     guest: PathBuf,
+
+    /// The fully composed wasip3 conformance component (guest + provider +
+    /// mailbox + driver), used by the `wasip3-guest` peer kind.
+    #[arg(
+        long,
+        default_value = "conformance/adapters/wasip3/build/conformance-wasip3.composed.wasm"
+    )]
+    component: PathBuf,
+
+    /// The `wasmtime` binary that runs the composed component (v46+), used by
+    /// the `wasip3-guest` peer kind.
+    #[arg(long, env = "CONFORMANCE_WASMTIME", default_value = "wasmtime")]
+    wasmtime_bin: String,
 
     /// Directory to write the adapter result document into.
     #[arg(long, default_value = "conformance/results")]
@@ -64,7 +102,8 @@ struct Cli {
     #[arg(long, default_value = "target/debug/conformance-signalingd")]
     signaling_bin: PathBuf,
 
-    /// The `conformance-peer` binary, run on each peer host.
+    /// The `conformance-peer` binary, run on each peer host by the `wasmtime`
+    /// peer kind.
     #[arg(long, default_value = "target/release/conformance-peer")]
     peer_bin: PathBuf,
 
@@ -126,15 +165,100 @@ impl Placement {
     }
 }
 
+/// The resolved per-role peer command template: how one peer host's process is
+/// invoked for a role/IP of a placement.
+enum PeerCommand {
+    /// `conformance-peer --guest … --bind-addr <ip> --disable-mdns …`
+    Wasmtime { peer_bin: PathBuf, guest: PathBuf },
+    /// `wasmtime run … --env WEBRTC_UDP_BIND_ADDR=<ip> <component> …`
+    Wasip3Guest {
+        wasmtime_bin: PathBuf,
+        component: PathBuf,
+    },
+}
+
+impl PeerCommand {
+    /// Resolve the selected peer kind's binaries and components to absolute
+    /// paths.
+    fn resolve(cli: &Cli) -> Result<Self> {
+        Ok(match cli.peer_kind {
+            PeerKind::Wasmtime => PeerCommand::Wasmtime {
+                peer_bin: absolute(&cli.peer_bin)?,
+                guest: absolute(&cli.guest)?,
+            },
+            PeerKind::Wasip3Guest => PeerCommand::Wasip3Guest {
+                wasmtime_bin: resolve_bin(&cli.wasmtime_bin)?,
+                component: absolute(&cli.component)?,
+            },
+        })
+    }
+
+    /// The full argv (element 0 is the executable) for one peer process, each
+    /// element rendered as a double-quoted YAML/JSON scalar.
+    fn argv(&self, p: &Placement, role: &str, ip: &str, signaling_url: &str) -> Vec<String> {
+        let shared_peer_args = [
+            json_str("--test"),
+            json_str(p.test_id),
+            json_str("--role"),
+            json_str(role),
+            json_str("--server"),
+            json_str(signaling_url),
+            json_str("--room"),
+            json_str("r"),
+            json_str("--message-count"),
+            json_str(&p.count.to_string()),
+            json_str("--message-size"),
+            json_str(&p.size.to_string()),
+        ];
+        match self {
+            PeerCommand::Wasmtime { peer_bin, guest } => {
+                let mut args = vec![path_arg(peer_bin), json_str("--guest"), path_arg(guest)];
+                args.extend(shared_peer_args);
+                args.extend([
+                    json_str("--bind-addr"),
+                    json_str(ip),
+                    json_str("--disable-mdns"),
+                ]);
+                args
+            }
+            PeerCommand::Wasip3Guest {
+                wasmtime_bin,
+                component,
+            } => {
+                // Mirror the loopback wasip3 adapter's `wasmtime run`
+                // invocation, plus the provider's bind-address environment
+                // variable pointing it at this host's simulated address.
+                let mut args = vec![
+                    path_arg(wasmtime_bin),
+                    json_str("run"),
+                    json_str("-W"),
+                    json_str("component-model-async=y"),
+                    json_str("-S"),
+                    json_str("cli"),
+                    json_str("-S"),
+                    json_str("p3"),
+                    json_str("-S"),
+                    json_str("http"),
+                    json_str("-S"),
+                    json_str("inherit-network"),
+                    json_str("--env"),
+                    json_str(&format!("WEBRTC_UDP_BIND_ADDR={ip}")),
+                    path_arg(component),
+                ];
+                args.extend(shared_peer_args);
+                args
+            }
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Shadow runs each managed process with its working directory set to that
     // host's output directory, not the caller's, so every path handed to a
-    // process (the peer/signaling binaries and the guest component) must be
-    // absolute.
-    let guest = absolute(&cli.guest)?;
-    let peer_bin = absolute(&cli.peer_bin)?;
+    // process (binaries and components) must be absolute.
+    let peer_command = PeerCommand::resolve(&cli)?;
     let signaling_bin = absolute(&cli.signaling_bin)?;
 
     let placements: Vec<Placement> = TWO_PEER_TESTS
@@ -147,7 +271,7 @@ fn main() -> Result<()> {
         anyhow::bail!("no tests selected");
     }
 
-    let config = render_config(&cli, &guest, &peer_bin, &signaling_bin, &placements);
+    let config = render_config(&cli, &peer_command, &signaling_bin, &placements);
     let config_path = cli.data_dir.with_extension("yaml");
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
@@ -189,8 +313,7 @@ fn main() -> Result<()> {
 /// of simulated hosts (signaling, offerer, answerer).
 fn render_config(
     cli: &Cli,
-    guest: &Path,
-    peer_bin: &Path,
+    peer_command: &PeerCommand,
     signaling_bin: &Path,
     placements: &[Placement],
 ) -> String {
@@ -228,26 +351,7 @@ fn render_config(
                 &mut s,
                 &format!("{role}{}", p.index),
                 ip,
-                &[
-                    path_arg(peer_bin),
-                    json_str("--guest"),
-                    path_arg(guest),
-                    json_str("--test"),
-                    json_str(p.test_id),
-                    json_str("--role"),
-                    json_str(role),
-                    json_str("--server"),
-                    json_str(&p.signaling_url(cli.signaling_port)),
-                    json_str("--room"),
-                    json_str("r"),
-                    json_str("--message-count"),
-                    json_str(&p.count.to_string()),
-                    json_str("--message-size"),
-                    json_str(&p.size.to_string()),
-                    json_str("--bind-addr"),
-                    json_str(ip),
-                    json_str("--disable-mdns"),
-                ],
+                &peer_command.argv(p, role, ip, &p.signaling_url(cli.signaling_port)),
                 // Give the signaling server a moment to bind; peer-side long-poll
                 // retries cover any residual race.
                 "2s",
@@ -292,6 +396,20 @@ fn absolute(path: &Path) -> Result<PathBuf> {
     }
     let cwd = std::env::current_dir().context("getting current directory")?;
     Ok(cwd.join(path))
+}
+
+/// Resolve a binary named by path or bare name: a bare name (no path
+/// separator) is searched for on `PATH`; anything else is made absolute like
+/// [`absolute`].
+fn resolve_bin(bin: &str) -> Result<PathBuf> {
+    if !bin.contains(std::path::MAIN_SEPARATOR) {
+        let path = std::env::var_os("PATH").context("reading PATH")?;
+        return std::env::split_paths(&path)
+            .map(|dir| dir.join(bin))
+            .find(|candidate| candidate.is_file())
+            .with_context(|| format!("{bin} not found on PATH"));
+    }
+    absolute(Path::new(bin))
 }
 
 /// A string rendered as a double-quoted scalar (valid in YAML flow context).

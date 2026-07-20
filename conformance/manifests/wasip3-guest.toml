@@ -8,8 +8,10 @@
 # - The provider supplies its own host candidate from the socket it binds —
 #   `ifaces()` is `Unsupported` on wasm, so there is no OS interface
 #   enumeration or mDNS gathering.
-# - `peer-connection` binds on IPv4 loopback only, which is exactly what the
-#   loopback scenario needs; non-loopback scenarios are future work.
+# - `peer-connection` binds the address named by the `WEBRTC_UDP_BIND_ADDR`
+#   environment variable, defaulting to IPv4 loopback — which is exactly what
+#   the loopback scenario needs; the Shadow lab points each peer at its own
+#   simulated non-loopback address through that variable.
 #
 # Tests the conformance guest itself reports `skipped` (the streaming forms and
 # the remaining error-taxonomy probes) need no entries here: a raw `skip` is

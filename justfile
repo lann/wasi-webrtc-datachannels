@@ -186,12 +186,17 @@ conformance-nat: (conformance-ice "stun-srflx") (conformance-ice "nat-symmetric"
 # of each test on separate hosts over a routed, non-loopback path — but Shadow
 # simulates the network in user space, so it needs NO root, network namespaces,
 # or real kernel networking, which makes it reproducible and runnable in
-# restricted sandboxes and CI. The orchestrator (conformance-shadow) generates a
-# single Shadow config, runs `shadow` once, and writes
-# conformance/results/wasmtime-shadow.json (the `shadow` environment column).
-# Needs `shadow` on PATH; install it with scripts/download-shadow.sh (prebuilt,
-# from the `shadow-dev` release) or scripts/build-shadow.sh (from source).
-conformance-shadow: build-conformance-guest build-signalingd
+# restricted sandboxes and CI. The target-neutral environment executor
+# (conformance-shadow, in conformance/adapters/common) generates a single
+# Shadow config per target, runs `shadow` once per target, and writes
+# conformance/results/<target>-shadow.json (the `shadow` environment column):
+# the wasmtime target runs the native conformance-peer and the wasip3-guest
+# target runs the composed wasip3 conformance component under `wasmtime run`,
+# with each in-guest provider bound to its host's simulated address via
+# WEBRTC_UDP_BIND_ADDR. Needs `shadow` on PATH; install it with
+# scripts/download-shadow.sh (prebuilt, from the `shadow-dev` release) or
+# scripts/build-shadow.sh (from source).
+conformance-shadow: build-conformance-guest build-signalingd build-conformance-wasip3
     #!/usr/bin/env bash
     set -euo pipefail
     if ! command -v shadow >/dev/null 2>&1; then
@@ -210,12 +215,19 @@ conformance-shadow: build-conformance-guest build-signalingd
     EOF
         exit 1
     fi
-    cargo build --release -p conformance-adapter-wasmtime \
-        --bin conformance-peer --bin conformance-shadow
+    cargo build --release -p conformance-adapter-wasmtime --bin conformance-peer
+    cargo build --release -p conformance-adapter-common --bin conformance-shadow
     timeout {{conformance-timeout}} target/release/conformance-shadow \
+        --target wasmtime --peer-kind wasmtime \
         --guest conformance/guest/build/conformance-guest.component.wasm \
         --signaling-bin target/debug/conformance-signalingd \
         --peer-bin target/release/conformance-peer \
+        --out conformance/results
+    timeout {{conformance-timeout}} target/release/conformance-shadow \
+        --target wasip3-guest --peer-kind wasip3-guest \
+        --component conformance/adapters/wasip3/build/conformance-wasip3.composed.wasm \
+        --signaling-bin target/debug/conformance-signalingd \
+        --data-dir target/shadow-data-wasip3 \
         --out conformance/results
 
 # Build the echo-demo guest component into examples/echo-demo/build/.

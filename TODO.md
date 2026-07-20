@@ -191,11 +191,12 @@ integration test now reuses the single implementation at
 
 ### E3. `wasip3-impl` limitations to document or lift
 
-- The exported `peer-connection` binds its socket on IPv4 loopback
-  (`wasip3-impl/src/provider.rs`), so it only connects peers on the **same host**
-  (which is what the composed integration test needs). Real (non-loopback)
-  networking needs a way for the consumer to choose the bind address and a
-  routable host candidate.
+- The exported `peer-connection` binds its socket on the IP address named by
+  the `WEBRTC_UDP_BIND_ADDR` environment variable, defaulting to IPv4 loopback
+  (`wasip3-impl/src/provider.rs`). Loopback connects peers on the **same host**
+  (which is what the composed integration test needs); a routable address
+  gives the peer a host candidate reachable across a real (non-loopback)
+  network path, exercised by the conformance Shadow lab.
 - `receive` / `wait-connected` / `incoming-data-channels` poll the shared state
   on a fixed `POLL_NANOS` interval rather than waking on a condition. Adequate,
   but a condition/notify primitive would remove the idle wakeups.
@@ -279,9 +280,11 @@ reference example.
 `wasip3-impl` is now a **component** that runs the sans-I/O `rtc` stack
 in-guest and exports the project `connections` interface, composed (`wac plug`)
 with `examples/webrtc-consumer` for the same-host round-trip integration test.
-The remaining step is real (non-loopback) networking: let the consumer choose
-the bind address and produce a routable host candidate, then, combined with
-`rendezvous` (item F3), let two separate components connect across a network.
+The remaining step is a real deployment across separate machines: the consumer
+chooses the bind address through `WEBRTC_UDP_BIND_ADDR` (which produces a
+routable host candidate, exercised across a non-loopback simulated network by
+the conformance Shadow lab); combined with `rendezvous` (item F3), two separate
+components can then connect across a network.
 Host-candidate gathering must stay explicit (`ifaces()` is `Unsupported` on
 wasm).
 

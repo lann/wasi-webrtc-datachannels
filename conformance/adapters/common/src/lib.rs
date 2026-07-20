@@ -1,6 +1,7 @@
 //! Target-independent building blocks shared by the native conformance
-//! adapters and orchestrators (the wasmtime and wasip3-guest adapters, the
-//! cross-runtime interop orchestrator, and the ICE-lab orchestrator).
+//! adapters and environment executors (the wasmtime and wasip3-guest adapters,
+//! the cross-runtime interop orchestrator, the ICE-lab executor, and the
+//! Shadow-lab executor in this crate's `conformance-shadow` bin).
 //!
 //! Every adapter follows the same shape — pick each test's orchestration plan,
 //! run its guest instances (in-process or as peer subprocesses), retry flaky

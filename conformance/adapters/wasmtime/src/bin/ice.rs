@@ -1,4 +1,4 @@
-//! The conformance ICE-lab orchestrator.
+//! The conformance ICE-lab environment executor.
 //!
 //! It runs the two-peer behavioral corpus for one target in one ICE scenario
 //! (`lan`, `stun-srflx`, `turn-relay`, `nat-symmetric`; see

@@ -59,6 +59,32 @@ Phases in place so far:
   `manifests/wasip3-guest.toml`, `manifests/wasmtime-x-wasip3-guest.toml`, and
   `manifests/wasip3-guest-x-wasmtime.toml`.
 
+## Layering: adapters vs. environment executors
+
+The suite separates *what runs a peer* from *where its network lives*:
+
+- **Adapters** are environment-agnostic. Each target has one way to run a
+  single guest instance of one test, configured entirely through
+  flags/environment (test id, role, signaling URL, room, message parameters,
+  bind address, ICE servers): the in-process adapters
+  (`conformance-adapter-wasmtime`, the jco drivers,
+  `conformance-adapter-wasip3`) and the per-process peers — the native
+  `conformance-peer` binary and the composed wasip3 component under
+  `wasmtime run`. A peer knows nothing about namespaces, simulators, or how its
+  addresses were provisioned; every out-of-process peer honours the same
+  single-peer contract (`--test`/`--role`/`--server`/`--room`/…, one JSON
+  `test-result` line on stdout).
+- **Environment executors** own the network environment and drive the corpus
+  through those peers: `conformance-ice` (in `adapters/wasmtime`) provisions
+  the netns ICE lab and places each peer with `ip netns exec`;
+  `conformance-shadow` (in `adapters/common`) renders a Shadow simulation
+  config and lets the simulator launch the peers. Executors decide addresses,
+  scenarios, and process placement, and pass everything a peer needs as
+  configuration.
+
+Supporting a peer in a new environment therefore means teaching the executor a
+per-role command template — not the peer about the environment.
+
 ## Running
 
 From the repository root:
@@ -134,7 +160,7 @@ namespace (see [`scenarios/lib.sh`](scenarios/lib.sh) for the topology and
 addresses).
 
 Because the two peers live in separate namespaces, each runs as its own process
-(`conformance-peer`), placed with `ip netns exec`; an orchestrator
+(`conformance-peer`), placed with `ip netns exec`; an environment executor
 (`conformance-ice`) provisions the lab, runs the signaling server (and coturn) in
 the signaling namespace, drives the corpus, and tears the lab down. Results are
 written to `conformance/results/wasmtime-<scenario>.json` with the scenario as
@@ -196,22 +222,31 @@ because network namespaces need privileges a typical sandbox does not grant.
 The **Shadow lab** gives the same "two peers on separate hosts over a
 non-loopback path" property as the ICE lab, but runs the peers inside the
 [Shadow](https://github.com/shadow/shadow) discrete-event network simulator
-instead of network namespaces. Shadow runs the *unmodified* `conformance-peer`
-and `conformance-signalingd` binaries under a single deterministic simulation,
+instead of network namespaces. Shadow runs the *unmodified* peer and
+`conformance-signalingd` binaries under a single deterministic simulation,
 intercepting their syscalls to model the network in user space — so it needs
 **no root and no network namespaces**, which makes it reproducible in
 sandboxes and hosted CI where the netns ICE lab cannot run.
 
-An orchestrator (`conformance-shadow`) generates a Shadow YAML config with three
-hosts per test (a signaling server, an offerer, and an answerer, each on its own
-simulated IP), runs `shadow` once over the whole corpus, parses the per-host
-process stdout, folds the two peer results, and writes
-`conformance/results/wasmtime-shadow.json` (environment `shadow`), so it appears
-as its own matrix row.
+A target-neutral environment executor (`conformance-shadow`, in
+`adapters/common`) generates a Shadow YAML config with three hosts per test (a
+signaling server, an offerer, and an answerer, each on its own simulated IP),
+runs `shadow` once over the whole corpus, parses the per-host process stdout,
+folds the two peer results, and writes
+`conformance/results/<target>-shadow.json` (environment `shadow`), so each
+target appears as its own matrix row. Its `--peer-kind` flag selects the
+per-role peer command template:
 
-Run it from the repository root (needs `shadow` on `PATH`). Shadow ships no
-upstream prebuilt binary, so install it into `~/.local` by downloading the
-prebuilt binary from this repository's `shadow-dev` GitHub prerelease
+- `wasmtime` runs the native `conformance-peer` binary, gathering each peer's
+  host candidate from its simulated interface address (`--bind-addr`);
+- `wasip3-guest` runs the fully composed wasip3 conformance component under
+  `wasmtime run` (the same invocation as the loopback adapter), pointing the
+  in-guest provider at each host's simulated address through the
+  `WEBRTC_UDP_BIND_ADDR` environment variable.
+
+Run both targets from the repository root (needs `shadow` on `PATH`). Shadow
+ships no upstream prebuilt binary, so install it into `~/.local` by downloading
+the prebuilt binary from this repository's `shadow-dev` GitHub prerelease
 ([`scripts/download-shadow.sh`](../scripts/download-shadow.sh)) or by building it
 from source ([`scripts/build-shadow.sh`](../scripts/build-shadow.sh)).
 `scripts/setup.sh` does not install Shadow; the recipe below prints this guidance
@@ -222,9 +257,10 @@ just conformance-shadow
 ```
 
 Shadow does not implement UDP `SO_REUSEADDR`/`SO_REUSEPORT`, which webrtc's mDNS
-multicast socket sets, so the peers run with `--disable-mdns` (they connect over
-explicit host candidates, so mDNS is unused). Only the Shadow peers pass the
-flag; the netns ICE lab, which runs on a real kernel, is unchanged.
+multicast socket sets, so the `wasmtime` peers run with `--disable-mdns` (they
+connect over explicit host candidates, so mDNS is unused); the sans-I/O wasip3
+stack has no mDNS at all. Only the Shadow peers pass the flag; the netns ICE
+lab, which runs on a real kernel, is unchanged.
 
 CI runs the Shadow lab in a dedicated job (`shadow-lab` in
 [`.github/workflows/conformance.yml`](../.github/workflows/conformance.yml));
@@ -250,7 +286,8 @@ conformance/
   adapters/                # per-target adapters (wasmtime / jco / wasip3);
                            #   common/ holds the shared native building blocks
                            #   (registry/plans, peer subprocess invocation,
-                           #   retry loop, corpus runner, result document)
+                           #   retry loop, corpus runner, result document) and
+                           #   the target-neutral Shadow-lab executor
   scenarios/               # ICE lab provisioning (Phase 5+)
 ```
 
@@ -284,8 +321,9 @@ loads only `*.toml`) does not treat it as an enabled target.
 `conformance-runner` renders a markdown table with one row per
 `(target, environment)` and one column per test. Most targets run only in the
 `loopback` environment; the ICE lab (above) adds `lan` / `stun-srflx` /
-`turn-relay` / `nat-symmetric` rows, and the Shadow lab a `shadow` row, for the
-`wasmtime` target. Cell values:
+`turn-relay` / `nat-symmetric` rows for the `wasmtime` target, and the Shadow
+lab adds a `shadow` row for the `wasmtime` and `wasip3-guest` targets. Cell
+values:
 
 | Symbol | Meaning |
 | --- | --- |

@@ -221,13 +221,14 @@ jobs:
           path: conformance/nat-matrix.md
           if-no-files-found: warn
 
-  # Job 4: the Shadow lab. Runs the wasmtime two-peer corpus inside the Shadow
-  # discrete-event network simulator (https://github.com/shadow/shadow), which
-  # gives the same "two peers on separate hosts over a non-loopback path"
-  # property as the ICE lab but simulates the network in user space — so it needs
-  # NO root or network namespaces and is deterministic. Shadow ships no prebuilt
-  # binary, so it is built once by the shadow-build workflow and published to the
-  # `shadow-dev` prerelease; this job downloads that binary instead of rebuilding
+  # Job 4: the Shadow lab. Runs the two-peer corpus for the wasmtime and
+  # wasip3-guest targets inside the Shadow discrete-event network simulator
+  # (https://github.com/shadow/shadow), which gives the same "two peers on
+  # separate hosts over a non-loopback path" property as the ICE lab but
+  # simulates the network in user space — so it needs NO root or network
+  # namespaces and is deterministic. Shadow ships no prebuilt binary, so it is
+  # built once by the shadow-build workflow and published to the `shadow-dev`
+  # prerelease; this job downloads that binary instead of rebuilding
   # (see scripts/download-shadow.sh).
   shadow-lab:
     runs-on: ubuntu-latest
@@ -257,16 +258,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./scripts/download-shadow.sh
 
-      # The Shadow lab is wasmtime-only and needs no coturn/iproute2; skip the
-      # Node and ICE-lab deps. Shadow was downloaded above.
+      # The Shadow lab needs the Rust/wasm toolchain (including wac and the
+      # wasm32-wasip2 target for the composed wasip3-guest peer) but no
+      # coturn/iproute2; skip the Node and ICE-lab deps. Shadow was downloaded
+      # above.
       - name: Install dependencies
         run: SKIP_NODE=1 SKIP_ICE_LAB=1 ./scripts/setup.sh
 
       - name: Run Shadow lab
         run: just conformance-shadow
 
-      # Classify the Shadow results (wasmtime-shadow.json) against the manifests
-      # and render the environment-columned matrix; exits nonzero on any failure.
+      # Classify the Shadow results (<target>-shadow.json for wasmtime and
+      # wasip3-guest) against the manifests and render the environment-columned
+      # matrix; exits nonzero on any failure.
       - name: Classify Shadow matrix
         run: |
           cargo run -p conformance-runner -- \
