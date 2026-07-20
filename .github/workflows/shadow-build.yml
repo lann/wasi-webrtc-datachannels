@@ -7,18 +7,29 @@ name: Build Shadow
 # Shadow lab CI job + the Copilot agent download the binary from the release
 # instead of rebuilding every run (see scripts/download-shadow.sh).
 #
+# A binary is built for each supported architecture (x86_64 and aarch64) on a
+# native runner and published as a per-arch asset (shadow-linux-<arch>.tar.gz);
+# download-shadow.sh picks the asset matching the host architecture.
+#
 # Manual only: bump the pinned revision in scripts/build-shadow.sh (SHADOW_REF)
 # and dispatch this workflow to refresh the release.
 on:
   workflow_dispatch:
 
-permissions:
-  # Needed to create/update the `shadow-dev` release and upload its asset.
-  contents: write
-
 jobs:
+  # Build Shadow once per architecture and hand the packaged tarball to the
+  # publish job as a workflow artifact. Building on a native runner per arch
+  # (x86_64 on ubuntu-latest, aarch64 on ubuntu-24.04-arm) avoids cross-compiling.
   build-shadow:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - name: Checkout code
@@ -34,27 +45,50 @@ jobs:
       # them straight into ~/.local.
       - name: Package Shadow
         run: |
-          tar -czf shadow-linux-x86_64.tar.gz \
+          tar -czf "shadow-linux-${{ matrix.arch }}.tar.gz" \
             -C "${GITHUB_WORKSPACE}/shadow-prefix" \
             bin/shadow $(cd "${GITHUB_WORKSPACE}/shadow-prefix" && ls lib/libshadow_*.so)
-          ls -la shadow-linux-x86_64.tar.gz
+          ls -la "shadow-linux-${{ matrix.arch }}.tar.gz"
 
-      # Publish to the `shadow-dev` prerelease: update the asset in place if the
+      - name: Upload Shadow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-linux-${{ matrix.arch }}
+          path: shadow-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  # Publish every per-arch tarball to the `shadow-dev` prerelease in a single
+  # job, so the release is created/updated exactly once (no matrix race).
+  publish:
+    needs: build-shadow
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to create/update the `shadow-dev` release and upload its assets.
+      contents: write
+    steps:
+      - name: Download Shadow artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shadow-linux-*
+          merge-multiple: true
+
+      # Publish to the `shadow-dev` prerelease: update the assets in place if the
       # release already exists, otherwise create it. Always marked prerelease.
       - name: Publish to shadow-dev release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          ls -la shadow-linux-*.tar.gz
           notes="Prebuilt Shadow network simulator for the conformance Shadow lab.
           Built from source by .github/workflows/shadow-build.yml
           (revision pinned in scripts/build-shadow.sh).
           Downloaded by scripts/download-shadow.sh. This is a rolling dev
-          prerelease; the asset is replaced on each dispatch."
+          prerelease; the assets are replaced on each dispatch."
           if gh release view shadow-dev --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload shadow-dev shadow-linux-x86_64.tar.gz \
+            gh release upload shadow-dev shadow-linux-*.tar.gz \
               --repo "${GITHUB_REPOSITORY}" --clobber
           else
-            gh release create shadow-dev shadow-linux-x86_64.tar.gz \
+            gh release create shadow-dev shadow-linux-*.tar.gz \
               --repo "${GITHUB_REPOSITORY}" \
               --prerelease \
               --title "Shadow (dev build)" \
