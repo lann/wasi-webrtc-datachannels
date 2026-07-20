@@ -106,6 +106,9 @@ impl Wasip3Peer {
             .args(["--room", room])
             .args(["--message-count", &count.to_string()])
             .args(["--message-size", &size.to_string()])
+            // Reap the peer if this future is dropped (the caller's attempt
+            // timeout), so an abandoned attempt does not leak a running peer.
+            .kill_on_drop(true)
             .stdin(Stdio::null())
             .stderr(Stdio::inherit())
             .output()

@@ -117,7 +117,9 @@ jobs:
   # `ip netns exec` require privileges a sandbox does not grant.
   ice-lab:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Two scenarios, each capped at `conformance-ice-timeout` (20 min) by the
+    # recipe, plus the build; the job cap is the backstop above those.
+    timeout-minutes: 50
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

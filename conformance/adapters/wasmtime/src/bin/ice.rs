@@ -394,7 +394,12 @@ async fn run_peer(
         command.arg("--relay-only");
     }
 
+    // Reap the peer if this future is dropped (the attempt timeout): a leaked
+    // peer keeps running its handshake — holding its TURN allocation, sockets,
+    // and CPU — which starves every subsequent attempt of relay ports and
+    // compute until the whole run overshoots the recipe's `timeout`.
     let output = command
+        .kill_on_drop(true)
         .stdin(Stdio::null())
         .stderr(Stdio::inherit())
         .output()

@@ -104,6 +104,9 @@ async fn run_jco_peer(
         .args(["--role", role])
         .args(["--message-count", &count.to_string()])
         .args(["--message-size", &size.to_string()])
+        // Reap the peer if this future is dropped (the attempt timeout), so an
+        // abandoned attempt does not leak a running peer process.
+        .kill_on_drop(true)
         .stdin(Stdio::null())
         .stderr(Stdio::inherit())
         .output()

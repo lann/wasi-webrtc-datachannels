@@ -25,8 +25,11 @@ CW_TURN_LOG="$CW_RUN_DIR/turnserver.log"
 cw_turn_conf() {
     cw_priv mkdir -p "$CW_RUN_DIR"
     # A minimal long-term-credential TURN/STUN server bound to cw-sig's address.
-    # The relay port range is small (the lab runs a handful of allocations at a
-    # time) and no TLS is configured (the lab is a closed, ephemeral network).
+    # The relay port range must cover a whole run's worth of allocations, not
+    # just the concurrent ones: an allocation is only freed early by a graceful
+    # refresh(lifetime=0), so allocations from peers that were killed mid-test
+    # (a timed-out attempt) linger for the TURN default lifetime (600s). No TLS
+    # is configured (the lab is a closed, ephemeral network).
     cw_priv tee "$CW_TURN_CONF" >/dev/null <<EOF
 listening-ip=$CW_SIG_ADDR
 listening-port=$CW_TURN_PORT

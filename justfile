@@ -7,6 +7,13 @@ default:
 # this caps the entire run so a systemic hang fails in minutes, not hours.
 conformance-timeout := "600"
 
+# The ICE lab's whole-run cap (seconds). Its per-attempt guard is more generous
+# (60s — real routing, and a TURN relay for `turn-relay`), so the worst case of
+# the corpus (11 tests, 2 at a time, 3 attempts each) exceeds the loopback cap;
+# this covers it so a retry-heavy run still ends with per-test results instead
+# of being killed opaquely by `timeout` (exit 124).
+conformance-ice-timeout := "1200"
+
 # Run every CI check locally, in the same order as .github/workflows/ci.yml.
 ci: fmt-check clippy validate-wit build-component transpile test-browser test
 
@@ -163,7 +170,7 @@ conformance-interop: transpile-conformance-guest build-conformance-wasip3 build-
 conformance-ice scenario="lan": build-conformance-guest build-signalingd
     cargo build --release -p conformance-adapter-wasmtime \
         --bin conformance-peer --bin conformance-ice
-    sudo timeout {{conformance-timeout}} target/release/conformance-ice \
+    sudo timeout {{conformance-ice-timeout}} target/release/conformance-ice \
         --scenario {{scenario}} \
         --guest conformance/guest/build/conformance-guest.component.wasm \
         --signaling-bin target/debug/conformance-signalingd \
