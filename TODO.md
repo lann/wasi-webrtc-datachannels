@@ -7,48 +7,38 @@ wasm component with compatible (not necessarily identical) behavior across
 browsers, mobile, and cloud.*
 
 Items are grouped by area and ordered roughly by impact. File references are
-relative to the repository root and were verified against the tree at review
-time. A handful of small, unambiguous fixes were made in the same change that
-introduced this file (see **Fixed opportunistically** at the end); everything
-below is still open.
-
-Note on the previous TODO.md: it referenced a `signaling` interface at
-`wit/webrtc.wit` that no longer exists (the guest-driven surface is now the
-`connections.peer-connection` resource), and an `echo-demo` receive path that
-has since been rewritten. It was stale and is fully replaced here.
+relative to the repository root. Items resolved since the file was introduced
+are marked **Fixed** in place (with a short note of how) so the history stays
+findable without rehashing it.
 
 ## A. Strategic / whole-project
 
-### A2. The guest-driven `peer-connection` path is unimplemented in the two host stacks
+### A2. The guest-driven `peer-connection` path — Fixed (demo jco host still echo-only)
 
-`connections.peer-connection` (`wit/webrtc.wit:197-225`) is the design target for
-guest-driven connection setup. The `wasip3-impl` **component** now implements the
-whole `connections` surface — including `peer-connection` (offer/answer +
-trickle-ICE) — driven in-guest over `wasi:sockets`, and is exercised by the
-composed `examples/webrtc-consumer` round-trip integration test
-(`just test-webrtc-composed`). But **both hosts** still trap on every
-`peer-connection` method (`wasmtime-impl/src/host.rs:411-495` returns
-`peer_connection_unsupported()`; `jco-impl/webrtc.js` implements only `openEcho`
-+ `DataChannel`). The only working host path is the `connect` convenience
-shortcut, where the host builds *both* peers internally. Implement
-`peer-connection` in at least one of the two hosts so the interface is proven
-host-side too, and settle its open design questions (item C1).
+**Fixed** in substance: `connections.peer-connection` is now implemented by
+the Wasmtime host (`wasmtime-impl/src/host.rs` `HostPeerConnection*` +
+`wasmtime-impl/src/peer_connection.rs`), by the conformance jco host
+(`conformance/adapters/jco/webrtc.js`, run under Node and headless Chrome),
+and by the in-guest `wasip3-impl` provider — and the conformance suite drives
+real offer/answer + trickle-ICE signaling across all of them. The one remaining
+gap is the *demo* jco host (`jco-impl/webrtc.js`), which still implements only
+the `openEcho` shortcut + `data-channel`; port the conformance adapter's
+`peer-connection` implementation there if the demo should exercise it.
 
-### A3. Cross-host conformance: loopback matrix in place; ICE lab still open
+### A3. Cross-host conformance: loopback matrix + ICE lab in place; NAT still open
 
-`conformance/PLAN.md` is now implemented through Phase 4: a shared conformance
+`conformance/PLAN.md` is now implemented through Phase 5: a shared conformance
 guest, the `conformance-signalingd` mailbox, adapters for `wasmtime`,
 `jco-node`, `jco-browser`, and `wasip3-guest` (the guest composed with the
-in-guest `wasip3-impl` provider, run under `wasmtime run`), and the
+in-guest `wasip3-impl` provider, run under `wasmtime run`), the
 `wasmtime`<->`jco-node` interop pair (both orders) — all run in CI over
-loopback via `just conformance`. The `zero-length-message` divergence previously
-pinned as a manifest expected-fail (item B6) is now fixed, so no manifest
-expected-fails remain. The
+loopback via `just conformance` — and the ICE lab (`just conformance-ice`,
+CI job 2): the wasmtime two-peer corpus over a routed network-namespace
+topology exercising real non-loopback paths (`lan` direct and `turn-relay`
+through coturn). No manifest expected-fails remain. The
 `wasmtime`<->`wasip3-guest` pairs are wired into `conformance-interop` but
 disabled by default pending the teardown-flush fix (item E3). Still open from
-the plan: Phase 5's ICE lab (netns/veth `lan`,
-`stun-srflx`, `turn-relay` scenarios) so the matrix also covers non-loopback
-connectivity.
+the plan: NAT on the router so `stun-srflx` is meaningful (Phase 6).
 
 ## B. Correctness bugs (both hosts unless noted)
 
@@ -57,11 +47,10 @@ connectivity.
 Every received message is pushed into an unbounded queue with no reader-driven
 backpressure, so a slow guest reader grows host memory without limit:
 
-- Wasmtime echo host: `examples/wasmtime-demo/src/main.rs:148`
-  (`mpsc::unbounded::<InboundMessage>()`), fed from `on_message`.
-- Wasmtime manual host: the same shape in
-  `examples/wasmtime-demo/src/manual.rs` / `wasmtime-impl/tests/manual_host.rs`.
-- jco host: `jco-impl/webrtc.js:136-156` (`incomingQueue`'s `messages[]` array
+- Wasmtime host: `wasmtime-impl/src/data_channel.rs:121`
+  (`mpsc::unbounded::<InboundMessage>()`), fed from the channel pump; the demo
+  and manual hosts inherit it.
+- jco host: `jco-impl/webrtc.js:177` (`incomingQueue`'s `messages[]` array
   grows unbounded on `"message"`).
 
 Outbound backpressure exists (Wasmtime relies on the async ABI; jco gates on
@@ -76,9 +65,9 @@ Nothing bounds how long the open handshake may take, so a failed ICE/DTLS
 negotiation hangs the guest's `open-echo` indefinitely (only the CI job timeout
 would catch it):
 
-- Wasmtime: `examples/wasmtime-demo/src/main.rs:177` (`open_rx.await`) and the
+- Wasmtime: `examples/wasmtime-demo/src/main.rs` (`open_rx.await`) and the
   manual host's `connect`/gathering waits.
-- jco: `waitOpen` (`jco-impl/webrtc.js:178-184`) and the `openEcho` SDP/ICE
+- jco: `waitOpen` (`jco-impl/webrtc.js:219`) and the `openEcho` SDP/ICE
   sequence have no timeout.
 
 Add a bounded wait that surfaces `error::timed-out` (item D1) and also react to
@@ -87,28 +76,29 @@ Add a bounded wait that surfaces `error::timed-out` (item D1) and also react to
 ### B3. jco host never closes its peer connections (native resource leak)
 
 `openEcho` creates `near`/`far` `RTCPeerConnection`s and retains them in
-`DataChannel.#keepAlive` (`jco-impl/webrtc.js:94-95,126`), but nothing ever
+`DataChannel.#keepAlive` (`jco-impl/webrtc.js`), but nothing ever
 calls `pc.close()` and the resource exposes no dispose hook, so under
 `@roamhq/wrtc` every channel leaks native ICE/DTLS/SCTP threads and sockets for
 the process lifetime. The Wasmtime host does this correctly via
 `Drop for DataChannel` → `close_peer_connections`
-(`wasmtime-impl/src/data_channel.rs`). Give the jco `DataChannel` a
+(`wasmtime-impl/src/data_channel.rs`), and the conformance jco adapter closes
+its peers (`conformance/adapters/jco/webrtc.js`). Give the jco `DataChannel` a
 close/`Symbol.dispose` path that closes both peers.
 
 ### B4. jco `send` and the far-side echo can trap instead of returning an error
 
-`DataChannel.send` (`jco-impl/webrtc.js:58-63`) calls `this.#channel.send(...)`
+`DataChannel.send` (`jco-impl/webrtc.js:63`) calls `this.#channel.send(...)`
 without a try/catch and without checking `readyState`; for a
 `result<_, error>`-returning import, a thrown JS error traps the component
 instead of surfacing `result::err`. The far-side echo handler
-(`jco-impl/webrtc.js:104`, `channel.onmessage = ({data}) => channel.send(data)`)
+(`jco-impl/webrtc.js:144`, `channel.onmessage = ({data}) => channel.send(data)`)
 is likewise unguarded — if that send throws, the message is dropped and the
 near side's `receive` can deadlock. Catch and convert to the WIT `error` variant
-(item D1); guard the echo send.
+(item D1) as the conformance jco adapter does; guard the echo send.
 
 ### B5. Wasmtime peer close depends on a live Tokio runtime
 
-`close_peer_connections` (`wasmtime-impl/src/data_channel.rs:158-171`) spawns
+`close_peer_connections` (`wasmtime-impl/src/data_channel.rs:319-330`) spawns
 `pc.close()` on the current runtime and, if `Handle::try_current()` fails,
 silently drops the `Arc`s — leaking `webrtc-rs` background tasks. This is an
 edge case (Drop after the runtime stops), but a production host should not rely
@@ -118,100 +108,86 @@ the invariant.
 ### B6. Wasmtime host cannot receive zero-length messages (upstream webrtc-rs bug) — Fixed
 
 **Fixed** by moving the wasmtime host off the async `webrtc` 0.17 crate onto
-`webrtc` 0.20 (`wasmtime-impl/Cargo.toml`, `examples/wasmtime-demo/Cargo.toml`),
-which is rebuilt on the sans-I/O `rtc` crate. The workspace patches `rtc` to the
-`lann/rtc` fork carrying the empty-message receive fix (`Cargo.toml`,
-`[patch.crates-io] rtc = { git = "https://github.com/lann/rtc.git", … }`; upstream
-PR [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)), so the host
-now surfaces a received zero-length message instead of tearing the channel down.
-The `zero-length-message` expected-fail has been removed from
-`conformance/manifests/wasmtime.toml` and the wasmtime interop-pair manifests.
-
-Original analysis, kept for context: `webrtc-rs`'s 0.17 `RTCDataChannel::read_loop`
-treated any zero-byte read from `read_data_channel` as EOF and closed the channel
-(`webrtc-0.17/src/data_channel/mod.rs`, the `Ok((0, _))` arm) — but per RFC 8831
-§6.6 a zero-length message legitimately arrives as a zero-byte read with a
-`StringEmpty`/`BinaryEmpty` PPID, which `webrtc-data` correctly decoded to
-`n = 0`, so a peer that received an empty message had its channel torn down
-instead of observing the message (sending empty messages already worked). In
-0.20 the data channel is driven by a per-channel poll loop
-(`wasmtime-impl/src/data_channel.rs`) that delivers every `OnMessage` event —
-including an empty payload — rather than conflating a zero-byte read with
-end-of-stream.
+`webrtc` 0.20 (rebuilt on the sans-I/O `rtc` crate), whose per-channel poll loop
+(`wasmtime-impl/src/data_channel.rs`) delivers every `OnMessage` event —
+including an empty payload — instead of conflating a zero-byte read with
+end-of-stream as 0.17's `read_loop` did. The workspace patches `rtc` to the
+`lann/rtc` fork carrying the empty-message receive fix (upstream PR
+[`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)); the
+`zero-length-message` expected-fails were removed from the manifests.
 
 ## C. WIT interface design
 
-### C1. `peer-connection` has open design questions to settle before implementation
+### C1. `peer-connection` semantics to pin down in the WIT docs
 
-Before item A2 implements it, resolve on `wit/webrtc.wit:197-225`: (a) how
-end-of-candidates is signaled on `local-ice-candidates` (browsers use a null
-candidate; a `stream` end may suffice but should be specified); (b)
-connection-state observability beyond the one-shot `wait-connected` — there is no
-way to observe `disconnected`/`failed` or to re-await; (c) the
+The interface is now implemented (item A2), which settled some of these de
+facto; specify them in `wit/webrtc.wit` doc comments so implementations stay
+aligned: (a) end-of-candidates on `local-ice-candidates` is signaled by the
+stream ending (rather than a browser-style null candidate) — document it; (b)
+connection-state observability beyond the one-shot `wait-connected` — there is
+no way to observe `disconnected`/`failed` or to re-await; (c) the
 `incoming-data-channels` / `local-ice-candidates` streams' once-only semantics;
 (d) `close: func()` is sync while the rest is async — confirm that is intended.
-Output: revised WIT + doc comments.
+Output: revised WIT doc comments.
 
 ### C2. `data-channel-options` omits `RTCDataChannelInit` fields without explanation
 
-`data-channel-options` (`wit/webrtc.wit:31-40`) exposes only `label`, `ordered`,
+`data-channel-options` (`wit/webrtc.wit`) exposes only `label`, `ordered`,
 `max-retransmits`. Document *why* `protocol`, `max-packet-life-time`,
 `negotiated`/`id` were left out, and note that `max-retransmits` and
 `max-packet-life-time` are mutually exclusive upstream (so if the latter is ever
-added it cannot simply be a sibling `option`). (The misleading "Defaults to
-`true`" comment on `ordered` was fixed opportunistically — see the end.)
+added it cannot simply be a sibling `option`).
 
-### C3. Terminology: docs still call the design target "signaling" in places
+### C3. Terminology: keep "signaling" out of the design-target prose
 
-The WIT surface is `peer-connection`, but scattered prose still references a
-"`signaling` interface/design target." The Rust host copies were corrected
-opportunistically (see the end); re-check README/AGENTS and future docs so the
-`signaling` name does not creep back in (it now only legitimately names the
-demo-only `manual-signaling` interface).
+The WIT surface is `peer-connection`, but prose has previously referenced a
+"`signaling` interface/design target"; the known instances have been corrected.
+Keep future docs from reintroducing the name (it now only legitimately names
+the demo-only `manual-signaling` interface and the conformance signaling
+server).
 
 ## D. Error handling
 
-### D1. Typed `error` variants are essentially never produced
+### D1. Typed `error` variants: wasmtime host now classifies; jco does not
 
 `error` declares `closed`, `timed-out`, `invalid-signaling`,
-`receiving-via-stream`, `other` (`wit/webrtc.wit:13-28`), but across the whole
-repo only `closed` and `receiving-via-stream` are ever produced
-(`wasmtime-impl/src/host.rs:74,305,322,324,377`); `timed-out` and
-`invalid-signaling` appear nowhere, and everything else collapses to
-`other(string)`. The jco host only ever rejects with `{ tag: 'closed' }`
-(`jco-impl/webrtc.js:162`). Either wire real classification (SDP parse →
-`invalid-signaling`, open/gather timeout → `timed-out` per item B2, mid-send
-close → `closed`) in both hosts with tests, or trim the unproduced variants.
-Consider aligning with WASI 0.3 `error-context` before stabilizing.
+`receiving-via-stream`, `other` (`wit/webrtc.wit:13-28`). The wasmtime host now
+produces all of them where they apply (`wasmtime-impl/src/host.rs`:
+`InvalidSignaling` on SDP parse/rollback, `TimedOut` on bounded waits,
+`Closed`, `ReceivingViaStream`), but many fallible paths still collapse to
+`other(string)` (item D2), and the jco host only ever rejects with
+`{ tag: 'closed' }` (`jco-impl/webrtc.js`). Wire real classification in the jco
+host too (SDP parse → `invalid-signaling`, open/gather timeout → `timed-out`
+per item B2, mid-send close → `closed`), with the conformance error-taxonomy
+probes asserting it. Consider aligning with WASI 0.3 `error-context` before
+stabilizing.
 
 ### D2. Host errors are flattened to strings at many call sites
 
 Every fallible host path does `Error::Other(e.to_string())`
-(`wasmtime-impl/src/host.rs:56,65,82,350`,
-`examples/wasmtime-demo/src/manual.rs` and its test twin), discarding the
-`anyhow`/`webrtc-rs` source chain and giving classification (item D1) no single
-home. Follow the `wasmtime-wasi-http` pattern: a crate-level error type with
-`From` conversions into the WIT variant, replacing the ad-hoc `map_err`s.
+(`wasmtime-impl/src/host.rs`, `examples/wasmtime-demo/src/manual.rs`),
+discarding the `anyhow`/`webrtc-rs` source chain and giving classification
+(item D1) no single home. Follow the `wasmtime-wasi-http` pattern: a
+crate-level error type with `From` conversions into the WIT variant, replacing
+the ad-hoc `map_err`s.
 
 ## E. Implementations
 
 ### E1. jco host does not implement `send-via-stream` / `receive-via-stream`
 
 `connections.data-channel` declares four transport methods, but the jco
-`DataChannel` (`jco-impl/webrtc.js:36-86`) implements only `label`, `send`,
+`DataChannel` (`jco-impl/webrtc.js`, and the fuller
+`conformance/adapters/jco/webrtc.js`) implements only `label`, `send`,
 `receive`. The streaming methods are simply absent — a parity gap with the
-Wasmtime host that is invisible today only because `echo-demo` never calls them
-(and the transpile flags don't map them, item F1). Implement them (or document
-the gap and make item A3's conformance suite assert it).
+Wasmtime host, surfaced by the conformance suite as `skip-unsupported` on the
+streaming tests. Implement them to close the gap.
 
-### E2. ~380-line verbatim duplication of the manual-signaling host
+### E2. ~380-line verbatim duplication of the manual-signaling host — Fixed
 
-`wasmtime-impl/tests/manual_host.rs` (385 lines) and
-`examples/wasmtime-demo/src/manual.rs` (397 lines) are identical except for the
-doc header and the bindgen `path` (verified by diff — one differing line of
-code). Any fix to `ManualPeer` must be made twice and can silently drift. Move
-`ManualPeer` into one shared location (e.g. a module in `wasmtime-impl` reused as
-a dev-dependency by the test and by the demo binary).
+**Fixed**: the duplicate `wasmtime-impl/tests/manual_host.rs` was deleted; the
+integration test now reuses the single implementation at
+`examples/wasmtime-demo/src/manual.rs` through a dev-dependency on the
+`wasmtime-webrtc-host` crate.
 
 ### E3. `wasip3-impl` limitations to document or lift
 
@@ -232,41 +208,15 @@ a dev-dependency by the test and by the demo binary).
   fork (or its driving contract) to make a single attempt deterministic.
 - ~~Zero-length messages arrive corrupted: a received empty message surfaces as
   a single `0x00` byte.~~ **Fixed** on the `lann/rtc` fork the workspace now
-  tracks (`Cargo.toml`, `rtc = { git = "https://github.com/lann/rtc.git", …
-  }`): `rtc`'s `DataChannelHandler::handle_read` now maps the `BinaryEmpty` /
-  `StringEmpty` PPIDs back to an empty payload before surfacing the message.
-  `zero-length-message` passes on `wasip3-guest` and is no longer an
-  expected-fail there. Submitted upstream as
-  [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131); drop the fork
-  and return to a published `rtc` once that merges and ships (tracked with the
-  release-candidate bullet below). Original analysis, kept for the upstream PR:
-  - RFC 8831 §6.6: SCTP cannot carry empty user messages, so an empty data
-    channel message is sent as a **single zero byte** with PPID
-    `WebRTC String Empty` (56) or `WebRTC Binary Empty` (57), and "the receiver
-    MUST ignore the SCTP user message and process it as an empty message".
-  - The `rtc-datachannel` **send** path implements this correctly:
-    `DataChannel::get_data_channel_message`
-    (`rtc-datachannel/src/data_channel/mod.rs`, with the RFC quoted in a
-    comment) maps an empty payload to `PayloadProtocolIdentifier::BinaryEmpty` /
-    `StringEmpty` and substitutes the one-zero-byte placeholder payload.
-  - No layer ever inverts that mapping on **receive**:
-    `DataChannel::handle_read` / `poll_read` in the same file queue the
-    `DataChannelMessage` with its placeholder payload untouched, and
-    `DataChannelHandler::handle_read` in
-    `rtc/src/peer_connection/handler/datachannel.rs` builds the user-facing
-    `RTCDataChannelMessage` from it — it even inspects the Empty PPIDs to
-    compute `is_string` (`ppi == PayloadProtocolIdentifier::String ||
-    ppi == PayloadProtocolIdentifier::StringEmpty`) but still forwards
-    `data: data_channel_message.payload`, i.e. the `[0x00]` placeholder.
-  - Fix (implemented on the fork, upstream PR
-    [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)): when `ppi`
-    is `BinaryEmpty` or `StringEmpty`, replace the payload with an empty buffer
-    before surfacing the message (done in `rtc`'s `DataChannelHandler` where
-    `is_string` is already derived from the PPID).
-
-  `zero-length-message` now also passes in the wasmtime interop-pair manifests:
-  the wasmtime peer's analogous B6 receive bug is fixed (see item B6), so its
-  expected-fail entries there have been removed.
+  tracks: `rtc`'s `DataChannelHandler::handle_read` maps the `BinaryEmpty` /
+  `StringEmpty` PPIDs back to an empty payload before surfacing the message
+  (per RFC 8831 §6.6; the send path already did the inverse mapping).
+  `zero-length-message` passes on `wasip3-guest` and in the wasmtime
+  interop-pair manifests (the wasmtime peer's analogous B6 bug is also fixed).
+  Submitted upstream as
+  [`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131); drop the
+  fork and return to a published `rtc` once that merges and ships (tracked with
+  the release-candidate bullet below).
 - The `wasmtime`<->`wasip3-guest` interop pair stalls deterministically (every
   test, every attempt): packet capture shows the full ICE/DTLS/SCTP handshake
   and both 16-message payload bursts complete within ~120 ms, but the wasip3
@@ -295,37 +245,34 @@ a dev-dependency by the test and by the demo binary).
 
 ### F1. Demos count bytes but never verify content or ordering
 
-`make_message` tags each message with its index precisely so ordering/integrity
-could be checked (`examples/echo-demo/src/lib.rs:87-93`), but `run` only counts
-messages/bytes (`:50-64`) and never validates payloads; the Wasmtime demo does
-not even assert `bytes_echoed`. `examples/cli-signaling/src/lib.rs` likewise
-does not verify the peer message. Verify content + order in the echo guest and
-the manual-signaling test so a host that corrupts, reorders (under
-`ordered:true`), or duplicates messages fails the demos. This is the cheap
-precursor to the conformance suite (item A3).
+The **conformance suite** now verifies payload content, ordering, and message
+boundaries across all targets (`conformance/guest/src/lib.rs`), so divergence
+is caught in CI. The remaining gap is demo-local: `examples/echo-demo/src/lib.rs`
+tags each message with its index but `run` only counts messages/bytes and never
+validates payloads (the Wasmtime demo does not even assert `bytes_echoed`), and
+`examples/cli-signaling/src/lib.rs` does not verify the peer message. Low
+priority now that conformance covers the property; verify in the demos too or
+leave them as pure throughput demos.
 
-### F2. Dead demo WIT surface referencing a nonexistent `browser-signaling` component
+### F2. Dead demo WIT surface referencing a nonexistent `browser-signaling` component — Fixed
 
-`examples/cli-signaling/wit/webrtc-echo-demo.wit` defines the `prompt` and
-`manual-demo` interfaces and the `browser-signaling-demo` world (`:11-23,26-48,
-104-110`), and the crate/module docs (`examples/cli-signaling/src/lib.rs:10-11`)
-refer to a sibling `browser-signaling` component "which speaks the exact same
-wire format" — but no such component, world instantiation, or jco host support
-exists (the only implemented world is `manual-signaling-host`, driven by
-`cli-signaling`, which exports `wasi:cli/run`). Either build the browser
-manual-signaling demo (it would be the first exercise of the jco host beyond
-echo) or delete the unused `prompt`/`manual-demo`/`browser-signaling-demo`
-surface and the dangling references.
+**Fixed**: the unused `prompt` / `manual-demo` interfaces and the
+`browser-signaling-demo` world were deleted from
+`examples/cli-signaling/wit/webrtc-echo-demo.wit`, along with the dangling
+`browser-signaling` references in the crate docs. A browser manual-signaling
+demo can reintroduce them if it is ever built.
 
 ### F3. Wire up `rendezvous` end-to-end (tracking)
 
 `demo:webrtc-echo/rendezvous` (`examples/echo-demo/wit/webrtc-echo-demo.wit`) is
 defined but imported by no world and implemented by neither host. Per AGENTS.md,
 the intended flagship example is two separate component instances (offerer /
-answerer) connecting via `peer-connection` (item A2) + a `rendezvous` host that
-relays SDP/ICE over `wasi:http@0.3` (Wasmtime) / `fetch` (jco) through a trivial
-local mailbox server. This would exercise nearly every interface at once and
-could replace the `connect` shortcut as the reference example.
+answerer) connecting via `peer-connection` (now implemented, item A2) + a
+`rendezvous` host that relays SDP/ICE over `wasi:http@0.3` (Wasmtime) / `fetch`
+(jco) through a trivial local mailbox server (the conformance
+`conformance-signalingd` is a ready-made candidate). This would exercise nearly
+every interface at once and could replace the `connect` shortcut as the
+reference example.
 
 ### F4. Drive the sans-I/O `rtc` stack across a real network (tracking)
 
@@ -348,41 +295,23 @@ Any interface/method rename must be mirrored by hand in the
 a mismatch fails only at transpile or runtime. Add a CI check (or generate the
 flags from the WIT) so a drifted rename fails fast with a clear message.
 
-### G3. The jco Node host path is never exercised in CI
+### G3. The jco Node host path is never exercised in CI — Fixed
 
-CI runs only `just test-browser` (headless Chrome). The Node demo
-(`jco-impl/src/run.mjs`, `npm test`) shares `webrtc.js` but exercises the
-`@roamhq/wrtc` backing and JSPI under Node, which the browser test does not.
-Add a Node host run to CI (cheap — no Rust needed beyond the shared component
-build).
+**Fixed** by the conformance suite: the `jco-node` target (and the
+`wasmtime`<->`jco-node` interop pair) runs the guest under Node 24 with
+`--experimental-wasm-jspi` and `@roamhq/wrtc` in every CI run
+(`.github/workflows/conformance.yml`, `just conformance-jco-node`).
 
 ## Suggested priority
 
 1. Correctness the demos can already hit: inbound backpressure (B1), open
    timeout (B2), jco peer close + error trapping (B3, B4).
-2. Make divergence visible: payload/ordering verification (F1) → a Phase-0
-   conformance guest across both hosts (A3), which also pins the error taxonomy
-   (D1) and streaming parity (E1).
-3. Interface-stabilizing decisions (C1, C2) and the crate-level error type (D2).
-4. Strategic build-out: implement `peer-connection` host-side (A2), wire
-   `rendezvous` (F3), and take `wasip3`'s WIT-speaking component to a real
+2. Fix the wasip3 teardown flush (E3) so the `wasmtime`<->`wasip3-guest`
+   interop pairs can be enabled in CI, and finish the error taxonomy in the
+   jco host (D1) with the crate-level error type (D2).
+3. Interface-stabilizing decisions (C1, C2).
+4. Strategic build-out: port `peer-connection` to the demo jco host (A2),
+   wire `rendezvous` (F3), and take `wasip3`'s WIT-speaking component to a real
    network (F4).
-5. Cheap hygiene: de-duplicate the manual host (E2), delete or build the dead
-   `browser-signaling` surface (F2), add the CI gaps (G1, G3), document the
-   `wasip3` limits (E3).
-
-## Fixed opportunistically in this change
-
-- Removed dead public API `send_message` (`wasmtime-impl/src/data_channel.rs`)
-  and `WasiWebrtcCtx::configure_setting_engine` (`wasmtime-impl/src/lib.rs`),
-  both exported but unused anywhere in the repo.
-- Dropped the unused `@bytecodealliance/componentize-js` devDependency from
-  `jco-impl/package.json` (the component is built from Rust via `wasm-tools`;
-  nothing invokes it).
-- Fixed the misleading "Defaults to `true`" comment on `data-channel-options.
-  ordered` in `wit/webrtc.wit` (WIT records have no defaults).
-- Corrected the `jco-impl/webrtc.js` header comment that claimed the host uses
-  the WHATWG `ReadableStream` API (it uses a plain promise queue).
-- Replaced stale "`signaling` design target" wording with "peer-connection" /
-  "guest-driven connection design target" in the Wasmtime host docs
-  (`wasmtime-impl/src/{lib,host,bindings}.rs`) and the `cli-signaling` WIT.
+5. Cheap hygiene: streaming parity in the jco host (E1), the transpile-flag CI
+   check (G1), NAT for `stun-srflx` (A3), demo payload verification (F1).
