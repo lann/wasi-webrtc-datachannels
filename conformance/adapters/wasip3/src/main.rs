@@ -20,76 +20,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use clap::Parser;
-use futures::StreamExt as _;
 
-use conformance_adapter_wasip3::{
-    fold_two, params_for, AdapterReport, PeerOutcome, RawResult, RawStatus, Wasip3Peer,
+use conformance_adapter_common::{
+    fold_two, params_for, plan_for, run_corpus, run_with_retries, write_report, AdapterReport,
+    Plan, RawResult, RetryPolicy, TESTS,
 };
-
-// ----- test planning --------------------------------------------------------
-
-/// How a test is orchestrated across guest instances.
-enum Plan {
-    /// A single `both` instance stands up both peers in-process (no signaling).
-    InProcess,
-    /// A single instance that the guest reports `skipped` regardless of role.
-    Skip,
-    /// Two instances — an offerer and an answerer — share one signaling room.
-    TwoPeer,
-}
-
-/// The orchestration plan for a test id (mirroring the wasmtime adapter: the
-/// guest-level plans are target-independent).
-fn plan_for(test_id: &str) -> Plan {
-    match test_id {
-        "peer-offer-answer"
-        | "peer-create-data-channel"
-        | "peer-local-ice-candidates"
-        | "peer-add-ice-candidate"
-        | "peer-wait-connected"
-        | "peer-close-releases"
-        | "peer-invalid-sdp"
-        | "error-invalid-signaling" => Plan::InProcess,
-        "send-via-stream"
-        | "receive-via-stream"
-        | "receive-via-stream-once"
-        | "post-close-send"
-        | "error-closed"
-        | "error-timed-out" => Plan::Skip,
-        _ => Plan::TwoPeer,
-    }
-}
-
-/// The registry of test ids, mirroring `conformance/tests.toml`.
-const TESTS: &[&str] = &[
-    "label-round-trip",
-    "binary-message",
-    "text-message",
-    "message-boundaries",
-    "zero-length-message",
-    "large-message",
-    "ordering",
-    "payload-integrity",
-    "concurrent-send-receive",
-    "send-via-stream",
-    "receive-via-stream",
-    "receive-via-stream-once",
-    "post-close-send",
-    "max-retransmits-accepted",
-    "error-invalid-signaling",
-    "error-closed",
-    "error-timed-out",
-    "peer-offer-answer",
-    "peer-create-data-channel",
-    "peer-local-ice-candidates",
-    "peer-add-ice-candidate",
-    "peer-wait-connected",
-    "peer-close-releases",
-    "peer-invalid-sdp",
-    "interop-handshake",
-];
+use conformance_adapter_wasip3::Wasip3Peer;
 
 // ----- orchestration --------------------------------------------------------
 
@@ -100,20 +38,19 @@ const TESTS: &[&str] = &[
 /// channel closes) — the same upstream `rtc` timing issue tracked in TODO.md
 /// item E3, retried here with a fresh room.
 fn is_flaky(detail: &str) -> bool {
-    detail.contains("timed-out")
-        || detail.contains("wait-connected")
+    conformance_adapter_common::default_is_flaky(detail)
         || detail.contains("no incoming data channel")
 }
 
-/// The number of connection attempts before a flaky handshake is reported as a
-/// failure. Each attempt uses fresh processes and a fresh room. The in-guest
-/// sans-I/O stack stalls more often than the native hosts (TODO.md item E3), so
-/// this target gets a couple more attempts than the wasmtime adapter's three.
-const MAX_ATTEMPTS: u32 = 5;
-
-/// How long a single attempt may run before it is abandoned as a stalled
-/// handshake and retried (mirroring the wasmtime adapter's guard).
-const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(45);
+/// The retry policy for this target: the in-guest sans-I/O stack stalls more
+/// often than the native hosts (TODO.md item E3), so it gets a couple more
+/// attempts than the wasmtime adapter's three; the per-attempt guard mirrors
+/// the wasmtime adapter's.
+const RETRY: RetryPolicy = RetryPolicy {
+    max_attempts: 5,
+    attempt_timeout: Duration::from_secs(45),
+    is_flaky,
+};
 
 /// Run one test to a raw result, retrying flaky handshakes with fresh rooms.
 async fn run_test(
@@ -123,77 +60,31 @@ async fn run_test(
     room_seq: &AtomicU64,
 ) -> RawResult {
     let (count, size) = params_for(test_id);
-    let mut last_detail = None;
 
-    for _ in 0..MAX_ATTEMPTS {
+    run_with_retries(test_id, &RETRY, async || {
         let room = format!(
             "wasip3-{}-{}",
             test_id,
             room_seq.fetch_add(1, Ordering::SeqCst)
         );
-        let attempt = async {
-            match plan_for(test_id) {
-                Plan::TwoPeer => {
-                    let offerer = peer.run(base_url, test_id, &room, "offerer", count, size);
-                    let answerer = peer.run(base_url, test_id, &room, "answerer", count, size);
-                    let (offerer, answerer) = tokio::join!(offerer, answerer);
-                    Ok(fold_two(offerer?, answerer?))
-                }
-                Plan::InProcess => {
-                    peer.run(base_url, test_id, &room, "both", count, size)
-                        .await
-                }
-                Plan::Skip => {
-                    peer.run(base_url, test_id, &room, "offerer", count, size)
-                        .await
-                }
+        match plan_for(test_id) {
+            Plan::TwoPeer => {
+                let offerer = peer.run(base_url, test_id, &room, "offerer", count, size);
+                let answerer = peer.run(base_url, test_id, &room, "answerer", count, size);
+                let (offerer, answerer) = tokio::join!(offerer, answerer);
+                Ok(fold_two(offerer?, answerer?))
             }
-        };
-        let result: Result<PeerOutcome> = match tokio::time::timeout(ATTEMPT_TIMEOUT, attempt).await
-        {
-            Ok(result) => result,
-            // A stalled attempt is treated like a flaky handshake: retry with a
-            // fresh room rather than hanging the whole run.
-            Err(_) => {
-                last_detail = Some("attempt timed-out".to_string());
-                continue;
+            Plan::InProcess => {
+                peer.run(base_url, test_id, &room, "both", count, size)
+                    .await
             }
-        };
-
-        match result {
-            Ok(PeerOutcome::Pass) => {
-                return RawResult {
-                    test_id: test_id.to_string(),
-                    status: RawStatus::Pass,
-                    detail: None,
-                }
-            }
-            Ok(PeerOutcome::Skipped(reason)) => {
-                return RawResult {
-                    test_id: test_id.to_string(),
-                    status: RawStatus::Skip,
-                    detail: Some(reason),
-                }
-            }
-            Ok(PeerOutcome::Fail(detail)) => {
-                let flaky = is_flaky(&detail);
-                last_detail = Some(detail);
-                if !flaky {
-                    break;
-                }
-            }
-            Err(err) => {
-                last_detail = Some(format!("adapter error: {err:#}"));
-                break;
+            Plan::Skip => {
+                peer.run(base_url, test_id, &room, "offerer", count, size)
+                    .await
             }
         }
-    }
-
-    RawResult {
-        test_id: test_id.to_string(),
-        status: RawStatus::Fail,
-        detail: last_detail,
-    }
+    })
+    .await
 }
 
 // ----- CLI ------------------------------------------------------------------
@@ -254,36 +145,13 @@ async fn main() -> Result<()> {
     };
 
     // Start the signaling server in-process on an ephemeral localhost port.
-    let server = conformance_signalingd::spawn(
-        "127.0.0.1:0".parse().expect("valid loopback address"),
-        conformance_signalingd::Config::default(),
-    )
-    .await
-    .context("starting in-process signaling server")?;
+    let server = conformance_adapter_common::start_signaling_server().await?;
     let base_url = server.base_url();
-    eprintln!("signaling server ready at {base_url}");
 
     let room_seq = AtomicU64::new(0);
-    // Tests are independent (fresh processes, a fresh room per attempt), so run
-    // them concurrently, bounded by `--jobs`. `buffered` preserves the registry
-    // order of the results.
-    let results: Vec<RawResult> = futures::stream::iter(
-        TESTS
-            .iter()
-            .filter(|test_id| cli.only.is_empty() || cli.only.iter().any(|t| &t == test_id)),
-    )
-    .map(|test_id| {
-        let peer = &peer;
-        let base_url = &base_url;
-        let room_seq = &room_seq;
-        async move {
-            let result = run_test(peer, base_url, test_id, room_seq).await;
-            eprintln!("{test_id} … {:?}", result.status);
-            result
-        }
+    let results = run_corpus(TESTS, &cli.only, cli.jobs, |test_id| {
+        run_test(&peer, &base_url, test_id, &room_seq)
     })
-    .buffered(cli.jobs.max(1))
-    .collect()
     .await;
 
     server.shutdown().await;
@@ -293,13 +161,7 @@ async fn main() -> Result<()> {
         environment: cli.environment,
         results,
     };
-
-    std::fs::create_dir_all(&cli.out)
-        .with_context(|| format!("creating results dir {}", cli.out.display()))?;
-    let out_path = cli.out.join(format!("{}.json", cli.target));
-    let json = serde_json::to_string_pretty(&report)?;
-    std::fs::write(&out_path, json).with_context(|| format!("writing {}", out_path.display()))?;
-    eprintln!("wrote {}", out_path.display());
+    write_report(&cli.out, &cli.target, &report)?;
 
     Ok(())
 }

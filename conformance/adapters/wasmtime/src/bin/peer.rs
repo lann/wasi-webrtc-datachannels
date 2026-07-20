@@ -18,7 +18,7 @@ use serde_json::json;
 use wasmtime::component::Component;
 
 use conformance_adapter_wasmtime::{
-    build_engine, make_config, run_instance, run_instance_with_ice, Role, TestConfig, TestResult,
+    build_engine, make_config, run_instance, run_instance_with_ice, Role, TestConfig,
     WebrtcIceConfig, WebrtcIceServer,
 };
 
@@ -123,9 +123,7 @@ async fn main() -> Result<()> {
     // `fail` result rather than a nonzero exit, so the orchestrator sees a
     // structured outcome for every peer.
     let value = match result {
-        Ok(TestResult::Pass) => json!({ "tag": "pass" }),
-        Ok(TestResult::Fail(detail)) => json!({ "tag": "fail", "val": detail }),
-        Ok(TestResult::Skipped(reason)) => json!({ "tag": "skipped", "val": reason }),
+        Ok(outcome) => outcome.to_json(),
         Err(err) => json!({ "tag": "fail", "val": format!("peer error: {err:#}") }),
     };
     println!("{value}");

@@ -188,7 +188,10 @@ conformance/
     server/                # conformance-signalingd (Rust workspace member)
   wit/                     # conformance WIT (Phase 2); deps symlink to root wit/
   guest/                   # conformance guest component(s) (Phase 2)
-  adapters/                # per-target adapters (wasmtime / jco / wasip3)
+  adapters/                # per-target adapters (wasmtime / jco / wasip3);
+                           #   common/ holds the shared native building blocks
+                           #   (registry/plans, peer subprocess invocation,
+                           #   retry loop, corpus runner, result document)
   scenarios/               # ICE lab provisioning (Phase 5+)
 ```
 

@@ -1,0 +1,20 @@
+[package]
+name = "conformance-adapter-common"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Target-independent building blocks shared by the native conformance adapters and orchestrators: the test registry and orchestration plans, the peer-subprocess invocation and result-line parsing, the flaky-handshake retry loop, the bounded-concurrency corpus runner, and the adapter result document."
+
+[lib]
+name = "conformance_adapter_common"
+path = "src/lib.rs"
+
+[dependencies]
+# The suite-owned signaling server, started in-process so each adapter run owns
+# its own mailbox without managing a subprocess.
+conformance-signalingd = { path = "../../signaling/server" }
+tokio = { version = "1", features = ["process", "time"] }
+futures = "0.3"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

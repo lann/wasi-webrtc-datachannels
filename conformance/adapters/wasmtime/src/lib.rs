@@ -5,7 +5,7 @@
 //! state, the WebRTC host via [`wasmtime_webrtc_datachannels`], and the native
 //! HTTP [`mailbox`] host backed by `conformance-signalingd`), the guest bindings,
 //! and the primitive to run one guest instance to a WIT-observable
-//! [`TestResult`]. The adapter binary ([`crate::main`]) layers the full-corpus
+//! [`TestOutcome`]. The adapter binary ([`crate::main`]) layers the full-corpus
 //! orchestration on top; the `conformance-interop` binary reuses the same
 //! primitive to drive one wasmtime peer of an interop pair.
 
@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
-use serde::Serialize;
 use wasmtime::component::{Accessor, Component, HasData, Linker, Resource, ResourceTable};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_webrtc_datachannels::{
@@ -43,9 +42,11 @@ pub mod bindings {
 }
 
 use bindings::conformance::signaling::mailbox::{self, Role as MailboxRole};
-pub use bindings::exports::conformance::suite::runner::{Role, TestConfig, TestResult};
+use bindings::exports::conformance::suite::runner::TestResult;
+pub use bindings::exports::conformance::suite::runner::{Role, TestConfig};
 use bindings::lann::webrtc_datachannels::types::Error;
 pub use bindings::Conformance;
+use conformance_adapter_common::TestOutcome;
 pub use wasmtime_webrtc_datachannels::{WebrtcIceConfig, WebrtcIceServer};
 
 /// Per-store host state: the WebRTC host context plus the resource table shared
@@ -235,34 +236,6 @@ pub fn add_mailbox_to_linker(linker: &mut Linker<Ctx>) -> Result<()> {
     Ok(())
 }
 
-// ----- adapter result document ---------------------------------------------
-
-/// The raw status vocabulary the runner consumes (`results.rs::RawStatus`).
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RawStatus {
-    Pass,
-    Fail,
-    Skip,
-}
-
-/// One raw per-test outcome (`results.rs::RawResult`).
-#[derive(Debug, Clone, Serialize)]
-pub struct RawResult {
-    pub test_id: String,
-    pub status: RawStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-}
-
-/// The adapter result document (`results.rs::AdapterReport`).
-#[derive(Debug, Clone, Serialize)]
-pub struct AdapterReport {
-    pub target: String,
-    pub environment: String,
-    pub results: Vec<RawResult>,
-}
-
 // ----- guest orchestration --------------------------------------------------
 
 /// A wasmtime engine configured for the component model with async support.
@@ -322,17 +295,17 @@ pub fn make_config(role: Role, base_url: &str, room: &str, count: u32, size: u32
     }
 }
 
-/// Run one guest instance to a [`TestResult`].
+/// Run one guest instance to a [`TestOutcome`].
 pub async fn run_instance(
     engine: &Engine,
     component: &Component,
     test_id: &str,
     config: TestConfig,
-) -> Result<TestResult> {
+) -> Result<TestOutcome> {
     run_instance_in_store(new_store(engine), engine, component, test_id, config).await
 }
 
-/// Run one guest instance to a [`TestResult`] with an explicit ICE-lab network
+/// Run one guest instance to a [`TestOutcome`] with an explicit ICE-lab network
 /// configuration (bind address, STUN/TURN servers, relay-only policy). Used by
 /// the single-peer `conformance-peer` binary the ICE-lab orchestrator launches
 /// inside a network namespace.
@@ -342,7 +315,7 @@ pub async fn run_instance_with_ice(
     test_id: &str,
     config: TestConfig,
     ice: WebrtcIceConfig,
-) -> Result<TestResult> {
+) -> Result<TestOutcome> {
     run_instance_in_store(
         new_store_with_ice(engine, ice),
         engine,
@@ -360,7 +333,7 @@ async fn run_instance_in_store(
     component: &Component,
     test_id: &str,
     config: TestConfig,
-) -> Result<TestResult> {
+) -> Result<TestOutcome> {
     let mut linker: Linker<Ctx> = Linker::new(engine);
     webrtc_host::add_to_linker(&mut linker)?;
     add_mailbox_to_linker(&mut linker)?;
@@ -375,35 +348,11 @@ async fn run_instance_in_store(
                 .await
         })
         .await??;
-    Ok(result)
-}
-
-/// The `(message-count, message-size)` a test runs with.
-pub fn params_for(test_id: &str) -> (u32, u32) {
-    match test_id {
-        "large-message" => (1, 16384),
-        "message-boundaries"
-        | "ordering"
-        | "payload-integrity"
-        | "concurrent-send-receive"
-        | "interop-handshake" => (16, 512),
-        _ => (4, 256),
-    }
-}
-
-/// Fold two per-instance results into one: any fail loses, else any skip, else
-/// pass.
-pub fn fold_two(offerer: TestResult, answerer: TestResult) -> TestResult {
-    match (offerer, answerer) {
-        (TestResult::Fail(a), TestResult::Fail(b)) => {
-            TestResult::Fail(format!("offerer: {a}; answerer: {b}"))
-        }
-        (TestResult::Fail(a), _) => TestResult::Fail(format!("offerer: {a}")),
-        (_, TestResult::Fail(b)) => TestResult::Fail(format!("answerer: {b}")),
-        (TestResult::Skipped(a), _) => TestResult::Skipped(a),
-        (_, TestResult::Skipped(b)) => TestResult::Skipped(b),
-        (TestResult::Pass, TestResult::Pass) => TestResult::Pass,
-    }
+    Ok(match result {
+        TestResult::Pass => TestOutcome::Pass,
+        TestResult::Fail(detail) => TestOutcome::Fail(detail),
+        TestResult::Skipped(reason) => TestOutcome::Skipped(reason),
+    })
 }
 
 // ----- ICE lab scenarios ----------------------------------------------------

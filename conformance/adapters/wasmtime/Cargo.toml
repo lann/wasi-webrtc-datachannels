@@ -33,6 +33,9 @@ name = "conformance-ice"
 path = "src/bin/ice.rs"
 
 [dependencies]
+# The shared adapter building blocks: outcomes, the peer-subprocess invocation,
+# the retry loop, the corpus runner, and the result document.
+conformance-adapter-common = { path = "../common" }
 # The wasmtime host under test: satisfies the guest's `connections`/`types`
 # imports with a real webrtc-rs data channel and peer connection.
 wasmtime-webrtc-datachannels = { path = "../../../wasmtime-impl" }
