@@ -76,6 +76,14 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
+          # Share one cache across every CI job (this workflow and ci.yml). By
+          # default rust-cache keys the cache by job id, so each job had its own
+          # entry and this conformance job never reused the registry or the
+          # compiled workspace dependencies built by the ci.yml jobs. A common
+          # `shared-key` replaces the job-id key so all jobs restore/save the
+          # same cache; they share one Cargo.lock, so dependency builds are
+          # reusable across them.
+          shared-key: cargo
           cache-all-crates: true
 
       - name: Install dependencies
