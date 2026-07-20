@@ -209,8 +209,13 @@ process stdout, folds the two peer results, and writes
 `conformance/results/wasmtime-shadow.json` (environment `shadow`), so it appears
 as its own matrix row.
 
-Run it from the repository root (needs `shadow` on `PATH`, installed by
-[`scripts/setup.sh`](../scripts/setup.sh)):
+Run it from the repository root (needs `shadow` on `PATH`). Shadow ships no
+upstream prebuilt binary, so install it into `~/.local` by downloading the
+prebuilt binary from this repository's `shadow-dev` GitHub prerelease
+([`scripts/download-shadow.sh`](../scripts/download-shadow.sh)) or by building it
+from source ([`scripts/build-shadow.sh`](../scripts/build-shadow.sh)).
+`scripts/setup.sh` does not install Shadow; the recipe below prints this guidance
+and fails if the binary is missing:
 
 ```sh
 just conformance-shadow
@@ -223,7 +228,9 @@ flag; the netns ICE lab, which runs on a real kernel, is unchanged.
 
 CI runs the Shadow lab in a dedicated job (`shadow-lab` in
 [`.github/workflows/conformance.yml`](../.github/workflows/conformance.yml));
-Shadow ships no prebuilt binary, so it is built from source (cached by ref).
+Shadow ships no prebuilt binary, so the job downloads the prebuilt binary from
+the `shadow-dev` prerelease (built on demand by the `shadow-build` workflow)
+rather than rebuilding from source.
 
 ## Layout
 

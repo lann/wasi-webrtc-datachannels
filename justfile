@@ -189,8 +189,27 @@ conformance-nat: (conformance-ice "stun-srflx") (conformance-ice "nat-symmetric"
 # restricted sandboxes and CI. The orchestrator (conformance-shadow) generates a
 # single Shadow config, runs `shadow` once, and writes
 # conformance/results/wasmtime-shadow.json (the `shadow` environment column).
-# Needs `shadow` on PATH (installed by scripts/setup.sh).
+# Needs `shadow` on PATH; install it with scripts/download-shadow.sh (prebuilt,
+# from the `shadow-dev` release) or scripts/build-shadow.sh (from source).
 conformance-shadow: build-conformance-guest build-signalingd
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v shadow >/dev/null 2>&1; then
+        cat >&2 <<'EOF'
+    ==> ERROR: the `shadow` binary is required by the Shadow lab but was not found
+        on PATH.
+
+        Shadow ships no upstream prebuilt binary, so install it one of these ways:
+          * Download the prebuilt binary from the `shadow-dev` GitHub prerelease:
+              ./scripts/download-shadow.sh
+          * Build it from source (slow; needs the Debian/Ubuntu build deps):
+              ./scripts/build-shadow.sh
+
+        Both install to ~/.local (bin/shadow + lib/libshadow_*.so); make sure
+        ~/.local/bin is on PATH afterward.
+    EOF
+        exit 1
+    fi
     cargo build --release -p conformance-adapter-wasmtime \
         --bin conformance-peer --bin conformance-shadow
     timeout {{conformance-timeout}} target/release/conformance-shadow \

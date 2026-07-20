@@ -41,5 +41,18 @@ jobs:
           # jco-node adapter require.
           node-version: "24"
 
+      - name: Download Shadow from release
+        # Fetch the prebuilt Shadow network simulator from the `shadow-dev`
+        # prerelease into ~/.local so the conformance Shadow lab
+        # (`just conformance-shadow`) works in the agent environment without a
+        # slow from-source build. Dispatch .github/workflows/shadow-build.yml if
+        # the release does not exist yet. Best-effort: if the release is missing,
+        # provisioning still succeeds and the lab recipe prints install guidance
+        # when it is run without the binary.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/download-shadow.sh
+
       - name: Install dependencies
         run: ./scripts/setup.sh

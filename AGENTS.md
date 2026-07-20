@@ -157,13 +157,21 @@ It is idempotent, so it is safe to re-run. Assuming a Rust toolchain (via
 It adds the `wasm32-unknown-unknown` and `wasm32-wasip2` Rust targets; installs
 `wasm-tools`, `just`, `cargo-nextest`, `wac`, and `wasmtime` (each skipped if
 already on `PATH`; versions pinned via `*_VERSION` variables); installs the
-ICE-lab tools (iproute2, nftables, coturn; skip with `SKIP_ICE_LAB=1`); builds
-and installs the Shadow network simulator from source (skip with
-`SKIP_SHADOW=1`, or skipped automatically if `shadow` is already on `PATH`); and
-runs `npm install` in `jco-impl` and `conformance/adapters/jco`. Set
-`SKIP_NODE=1` to skip the Node dependencies when you only need the
-Rust/Wasmtime path. CI is kept in sync by calling this same script rather than
-duplicating the install steps.
+ICE-lab tools (iproute2, nftables, coturn; skip with `SKIP_ICE_LAB=1`); and runs
+`npm install` in `jco-impl` and `conformance/adapters/jco`. Set `SKIP_NODE=1` to
+skip the Node dependencies when you only need the Rust/Wasmtime path. It does
+**not** install the Shadow network simulator (see below). CI is kept in sync by
+calling this same script rather than duplicating the install steps.
+
+Shadow ships no upstream prebuilt binary and is slow to build, so it is built
+once by the `shadow-build` workflow (`.github/workflows/shadow-build.yml`, a
+`workflow_dispatch`-only job that runs `scripts/build-shadow.sh`) and published
+to this repository's `shadow-dev` GitHub prerelease. Install it into `~/.local`
+either by downloading that binary (`./scripts/download-shadow.sh`) or by building
+it locally (`./scripts/build-shadow.sh`); CI's Shadow-lab job and
+`copilot-setup-steps.yml` download it from the release. The `just
+conformance-shadow` recipe prints this guidance and fails if the binary is
+missing when the lab runs.
 
 ```sh
 # Guest component (produces examples/echo-demo/build/echo-demo.component.wasm):
@@ -204,7 +212,8 @@ just conformance-ice lan
 
 # Conformance Shadow lab (the two-peer corpus over a non-loopback path inside
 # the Shadow discrete-event network simulator — deterministic, no root or
-# network namespaces). Needs `shadow` on PATH (built by scripts/setup.sh):
+# network namespaces). Needs `shadow` on PATH (install with
+# scripts/download-shadow.sh or scripts/build-shadow.sh):
 just conformance-shadow
 ```
 
