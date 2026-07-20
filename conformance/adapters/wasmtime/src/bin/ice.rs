@@ -1,12 +1,14 @@
 //! The conformance ICE-lab orchestrator.
 //!
 //! It runs the two-peer behavioral corpus for one target in one ICE scenario
-//! (`lan`, `stun-srflx`, `turn-relay`; see `conformance/PLAN.md` Phase 5) over a
-//! provisioned network-namespace topology. Each test's two peers run as separate
-//! `conformance-peer` processes, one placed in the offerer namespace and one in
-//! the answerer namespace (`ip netns exec`), so their handshake traverses a real
-//! routed path — and, for the server-mediated scenarios, is forced through the
-//! STUN/TURN server because the router blocks the direct peer-to-peer path.
+//! (`lan`, `stun-srflx`, `turn-relay`, `nat-symmetric`; see
+//! `conformance/PLAN.md` Phases 5 and 6) over a provisioned network-namespace
+//! topology. Each test's two peers run as separate `conformance-peer` processes,
+//! one placed in the offerer namespace and one in the answerer namespace
+//! (`ip netns exec`), so their handshake traverses a real routed path — and, for
+//! the server-mediated scenarios, is forced through the STUN/TURN server because
+//! the router blocks the direct peer-to-peer path (and, for the NAT scenarios,
+//! rewrites each peer's address).
 //!
 //! The signaling server (and, for `turn-relay`/`stun-srflx`, coturn) run in the
 //! signaling namespace, reachable from both peers through the router. The result
@@ -43,7 +45,7 @@ const RETRY: RetryPolicy = RetryPolicy {
 #[derive(Debug, Parser)]
 #[command(name = "conformance-ice", version)]
 struct Cli {
-    /// Scenario to run (`lan`, `stun-srflx`, `turn-relay`).
+    /// Scenario to run (`lan`, `stun-srflx`, `turn-relay`, `nat-symmetric`).
     #[arg(long)]
     scenario: String,
 

@@ -76,7 +76,8 @@ conformance/                           # cross-implementation conformance suite
   guest/                               #   the shared conformance guest component
   adapters/                            #   per-target drivers: wasmtime, jco (Node +
                                        #     browser), wasip3 (composed in-guest stack),
-                                       #     plus the interop-pair and ICE-lab binaries;
+                                       #     plus the interop-pair, ICE-lab, and
+                                       #     Shadow-lab binaries;
                                        #     common/ = the shared native building blocks
                                        #     (conformance-adapter-common)
   runner/                              #   classifies results against manifests and
@@ -157,10 +158,20 @@ It adds the `wasm32-unknown-unknown` and `wasm32-wasip2` Rust targets; installs
 `wasm-tools`, `just`, `cargo-nextest`, `wac`, and `wasmtime` (each skipped if
 already on `PATH`; versions pinned via `*_VERSION` variables); installs the
 ICE-lab tools (iproute2, nftables, coturn; skip with `SKIP_ICE_LAB=1`); and runs
-`npm install` in `jco-impl` and `conformance/adapters/jco`. Set `SKIP_NODE=1`
-to skip the Node dependencies when you only need the Rust/Wasmtime path. CI is
-kept in sync by calling this same script rather than duplicating the install
-steps.
+`npm install` in `jco-impl` and `conformance/adapters/jco`. Set `SKIP_NODE=1` to
+skip the Node dependencies when you only need the Rust/Wasmtime path. It does
+**not** install the Shadow network simulator (see below). CI is kept in sync by
+calling this same script rather than duplicating the install steps.
+
+Shadow ships no upstream prebuilt binary and is slow to build, so it is built
+once by the `shadow-build` workflow (`.github/workflows/shadow-build.yml`, a
+`workflow_dispatch`-only job that runs `scripts/build-shadow.sh`) and published
+to this repository's `shadow-dev` GitHub prerelease. Install it into `~/.local`
+either by downloading that binary (`./scripts/download-shadow.sh`) or by building
+it locally (`./scripts/build-shadow.sh`); CI's Shadow-lab job and
+`copilot-setup-steps.yml` download it from the release. The `just
+conformance-shadow` recipe prints this guidance and fails if the binary is
+missing when the lab runs.
 
 ```sh
 # Guest component (produces examples/echo-demo/build/echo-demo.component.wasm):
@@ -198,6 +209,12 @@ just conformance
 # Conformance ICE lab (real non-loopback candidate paths via network
 # namespaces; needs sudo and coturn — see the recipe comments):
 just conformance-ice lan
+
+# Conformance Shadow lab (the two-peer corpus over a non-loopback path inside
+# the Shadow discrete-event network simulator — deterministic, no root or
+# network namespaces). Needs `shadow` on PATH (install with
+# scripts/download-shadow.sh or scripts/build-shadow.sh):
+just conformance-shadow
 ```
 
 The recipes above are the underlying npm/cargo invocations documented in

@@ -19,6 +19,13 @@
 #     integration test (`just test-webrtc-composed`)
 #   - iproute2, nftables, and coturn, used by the conformance ICE lab
 #     (`just conformance-ice`; skip with SKIP_ICE_LAB=1)
+#   - the conformance Shadow lab (`just conformance-shadow`) needs the Shadow
+#     network simulator, which this script does NOT install. Shadow ships no
+#     upstream prebuilt binary and is slow to build, so it is built once by the
+#     shadow-build workflow (scripts/build-shadow.sh) and published to the
+#     `shadow-dev` GitHub prerelease; fetch it with scripts/download-shadow.sh or
+#     build it locally with scripts/build-shadow.sh. The lab recipe prints this
+#     guidance and fails if the binary is missing when it runs.
 #   - the Node host's npm dependencies (jco + @roamhq/wrtc), and the conformance
 #     jco adapter's npm dependencies (jco + @roamhq/wrtc + playwright-core)
 #
@@ -153,6 +160,9 @@ fi
 # found by later `run:` steps even though they exist on disk.
 if [ -n "${GITHUB_PATH:-}" ]; then
   echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+  # Shadow (installed to ~/.local/bin by scripts/download-shadow.sh or
+  # scripts/build-shadow.sh) lives here too.
+  echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 fi
 
 log "Setup complete"

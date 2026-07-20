@@ -149,17 +149,19 @@ conformance-interop: transpile-conformance-guest build-conformance-wasip3 build-
     timeout {{conformance-timeout}} target/release/conformance-interop \
         --pair wasmtime-x-jco-node --pair jco-node-x-wasmtime
 
-# Run the conformance ICE lab for one scenario (lan | stun-srflx | turn-relay;
-# see conformance/PLAN.md Phase 5). The orchestrator (conformance-ice) provisions
-# a routed network-namespace topology (conformance/scenarios/), places the two
-# peers of each two-peer test in separate namespaces, and — for the
-# server-mediated scenarios — routes them through coturn while the router blocks
-# the direct path, so the handshake exercises a real (non-loopback) candidate
-# path. Writes conformance/results/wasmtime-<scenario>.json (environment column
-# in the matrix). Needs root for `ip netns exec` (hence sudo) and `turnserver`
-# on PATH for the non-`lan` scenarios (installed by scripts/setup.sh). The lab is
-# always torn down on exit. NOTE: `stun-srflx` needs NAT on the router to be
-# meaningful (see the README / Phase 6); `lan` and `turn-relay` run without it.
+# Run the conformance ICE lab for one scenario (lan | stun-srflx | turn-relay |
+# nat-symmetric; see conformance/PLAN.md Phases 5 and 6). The orchestrator
+# (conformance-ice) provisions a routed network-namespace topology
+# (conformance/scenarios/), places the two peers of each two-peer test in
+# separate namespaces, and — for the server-mediated scenarios — routes them
+# through coturn while the router blocks the direct path (and, for the NAT
+# scenarios, source-NATs each peer), so the handshake exercises a real
+# (non-loopback) candidate path. Writes conformance/results/wasmtime-<scenario>.json
+# (environment column in the matrix). Needs root for `ip netns exec` (hence sudo)
+# and `turnserver` on PATH for the non-`lan` scenarios (installed by
+# scripts/setup.sh). The lab is always torn down on exit. `stun-srflx` runs behind
+# a port-restricted (cone) NAT so its srflx path is meaningful; `nat-symmetric`
+# runs behind a symmetric NAT so ICE must fall back to a TURN relay.
 conformance-ice scenario="lan": build-conformance-guest build-signalingd
     cargo build --release -p conformance-adapter-wasmtime \
         --bin conformance-peer --bin conformance-ice
@@ -169,6 +171,51 @@ conformance-ice scenario="lan": build-conformance-guest build-signalingd
         --signaling-bin target/debug/conformance-signalingd \
         --peer-bin target/release/conformance-peer \
         --scenarios-dir conformance/scenarios \
+        --out conformance/results
+
+# Run the NAT matrix (conformance/PLAN.md Phase 6): the srflx scenario behind a
+# port-restricted (cone) NAT, where the server-reflexive candidates connect, and
+# the symmetric-NAT scenario, where srflx fails and ICE must fall back to a TURN
+# relay. Both write conformance/results/wasmtime-<scenario>.json. This is the
+# workstation entry point and the nightly CI Job 3 (continue-on-error until
+# proven stable). Requires the same privileges/tools as `conformance-ice`.
+conformance-nat: (conformance-ice "stun-srflx") (conformance-ice "nat-symmetric")
+
+# Run the two-peer corpus inside the Shadow network simulator
+# (https://github.com/shadow/shadow). Like the ICE lab it places the two peers
+# of each test on separate hosts over a routed, non-loopback path — but Shadow
+# simulates the network in user space, so it needs NO root, network namespaces,
+# or real kernel networking, which makes it reproducible and runnable in
+# restricted sandboxes and CI. The orchestrator (conformance-shadow) generates a
+# single Shadow config, runs `shadow` once, and writes
+# conformance/results/wasmtime-shadow.json (the `shadow` environment column).
+# Needs `shadow` on PATH; install it with scripts/download-shadow.sh (prebuilt,
+# from the `shadow-dev` release) or scripts/build-shadow.sh (from source).
+conformance-shadow: build-conformance-guest build-signalingd
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v shadow >/dev/null 2>&1; then
+        cat >&2 <<'EOF'
+    ==> ERROR: the `shadow` binary is required by the Shadow lab but was not found
+        on PATH.
+
+        Shadow ships no upstream prebuilt binary, so install it one of these ways:
+          * Download the prebuilt binary from the `shadow-dev` GitHub prerelease:
+              ./scripts/download-shadow.sh
+          * Build it from source (slow; needs the Debian/Ubuntu build deps):
+              ./scripts/build-shadow.sh
+
+        Both install to ~/.local (bin/shadow + lib/libshadow_*.so); make sure
+        ~/.local/bin is on PATH afterward.
+    EOF
+        exit 1
+    fi
+    cargo build --release -p conformance-adapter-wasmtime \
+        --bin conformance-peer --bin conformance-shadow
+    timeout {{conformance-timeout}} target/release/conformance-shadow \
+        --guest conformance/guest/build/conformance-guest.component.wasm \
+        --signaling-bin target/debug/conformance-signalingd \
+        --peer-bin target/release/conformance-peer \
         --out conformance/results
 
 # Build the echo-demo guest component into examples/echo-demo/build/.

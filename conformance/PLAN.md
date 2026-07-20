@@ -398,24 +398,28 @@ the reviewer directs otherwise.
 - **Done when:** `lan`, `stun-srflx`, `turn-relay` green in CI Job 2 for
   wasmtime + jco-node (wasip3-guest where its manifest allows).
 
-  **Status (partial — reviewer sign-off needed):** the lab is built and wired —
-  the `scenarios/` scripts, the host per-peer-connection ICE config, the
+  **Status (COMPLETED for wasmtime):** the lab is built and wired — the
+  `scenarios/` scripts, the host per-peer-connection ICE config, the
   `conformance-peer` / `conformance-ice` orchestrator, the runner's
   `(target, environment)` rows + environment matrix column, `just
-  conformance-ice`, CI Job 2 (`ice-lab`), and the `setup.sh` / README docs. Two
-  deviations from the done-when, left for the reviewer to confirm:
-  - **`stun-srflx` is provisioned but not asserted:** without NAT a peer's
-    server-reflexive address equals its host address, so blocking the direct
-    path also blocks srflx — a meaningful srflx run needs the Phase 6 NAT
-    topology. CI Job 2 asserts only `lan` and `turn-relay`.
+  conformance-ice`, CI Job 2 (`ice-lab`), and the `setup.sh` / README docs. With
+  the Phase 6 NAT topology in place, `stun-srflx` is now meaningful (a peer's
+  server-reflexive address differs from its host address behind the
+  port-restricted cone NAT) and is asserted in the nightly NAT matrix (CI Job 3),
+  resolving the Phase 5 blocker; `lan` and `turn-relay` remain asserted in the
+  every-PR Job 2. Two deviations from the done-when remain for the reviewer:
+  - **`stun-srflx` asserted nightly, not on every PR:** because it now depends on
+    the NAT paths, it follows Phase 6's "continue-on-error until stable" policy
+    (Job 3) rather than gating every PR in Job 2. Graduation to blocking is a
+    later, human decision.
   - **wasmtime only:** the lab orchestrator runs the wasmtime host per peer.
     jco-node in the lab is deferred (it needs a per-peer Node runner placed in a
     namespace).
 
-  The data path (real veth / TURN relay) is validated on CI Job 2 runners; it
-  cannot be exercised where non-loopback traffic is blocked, so everything else
-  is verified statically (Rust build/clippy/fmt/unit tests, shellcheck, and
-  provisioning up/down).
+  The data path (real veth / TURN relay / NAT) is validated on CI Job 2/3
+  runners; it cannot be exercised where non-loopback traffic is blocked, so
+  everything else is verified statically (Rust build/clippy/fmt/unit tests,
+  shellcheck, and provisioning up/down).
 
 ### Phase 6 — NAT matrix
 - nftables NAT simulations (port-restricted, symmetric); assertions that
@@ -424,6 +428,24 @@ the reviewer directs otherwise.
   generous timeouts, diagnostic capture on failure).
 - **Done when:** NAT matrix runs clean on a workstation and the nightly job is
   wired (stability graduation to blocking is a later, human decision).
+
+  **Status (partial — reviewer sign-off / workstation run needed):** the NAT
+  simulations are built and wired — `scenarios/nftables.sh` source-NATs each
+  peer's forwarded traffic to its own public address (`snat … persistent` for the
+  port-restricted cone NAT used by `stun-srflx`, `snat … random` for the
+  symmetric NAT used by the new `nat-symmetric` scenario), the `Scenario` enum
+  and per-peer ICE config gained `nat-symmetric` (STUN+TURN, no relay-only, so
+  ICE falls back to relay), `just conformance-nat` runs both NAT scenarios, and
+  CI Job 3 (`nat-matrix`) runs them nightly / on `workflow_dispatch` with
+  `continue-on-error`. The two assertions are: `stun-srflx` connects via a
+  server-reflexive path behind the cone NAT (also completing Phase 5), and
+  `nat-symmetric` connects only via a TURN relay behind the symmetric NAT.
+
+  Because the sandbox blocks non-loopback traffic inside the lab namespaces, the
+  NAT data path could not be exercised here; it is verified statically (Rust
+  build/clippy/fmt/unit tests, nftables rule parsing, and provisioning up/down).
+  Running the matrix clean on a workstation (or the nightly runner) is left for
+  the reviewer to confirm.
 
 ### Phase 7 — Full interop matrix + reporting polish
 - All supported ordered target pairs across all supported scenarios; matrix

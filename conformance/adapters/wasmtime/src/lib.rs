@@ -271,9 +271,20 @@ pub fn new_store(engine: &Engine) -> Store<Ctx> {
 /// loopback candidates are *not* forced: lab peers connect over real interface
 /// addresses, so gathering the loopback host candidate would only add a
 /// never-connectable pair.
-pub fn new_store_with_ice(engine: &Engine, ice: WebrtcIceConfig) -> Store<Ctx> {
+///
+/// When `disable_mdns` is set, multicast-DNS candidate gathering is turned off.
+/// The Shadow environment (`conformance-shadow`) needs this because Shadow's
+/// simulated network stack does not implement the multicast-socket options
+/// (`SO_REUSEADDR`/`SO_REUSEPORT`) mDNS binds with; the routed netns lab leaves
+/// it on, so both environments keep their own behavior.
+pub fn new_store_with_ice(engine: &Engine, ice: WebrtcIceConfig, disable_mdns: bool) -> Store<Ctx> {
     let mut webrtc = WasiWebrtcCtx::new();
     webrtc.set_ice_config(ice);
+    if disable_mdns {
+        webrtc.set_setting_engine_hook(|engine| {
+            engine.set_multicast_dns_mode(rtc::ice::mdns::MulticastDnsMode::Disabled);
+        });
+    }
     Store::new(
         engine,
         Ctx {
@@ -309,15 +320,19 @@ pub async fn run_instance(
 /// configuration (bind address, STUN/TURN servers, relay-only policy). Used by
 /// the single-peer `conformance-peer` binary the ICE-lab orchestrator launches
 /// inside a network namespace.
+///
+/// `disable_mdns` turns off multicast-DNS candidate gathering; see
+/// [`new_store_with_ice`] for why the Shadow environment needs it.
 pub async fn run_instance_with_ice(
     engine: &Engine,
     component: &Component,
     test_id: &str,
     config: TestConfig,
     ice: WebrtcIceConfig,
+    disable_mdns: bool,
 ) -> Result<TestOutcome> {
     run_instance_in_store(
-        new_store_with_ice(engine, ice),
+        new_store_with_ice(engine, ice, disable_mdns),
         engine,
         component,
         test_id,
@@ -392,11 +407,17 @@ impl Default for LabConfig {
 pub enum Scenario {
     /// Direct host-candidate connectivity over the router (no STUN/TURN server).
     Lan,
-    /// Server-reflexive candidates via a STUN server; the direct path is blocked.
+    /// Server-reflexive candidates via a STUN server behind a port-restricted
+    /// (cone) NAT; the direct path is blocked, and the cone NAT lets the srflx
+    /// candidates connect (see `conformance/PLAN.md` Phase 6).
     StunSrflx,
     /// Relayed candidates via a TURN server; the direct path is blocked and the
     /// peers are relay-only.
     TurnRelay,
+    /// A symmetric NAT with a STUN/TURN server available but no relay-only
+    /// policy: the direct path is blocked and the symmetric NAT makes the srflx
+    /// candidates unusable, so ICE must fall back to a TURN relay (Phase 6).
+    NatSymmetric,
 }
 
 impl Scenario {
@@ -407,16 +428,20 @@ impl Scenario {
             Scenario::Lan => "lan",
             Scenario::StunSrflx => "stun-srflx",
             Scenario::TurnRelay => "turn-relay",
+            Scenario::NatSymmetric => "nat-symmetric",
         }
     }
 
-    /// Parse a scenario id (`lan`, `stun-srflx`, `turn-relay`).
+    /// Parse a scenario id (`lan`, `stun-srflx`, `turn-relay`, `nat-symmetric`).
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "lan" => Ok(Scenario::Lan),
             "stun-srflx" => Ok(Scenario::StunSrflx),
             "turn-relay" => Ok(Scenario::TurnRelay),
-            other => anyhow::bail!("unknown scenario {other:?} (lan|stun-srflx|turn-relay)"),
+            "nat-symmetric" => Ok(Scenario::NatSymmetric),
+            other => anyhow::bail!(
+                "unknown scenario {other:?} (lan|stun-srflx|turn-relay|nat-symmetric)"
+            ),
         }
     }
 
@@ -453,6 +478,16 @@ impl Scenario {
                 }];
                 ice.relay_only = true;
             }
+            Scenario::NatSymmetric => {
+                // A TURN server (which also serves STUN, so the peer gathers both
+                // srflx and relay candidates) with no relay-only policy: under a
+                // symmetric NAT the srflx pair fails and ICE falls back to relay.
+                ice.ice_servers = vec![WebrtcIceServer {
+                    urls: vec![format!("turn:{}?transport=udp", lab.server_addr)],
+                    username: lab.turn_user.clone(),
+                    credential: lab.turn_pass.clone(),
+                }];
+            }
         }
         ice
     }
@@ -464,7 +499,12 @@ mod scenario_tests {
 
     #[test]
     fn scenario_ids_round_trip() {
-        for s in [Scenario::Lan, Scenario::StunSrflx, Scenario::TurnRelay] {
+        for s in [
+            Scenario::Lan,
+            Scenario::StunSrflx,
+            Scenario::TurnRelay,
+            Scenario::NatSymmetric,
+        ] {
             assert_eq!(Scenario::parse(s.as_str()).unwrap(), s);
         }
         assert!(Scenario::parse("nope").is_err());
@@ -497,6 +537,22 @@ mod scenario_tests {
     fn turn_relay_is_relay_only_with_credentials() {
         let ice = Scenario::TurnRelay.ice_config(Role::Answerer, &LabConfig::default());
         assert!(ice.relay_only);
+        assert_eq!(ice.ice_servers.len(), 1);
+        assert_eq!(
+            ice.ice_servers[0].urls,
+            vec!["turn:10.79.3.2:3478?transport=udp".to_string()]
+        );
+        assert_eq!(ice.ice_servers[0].username, "conf");
+        assert_eq!(ice.ice_servers[0].credential, "conf");
+    }
+
+    #[test]
+    fn nat_symmetric_offers_turn_without_relay_only() {
+        // The symmetric-NAT scenario configures a TURN server (which also serves
+        // STUN) but leaves relay-only off, so the peer gathers srflx *and* relay
+        // candidates and falls back to relay when srflx fails under symmetric NAT.
+        let ice = Scenario::NatSymmetric.ice_config(Role::Offerer, &LabConfig::default());
+        assert!(!ice.relay_only);
         assert_eq!(ice.ice_servers.len(), 1);
         assert_eq!(
             ice.ice_servers[0].urls,

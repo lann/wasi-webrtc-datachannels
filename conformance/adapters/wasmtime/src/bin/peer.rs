@@ -80,6 +80,13 @@ struct Cli {
     /// policy). Requires `--ice-server-url` to name a TURN server.
     #[arg(long, default_value_t = false)]
     relay_only: bool,
+
+    /// Disable multicast-DNS candidate gathering. Required under Shadow (the
+    /// `conformance-shadow` environment), whose simulated network stack does not
+    /// implement the multicast-socket options mDNS binds with; the routed netns
+    /// lab leaves it enabled.
+    #[arg(long, default_value_t = false)]
+    disable_mdns: bool,
 }
 
 fn parse_role(s: &str) -> Result<Role, String> {
@@ -115,7 +122,15 @@ async fn main() -> Result<()> {
         None => run_instance(&engine, &component, &cli.test, config).await,
         Some(addr) => {
             let ice = build_ice_config(&cli, addr);
-            run_instance_with_ice(&engine, &component, &cli.test, config, ice).await
+            run_instance_with_ice(
+                &engine,
+                &component,
+                &cli.test,
+                config,
+                ice,
+                cli.disable_mdns,
+            )
+            .await
         }
     };
 
