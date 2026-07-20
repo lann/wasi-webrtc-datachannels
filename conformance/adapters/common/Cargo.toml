@@ -9,6 +9,16 @@ description = "Target-independent building blocks shared by the native conforman
 name = "conformance_adapter_common"
 path = "src/lib.rs"
 
+# The Shadow-lab environment executor: generates a Shadow network-simulator
+# config placing each two-peer test on its own simulated hosts, runs `shadow`
+# once, and writes the `<target>-shadow.json` result document. Target-neutral:
+# `--peer-kind` selects the per-role peer command (the native conformance-peer
+# or the composed wasip3 component under `wasmtime run`). Unlike the ICE lab it
+# needs no root or network namespaces.
+[[bin]]
+name = "conformance-shadow"
+path = "src/bin/shadow.rs"
+
 [dependencies]
 # The suite-owned signaling server, started in-process so each adapter run owns
 # its own mailbox without managing a subprocess.
@@ -18,3 +28,5 @@ futures = "0.3"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# CLI parsing for the conformance-shadow executor binary.
+clap = { version = "4", features = ["derive", "env"] }

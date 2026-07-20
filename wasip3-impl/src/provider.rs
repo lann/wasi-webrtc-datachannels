@@ -8,11 +8,12 @@
 //! - [`DataChannel`] is a handle onto a channel tracked by a peer connection's
 //!   shared state; `send`/`receive` observe that state and wake the pump.
 //!
-//! `peer-connection` binds its socket on IPv4 loopback: this component is the
-//! composable, self-contained provider used for same-host integration testing,
-//! where both peers run in one process and reach each other over `127.0.0.1`.
-//! Real (non-loopback) networking is a later step (it needs a way for the
-//! consumer to choose the bind address and a routable host candidate).
+//! `peer-connection` binds its socket on the IP address named by the
+//! `WEBRTC_UDP_BIND_ADDR` environment variable, defaulting to IPv4 loopback —
+//! the address the same-host integration and conformance loopback runs use,
+//! where both peers reach each other over `127.0.0.1`. A routable address
+//! makes the peer's host candidate reachable across a real (non-loopback)
+//! network path, as the Shadow lab exercises.
 
 use std::cell::RefCell;
 use std::net::{IpAddr, Ipv4Addr};
@@ -34,6 +35,23 @@ use crate::lann::webrtc_datachannels::types::{
 
 /// IPv4 loopback: same-host peers reach each other over `127.0.0.1`.
 const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+/// The environment variable naming the IP address `peer-connection` binds its
+/// UDP socket to (and derives its host candidate from). Unset or empty means
+/// [`LOOPBACK`].
+const BIND_ADDR_ENV: &str = "WEBRTC_UDP_BIND_ADDR";
+
+/// The bind address chosen through [`BIND_ADDR_ENV`]. A set-but-unparsable
+/// value is an error (surfaced through the dead-peer path) rather than a
+/// silent fallback to loopback.
+fn bind_ip() -> anyhow::Result<IpAddr> {
+    match std::env::var(BIND_ADDR_ENV) {
+        Ok(value) if !value.is_empty() => value
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid {BIND_ADDR_ENV} {value:?}: {e}")),
+        _ => Ok(LOOPBACK),
+    }
+}
 
 /// How long a `receive` on an open-but-idle channel yields before re-checking
 /// the inbox, so a pending receiver observes a message the pump enqueues.
@@ -306,7 +324,7 @@ impl GuestPeerConnection for PeerConnection {
         // pump starts lazily on the first async call. If binding fails, defer
         // the error to the first async method (constructors cannot fail here).
         let peer = SansIoPeer::answerer();
-        let built = peer.and_then(|peer| Runtime::bind(peer, LOOPBACK));
+        let built = peer.and_then(|peer| Runtime::bind(peer, bind_ip()?));
         match built {
             Ok((runtime, wake_rx, candidate)) => PeerConnection {
                 inner: RefCell::new(PeerState {
@@ -622,8 +640,9 @@ async fn pump_receive(
     drop(tx);
 }
 
-/// A closed placeholder used when a peer connection failed to bind at
-/// construction; every method observes it as already closed.
+/// A closed placeholder used when a peer connection failed to resolve its
+/// bind address or bind at construction; every method observes it as already
+/// closed.
 fn dead_shared() -> Shared {
     Shared {
         peer: SansIoPeer::answerer().expect("answerer construction is infallible"),
