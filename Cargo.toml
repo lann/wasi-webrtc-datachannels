@@ -9,6 +9,7 @@ members = [
     "conformance/runner",
     "conformance/signaling/server",
     "conformance/guest",
+    "conformance/adapters/common",
     "conformance/adapters/wasmtime",
     "conformance/adapters/wasip3",
     "conformance/adapters/wasip3/mailbox",

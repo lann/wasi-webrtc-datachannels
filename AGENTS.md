@@ -76,7 +76,9 @@ conformance/                           # cross-implementation conformance suite
   guest/                               #   the shared conformance guest component
   adapters/                            #   per-target drivers: wasmtime, jco (Node +
                                        #     browser), wasip3 (composed in-guest stack),
-                                       #     plus the interop-pair and ICE-lab binaries
+                                       #     plus the interop-pair and ICE-lab binaries;
+                                       #     common/ = the shared native building blocks
+                                       #     (conformance-adapter-common)
   runner/                              #   classifies results against manifests and
                                        #     renders conformance/matrix.md
   signaling/                           #   conformance-signalingd HTTP mailbox server

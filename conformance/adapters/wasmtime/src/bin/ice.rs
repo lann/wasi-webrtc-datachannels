@@ -24,38 +24,21 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use clap::Parser;
-use futures::StreamExt as _;
-use serde_json::Value;
 
-use conformance_adapter_wasmtime::{
-    fold_two, params_for, AdapterReport, LabConfig, RawResult, RawStatus, Role, Scenario,
-    TestResult,
+use conformance_adapter_common::{
+    default_is_flaky, fold_two, params_for, run_peer_command, run_with_retries, write_report,
+    AdapterReport, RawResult, RetryPolicy, TestOutcome, TWO_PEER_TESTS,
 };
+use conformance_adapter_wasmtime::{LabConfig, Role, Scenario};
 
-/// The two-peer behavioral corpus the lab exercises. These are the tests whose
-/// outcome depends on a working data channel between two independent peers, so
-/// they meaningfully exercise the scenario's candidate path. Single-instance
-/// peer-connection API tests and guest-skipped streaming/error tests are not
-/// connectivity tests, so the lab omits them.
-const ICE_TESTS: &[&str] = &[
-    "label-round-trip",
-    "binary-message",
-    "text-message",
-    "message-boundaries",
-    "zero-length-message",
-    "large-message",
-    "ordering",
-    "payload-integrity",
-    "concurrent-send-receive",
-    "max-retransmits-accepted",
-    "interop-handshake",
-];
-
-const MAX_ATTEMPTS: u32 = 3;
-// Lab handshakes (real routing, and a TURN relay for `turn-relay`) are slower to
-// establish than loopback, so the per-attempt guard is more generous than the
-// loopback adapters' 45s.
-const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(60);
+/// The retry policy for the lab. Lab handshakes (real routing, and a TURN relay
+/// for `turn-relay`) are slower to establish than loopback, so the per-attempt
+/// guard is more generous than the loopback adapters' 45s.
+const RETRY: RetryPolicy = RetryPolicy {
+    max_attempts: 3,
+    attempt_timeout: Duration::from_secs(60),
+    is_flaky: default_is_flaky,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "conformance-ice", version)]
@@ -199,38 +182,22 @@ async fn run_corpus(cli: &Cli, scenario: Scenario) -> Result<()> {
         cli.answerer_addr
     );
 
-    let results: Vec<RawResult> = futures::stream::iter(
-        ICE_TESTS
-            .iter()
-            .filter(|test_id| cli.only.is_empty() || cli.only.iter().any(|t| &t == test_id)),
-    )
-    .map(|test_id| {
-        let cli = &cli;
-        let lab = &lab;
-        let room_seq = &room_seq;
-        async move {
-            let result = run_ice_test(cli, scenario, lab, test_id, room_seq).await;
-            eprintln!("{test_id} … {:?}", result.status);
-            result
-        }
-    })
-    .buffered(cli.jobs.max(1))
-    .collect()
-    .await;
+    let results =
+        conformance_adapter_common::run_corpus(TWO_PEER_TESTS, &cli.only, cli.jobs, |test_id| {
+            run_ice_test(cli, scenario, &lab, test_id, &room_seq)
+        })
+        .await;
 
     let report = AdapterReport {
         target: cli.target.clone(),
         environment: scenario.as_str().to_string(),
         results,
     };
-    std::fs::create_dir_all(&cli.out)
-        .with_context(|| format!("creating results dir {}", cli.out.display()))?;
-    let out_path = cli
-        .out
-        .join(format!("{}-{}.json", cli.target, scenario.as_str()));
-    std::fs::write(&out_path, serde_json::to_string_pretty(&report)?)
-        .with_context(|| format!("writing {}", out_path.display()))?;
-    eprintln!("wrote {}", out_path.display());
+    write_report(
+        &cli.out,
+        &format!("{}-{}", cli.target, scenario.as_str()),
+        &report,
+    )?;
     Ok(())
 }
 
@@ -247,23 +214,16 @@ async fn run_ice_test(
     room_seq: &AtomicU64,
 ) -> RawResult {
     let (count, size) = params_for(test_id);
-    let mut last_detail = None;
 
-    for _ in 0..MAX_ATTEMPTS {
+    run_with_retries(test_id, &RETRY, async || {
         let n = room_seq.fetch_add(1, Ordering::SeqCst);
         let room = format!("ice-{}-{}-{}", scenario.as_str(), test_id, n);
         let port = cli.signaling_port.wrapping_add(n as u16);
         let signaling_url = format!("http://{}:{}", cli.server_addr, port);
 
         // Bring up this attempt's signaling server; killed when `_signaling`
-        // drops at the end of the iteration.
-        let _signaling = match start_signaling(cli, port) {
-            Ok(guard) => guard,
-            Err(err) => {
-                last_detail = Some(format!("signaling server error: {err:#}"));
-                break;
-            }
-        };
+        // drops at the end of the attempt.
+        let _signaling = start_signaling(cli, port).context("signaling server")?;
         // Let it bind before the peers connect; peer-side long-poll retries cover
         // any residual race.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -291,60 +251,10 @@ async fn run_ice_test(
             size,
         );
 
-        let attempt = async { tokio::join!(offerer, answerer) };
-        let (offerer, answerer) = match tokio::time::timeout(ATTEMPT_TIMEOUT, attempt).await {
-            Ok(pair) => pair,
-            Err(_) => {
-                last_detail = Some("attempt timed-out".to_string());
-                continue;
-            }
-        };
-
-        let offerer = match offerer {
-            Ok(result) => result,
-            Err(err) => {
-                last_detail = Some(format!("offerer peer error: {err:#}"));
-                break;
-            }
-        };
-        let answerer = match answerer {
-            Ok(result) => result,
-            Err(err) => {
-                last_detail = Some(format!("answerer peer error: {err:#}"));
-                break;
-            }
-        };
-
-        match fold_two(offerer, answerer) {
-            TestResult::Pass => {
-                return RawResult {
-                    test_id: test_id.to_string(),
-                    status: RawStatus::Pass,
-                    detail: None,
-                }
-            }
-            TestResult::Skipped(reason) => {
-                return RawResult {
-                    test_id: test_id.to_string(),
-                    status: RawStatus::Skip,
-                    detail: Some(reason),
-                }
-            }
-            TestResult::Fail(detail) => {
-                let flaky = detail.contains("timed-out") || detail.contains("wait-connected");
-                last_detail = Some(detail);
-                if !flaky {
-                    break;
-                }
-            }
-        }
-    }
-
-    RawResult {
-        test_id: test_id.to_string(),
-        status: RawStatus::Fail,
-        detail: last_detail,
-    }
+        let (offerer, answerer) = tokio::join!(offerer, answerer);
+        Ok(fold_two(offerer?, answerer?))
+    })
+    .await
 }
 
 /// Run one peer of a test inside its namespace, parsing its single-line JSON
@@ -360,7 +270,7 @@ async fn run_peer(
     role: Role,
     count: u32,
     size: u32,
-) -> Result<TestResult> {
+) -> Result<TestOutcome> {
     let ns = match role {
         Role::Answerer => &cli.answerer_ns,
         Role::Offerer | Role::Both => &cli.offerer_ns,
@@ -394,47 +304,7 @@ async fn run_peer(
         command.arg("--relay-only");
     }
 
-    let output = command
-        .stdin(Stdio::null())
-        .stderr(Stdio::inherit())
-        // Reap the peer if the attempt times out and this future is dropped,
-        // so leaked peers don't hold TURN allocations/CPU across attempts.
-        .kill_on_drop(true)
-        .output()
-        .await
-        .with_context(|| format!("spawning {} peer in {}", role_str, ns))?;
-    if !output.status.success() {
-        anyhow::bail!("{role_str} peer exited with {}", output.status);
-    }
-    let stdout = String::from_utf8(output.stdout).context("peer stdout not UTF-8")?;
-    let line = stdout
-        .lines()
-        .last()
-        .context("peer produced no result line")?;
-    let value: Value =
-        serde_json::from_str(line).with_context(|| format!("parsing peer result {line:?}"))?;
-    parse_result(&value)
-}
-
-/// Map a peer's `test-result` JSON value to a [`TestResult`].
-fn parse_result(value: &Value) -> Result<TestResult> {
-    let tag = value
-        .get("tag")
-        .and_then(Value::as_str)
-        .context("result missing tag")?;
-    let detail = || {
-        value
-            .get("val")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    };
-    Ok(match tag {
-        "pass" => TestResult::Pass,
-        "fail" => TestResult::Fail(detail()),
-        "skipped" => TestResult::Skipped(detail()),
-        other => anyhow::bail!("unknown result tag {other:?}"),
-    })
+    run_peer_command(command, &format!("{role_str} peer in {ns}")).await
 }
 
 /// Start a signaling server on `port` inside the signaling namespace.

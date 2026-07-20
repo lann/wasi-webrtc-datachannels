@@ -10,52 +10,15 @@
 //! single JSON line on stdout.
 //!
 //! This library provides [`Wasip3Peer`] — the primitive to run one such
-//! instance and parse its outcome — plus the raw result / report types the
-//! adapter binary serializes. The `conformance-interop` binary (in
+//! instance and parse its outcome. The adapter binary layers the full-corpus
+//! orchestration on top; the `conformance-interop` binary (in
 //! `adapters/wasmtime`) reuses [`Wasip3Peer`] to drive the wasip3 half of the
 //! `wasmtime` <-> `wasip3-guest` interop pair.
 
 use std::path::PathBuf;
-use std::process::Stdio;
 
-use anyhow::{Context as _, Result};
-use serde::Serialize;
-use serde_json::Value;
-
-/// The WIT-observable outcome of one guest instance, parsed from the driver's
-/// JSON result line (`{"tag": "pass" | "fail" | "skipped", "val"?}`).
-#[derive(Debug, Clone)]
-pub enum PeerOutcome {
-    Pass,
-    Fail(String),
-    Skipped(String),
-}
-
-/// One raw per-test outcome (mirrors `runner/src/results.rs::RawResult`).
-#[derive(Debug, Clone, Serialize)]
-pub struct RawResult {
-    pub test_id: String,
-    pub status: RawStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-}
-
-/// The raw status of one test.
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RawStatus {
-    Pass,
-    Fail,
-    Skip,
-}
-
-/// The adapter result document (mirrors `runner/src/results.rs::AdapterReport`).
-#[derive(Debug, Clone, Serialize)]
-pub struct AdapterReport {
-    pub target: String,
-    pub environment: String,
-    pub results: Vec<RawResult>,
-}
+use anyhow::Result;
+use conformance_adapter_common::{run_peer_command, TestOutcome};
 
 /// A runner for one wasip3-guest peer: the composed component plus the
 /// `wasmtime` binary that executes it.
@@ -85,8 +48,9 @@ impl Wasip3Peer {
         role: &str,
         count: u32,
         size: u32,
-    ) -> Result<PeerOutcome> {
-        let output = tokio::process::Command::new(&self.wasmtime_bin)
+    ) -> Result<TestOutcome> {
+        let mut command = tokio::process::Command::new(&self.wasmtime_bin);
+        command
             .arg("run")
             .args(["-W", "component-model-async=y"])
             .args([
@@ -105,76 +69,11 @@ impl Wasip3Peer {
             .args(["--server", server])
             .args(["--room", room])
             .args(["--message-count", &count.to_string()])
-            .args(["--message-size", &size.to_string()])
-            .stdin(Stdio::null())
-            .stderr(Stdio::inherit())
-            // Reap the peer if the attempt times out and this future is dropped.
-            .kill_on_drop(true)
-            .output()
-            .await
-            .with_context(|| format!("spawning wasip3-guest peer ({})", self.wasmtime_bin))?;
-        if !output.status.success() {
-            anyhow::bail!("wasip3-guest peer exited with {}", output.status);
-        }
-        let stdout =
-            String::from_utf8(output.stdout).context("wasip3-guest peer stdout not UTF-8")?;
-        let line = stdout
-            .lines()
-            .last()
-            .context("wasip3-guest peer produced no result line")?;
-        let value: Value = serde_json::from_str(line)
-            .with_context(|| format!("parsing wasip3-guest peer result {line:?}"))?;
-        parse_outcome(&value)
-    }
-}
-
-/// Map a driver `test-result` JSON value (`{ "tag": ..., "val"? }`) to a
-/// [`PeerOutcome`].
-fn parse_outcome(value: &Value) -> Result<PeerOutcome> {
-    let tag = value
-        .get("tag")
-        .and_then(Value::as_str)
-        .context("result missing tag")?;
-    let detail = || {
-        value
-            .get("val")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    };
-    Ok(match tag {
-        "pass" => PeerOutcome::Pass,
-        "fail" => PeerOutcome::Fail(detail()),
-        "skipped" => PeerOutcome::Skipped(detail()),
-        other => anyhow::bail!("unknown result tag {other:?}"),
-    })
-}
-
-/// Fold two per-instance outcomes into one: any fail loses, else any skip,
-/// else pass (mirroring the wasmtime adapter's `fold_two`).
-pub fn fold_two(offerer: PeerOutcome, answerer: PeerOutcome) -> PeerOutcome {
-    match (offerer, answerer) {
-        (PeerOutcome::Fail(a), PeerOutcome::Fail(b)) => {
-            PeerOutcome::Fail(format!("offerer: {a}; answerer: {b}"))
-        }
-        (PeerOutcome::Fail(a), _) => PeerOutcome::Fail(format!("offerer: {a}")),
-        (_, PeerOutcome::Fail(b)) => PeerOutcome::Fail(format!("answerer: {b}")),
-        (PeerOutcome::Skipped(a), _) => PeerOutcome::Skipped(a),
-        (_, PeerOutcome::Skipped(b)) => PeerOutcome::Skipped(b),
-        (PeerOutcome::Pass, PeerOutcome::Pass) => PeerOutcome::Pass,
-    }
-}
-
-/// The `(message-count, message-size)` a test runs with (mirroring the
-/// wasmtime adapter's `params_for`).
-pub fn params_for(test_id: &str) -> (u32, u32) {
-    match test_id {
-        "large-message" => (1, 16384),
-        "message-boundaries"
-        | "ordering"
-        | "payload-integrity"
-        | "concurrent-send-receive"
-        | "interop-handshake" => (16, 512),
-        _ => (4, 256),
+            .args(["--message-size", &size.to_string()]);
+        run_peer_command(
+            command,
+            &format!("wasip3-guest peer ({})", self.wasmtime_bin),
+        )
+        .await
     }
 }
