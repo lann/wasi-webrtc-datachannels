@@ -4,10 +4,12 @@ Guidance for automated agents (and humans) working in this repository.
 
 ## What this repository is
 
-`lann:webrtc-datachannels`: a WIT interface plus two host implementations that
-run the *same* guest component over a real WebRTC data channel. It is
+`lann:webrtc-datachannels`: a WIT interface plus multiple implementations that
+run the *same* guest component over a real WebRTC data channel: two hosts
+(Wasmtime and jco) and one in-guest component (`wasip3-impl`). It is
 intentionally small — prefer clarity and correctness over features, and keep the
-two hosts behaviourally in sync. See [`README.md`](README.md) for the findings
+implementations behaviourally in sync (asserted by the conformance suite under
+[`conformance/`](conformance)). See [`README.md`](README.md) for the findings
 and the big picture.
 
 ## Living knowledge base: `lann/wasm-component-starter`
@@ -59,16 +61,28 @@ examples/                              # guest components + the demo/manual-sign
       deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
   cli-signaling/                       # manual-signaling CLI guest component (Rust)
     wit/                               #   demo-only WIT for this component
-      webrtc-echo-demo.wit             #     demo:webrtc-echo (prompt, manual-demo,
-                                       #       manual-signaling, worlds)
+      webrtc-echo-demo.wit             #     demo:webrtc-echo (manual-signaling + world)
       deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
   webrtc-consumer/                     # minimal consumer that IMPORTS connections;
                                        #   composed (`wac plug`) with wasip3-impl for
                                        #   the in-guest round-trip integration test
     wit/deps/lann-webrtc-datachannels -> ../../../../wit  # symlink to the root package
-  wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): demo binaries;
-                                       #   the shared types/connections host lives in
-                                       #   wasmtime-impl above
+  wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): demo binaries
+                                       #   + the demo-only manual-signaling host
+                                       #   (src/manual.rs, also reused by the
+                                       #   wasmtime-impl integration test); the shared
+                                       #   types/connections host lives in wasmtime-impl
+conformance/                           # cross-implementation conformance suite
+  guest/                               #   the shared conformance guest component
+  adapters/                            #   per-target drivers: wasmtime, jco (Node +
+                                       #     browser), wasip3 (composed in-guest stack),
+                                       #     plus the interop-pair and ICE-lab binaries
+  runner/                              #   classifies results against manifests and
+                                       #     renders conformance/matrix.md
+  signaling/                           #   conformance-signalingd HTTP mailbox server
+  scenarios/                           #   netns/coturn scripts for the ICE lab
+  manifests/, tests.toml               #   per-target expectations + the test corpus
+scripts/setup.sh                       # one-shot dependency setup (see below)
 ```
 
 ### WIT is organized by ownership — one copy of the shared package
@@ -94,9 +108,8 @@ separate:
   components that use them:
   - `examples/echo-demo/wit/webrtc-echo-demo.wit` — `connect`, `rendezvous`,
     `demo`, and the `webrtc-echo-demo` world.
-  - `examples/cli-signaling/wit/webrtc-echo-demo.wit` — `prompt`,
-    `manual-demo`, the vanilla `manual-signaling` surface, and the
-    `browser-signaling-demo` / `manual-signaling-host` worlds.
+  - `examples/cli-signaling/wit/webrtc-echo-demo.wit` — the vanilla
+    `manual-signaling` surface and the `manual-signaling-host` world.
 
 Cross-package `use` must include the version, e.g.
 `use lann:webrtc-datachannels/types@0.1.0.{error}`.
@@ -109,17 +122,21 @@ updating the consumers that name them as strings:
 - the host bindings in
   `wasmtime-impl/src/bindings.rs` (whose
   `wit/world.wit` also pulls in the root package through a
-  `deps/lann-webrtc-datachannels` symlink), and the manual-signaling test host
-  bindings in `wasmtime-impl/tests/manual_host.rs`,
-- the Wasmtime host bindings in `examples/wasmtime-demo/src/main.rs` and
-  `examples/wasmtime-demo/src/bin/cli-signaling.rs`, and
+  `deps/lann-webrtc-datachannels` symlink),
+- the Wasmtime host bindings in `examples/wasmtime-demo/src/main.rs`,
+  `examples/wasmtime-demo/src/manual.rs` (the manual-signaling host, also
+  reused by `wasmtime-impl/tests/manual_signaling.rs`), and
+  `examples/wasmtime-demo/src/bin/cli-signaling.rs`,
+- the conformance guest, adapters, and jco transpile flags under
+  `conformance/`, and
 - the `jco transpile` `--async-exports` / `--async-imports` / `--map` flags in
   `jco-impl/package.json`.
 
 ## Build & run
 
 Prerequisites: Rust with the `wasm32-unknown-unknown` target, `wasm-tools`, and
-Node 22+ with JSPI (`--experimental-wasm-jspi`) for the Node host.
+Node 24+ for the Node paths (jco's async ABI uses JSPI, which Node exposes on
+24+ behind `--experimental-wasm-jspi`).
 
 ### One-shot dependency setup: `scripts/setup.sh`
 
@@ -128,15 +145,17 @@ need and is the single source of truth shared by local developers, CI
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), and the Copilot cloud
 agent ([`.github/workflows/copilot-setup-steps.yml`](.github/workflows/copilot-setup-steps.yml)).
 It is idempotent, so it is safe to re-run. Assuming a Rust toolchain (via
-`rustup`) and Node 22+ are already present, run it once from the repository root:
+`rustup`) and Node 24+ are already present, run it once from the repository root:
 
 ```sh
 ./scripts/setup.sh
 ```
 
-It adds the `wasm32-unknown-unknown` and `wasm32-wasip2` Rust targets, installs
-`wasm-tools` (skipped if already on `PATH`; version pinned via
-`WASM_TOOLS_VERSION`), and runs `npm install` in `jco-impl`. Set `SKIP_NODE=1`
+It adds the `wasm32-unknown-unknown` and `wasm32-wasip2` Rust targets; installs
+`wasm-tools`, `just`, `cargo-nextest`, `wac`, and `wasmtime` (each skipped if
+already on `PATH`; versions pinned via `*_VERSION` variables); installs the
+ICE-lab tools (iproute2, nftables, coturn; skip with `SKIP_ICE_LAB=1`); and runs
+`npm install` in `jco-impl` and `conformance/adapters/jco`. Set `SKIP_NODE=1`
 to skip the Node dependencies when you only need the Rust/Wasmtime path. CI is
 kept in sync by calling this same script rather than duplicating the install
 steps.
@@ -164,9 +183,19 @@ just demo-wasmtime          # or: just demo-wasmtime 1000 4096
 just test-webrtc-composed
 
 # Manual-signaling integration test (builds a guest, drives a real webrtc-rs
-# manual-signaling round trip through a test-only host under wasmtime-impl/tests);
+# manual-signaling round trip through the demo manual-signaling host);
 # it is part of `just test`:
 just test
+
+# Cross-implementation conformance suite (loopback): builds the shared
+# conformance guest, runs every enabled adapter (wasmtime, jco-node,
+# jco-browser, wasip3-guest) plus the interop pairs, and renders
+# conformance/matrix.md. Needs Node 24+ and a Chrome 137+ binary:
+just conformance
+
+# Conformance ICE lab (real non-loopback candidate paths via network
+# namespaces; needs sudo and coturn — see the recipe comments):
+just conformance-ice lan
 ```
 
 The recipes above are the underlying npm/cargo invocations documented in
@@ -191,12 +220,13 @@ the headless-browser test). Match the recipe to the change:
 | `just test-webrtc-composed` | the `wasip3-impl` provider component, the `webrtc-consumer`, or the `connections` WIT (composes them with `wac plug` and runs the round trip under `wasmtime`). |
 | `just transpile` | anything affecting the component's interfaces, or the `jco transpile` flags / `--map` targets in `jco-impl`. |
 | `just test-browser` | the browser host (`jco-impl`, e.g. `webrtc.js`) or the component it runs. |
+| `just conformance` | any host/guest behavior the suite asserts — the WIT surface, a host implementation, the conformance guest, adapters, or manifests (CI runs it in `.github/workflows/conformance.yml`). |
 | `just check` | broad Rust/WIT changes — the quick gate for most commits. |
 | `just ci` | anything touching the guest, jco host, or WIT — reproduces the full CI run locally. |
 
 `just transpile` and `just test-browser` depend on `just build-component`, so
-running either rebuilds the component first. Keep the two hosts producing the
-same result.
+running either rebuilds the component first. Keep the implementations producing
+the same result — the conformance suite is what asserts it.
 
 ## Code comments
 

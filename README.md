@@ -1,16 +1,19 @@
 # lann:webrtc-datachannels
 
-A WIT interface and two host implementations showing that high-performance
+A WIT interface and multiple implementations showing that high-performance
 WebRTC data-channel communication can be expressed with the **WebAssembly
 Component Model's async features** (`stream`, `future`, async imports/exports),
-with a *single* guest component binary running unchanged against two very
-different host stacks:
+with a *single* guest component binary running unchanged against very
+different stacks:
 
-- a **browser-first** host (Node.js + [`jco`] + [`@roamhq/wrtc`]), and
-- a **native Rust** host ([Wasmtime] + [`webrtc-rs`]).
+- a **browser-first** host (Node.js + [`jco`] + [`@roamhq/wrtc`]),
+- a **native Rust** host ([Wasmtime] + [`webrtc-rs`]), and
+- an **in-guest** component ([`wasip3-impl`](wasip3-impl)) that runs the whole
+  sans-I/O WebRTC stack inside wasm over `wasi:sockets`.
 
-Both hosts run the identical component and round-trip every message through a
-genuine WebRTC/SCTP data channel.
+All of them run the identical component and round-trip every message through a
+genuine WebRTC/SCTP data channel; the [conformance suite](conformance) asserts
+they behave compatibly.
 
 [`jco`]: https://github.com/bytecodealliance/jco
 [`@roamhq/wrtc`]: https://github.com/WonderInventions/node-webrtc
@@ -29,6 +32,7 @@ genuine WebRTC/SCTP data channel.
 | [`examples/cli-signaling`](examples/cli-signaling) | The **manual-signaling CLI guest component** (Rust). |
 | [`examples/webrtc-consumer`](examples/webrtc-consumer) | A **minimal consumer component** that imports `connections`. Composed (`wac plug`) with `wasip3-impl` for the in-guest round-trip integration test (`just test-webrtc-composed`). |
 | [`wasip3-impl`](wasip3-impl) | The **third implementation**: a wasm **component** (built for `wasm32-wasip2`) that runs the sans-I/O `rtc` 0.20 WebRTC stack *in-guest* — importing only `wasi:sockets`/`wasi:clocks` — and **exports** `lann:webrtc-datachannels/connections`. Its `SansIoPeer` core is driven over `wasi:sockets` UDP and WASI timers by an in-guest runtime pump. Composable via `wac plug`. Crate name: `wasip3-webrtc-datachannels`. |
+| [`conformance/`](conformance) | The **cross-implementation conformance suite**: a shared conformance guest run by per-target adapters (wasmtime, jco under Node and headless Chrome, the composed wasip3 stack), interop pairs, an ICE lab, and a runner that renders the results matrix. `just conformance`; see [`conformance/README.md`](conformance/README.md). |
 | [`AGENTS.md`](AGENTS.md) | Orientation for agents/contributors, linking the `lann/wasm-component-starter` knowledge base. |
 
 ## The interface
@@ -117,8 +121,8 @@ world webrtc-echo-demo {
 ## Running it
 
 Prerequisites: Rust (with the `wasm32-unknown-unknown` target),
-[`wasm-tools`], Node 22+ (for the Node host). The Node host needs a Node build
-with JSPI (`--experimental-wasm-jspi`).
+[`wasm-tools`], Node 24+ (for the Node host). The Node host needs JSPI, which
+Node exposes on 24+ behind `--experimental-wasm-jspi`.
 
 [`wasm-tools`]: https://github.com/bytecodealliance/wasm-tools
 
