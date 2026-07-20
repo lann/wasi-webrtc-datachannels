@@ -27,4 +27,8 @@ tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+# The demo-only `manual-signaling` host implementation lives in the demo crate;
+# the manual-signaling integration test reuses it (a dev-dependency cycle,
+# which Cargo permits) rather than keeping a duplicate copy under tests/.
+wasmtime-webrtc-host = { path = "../examples/wasmtime-demo" }
 wit-component = "0.247"

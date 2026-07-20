@@ -60,22 +60,25 @@ test:
 # wasmtime<->jco-node and wasmtime<->wasip3-guest (both orders each). The jco
 # targets need a JSPI-capable Node (24+; see conformance-jco-node) and, for the
 # browser target, a Chrome 137+ binary (auto-detected, or set CHROME_PATH).
-conformance: build-conformance-guest transpile-conformance-guest
-    cargo build -p conformance-signalingd
-    cargo build --release -p conformance-adapter-wasmtime --bin conformance-adapter-wasmtime
-    timeout {{conformance-timeout}} target/release/conformance-adapter-wasmtime \
-        --guest conformance/guest/build/conformance-guest.component.wasm \
-        --out conformance/results
-    just conformance-jco-node
-    just conformance-jco-browser
-    just conformance-wasip3
-    just conformance-interop
+conformance: conformance-wasmtime conformance-jco-node conformance-jco-browser conformance-wasip3 conformance-interop build-signalingd
     cargo run -p conformance-runner -- \
         --tests conformance/tests.toml \
         --manifests conformance/manifests \
         --results conformance/results \
         --signaling-bin target/debug/conformance-signalingd \
         --matrix-out conformance/matrix.md
+
+# Build the conformance-signalingd mailbox server (shared by every adapter).
+build-signalingd:
+    cargo build -p conformance-signalingd
+
+# Run the wasmtime conformance adapter over loopback. Writes
+# conformance/results/wasmtime.json.
+conformance-wasmtime: build-conformance-guest
+    cargo build --release -p conformance-adapter-wasmtime --bin conformance-adapter-wasmtime
+    timeout {{conformance-timeout}} target/release/conformance-adapter-wasmtime \
+        --guest conformance/guest/build/conformance-guest.component.wasm \
+        --out conformance/results
 
 # Build the shared conformance guest component into conformance/guest/build/.
 build-conformance-guest:
@@ -125,15 +128,13 @@ conformance-wasip3: build-conformance-wasip3
 # with @roamhq/wrtc). jco's async ABI needs JavaScript Promise Integration, so
 # this uses `node --experimental-wasm-jspi` and requires Node 24+ (which ships
 # WebAssembly.Suspending). Writes conformance/results/jco-node.json.
-conformance-jco-node: transpile-conformance-guest
-    cargo build -p conformance-signalingd
+conformance-jco-node: transpile-conformance-guest build-signalingd
     cd conformance/adapters/jco && timeout {{conformance-timeout}} npm run run:node
 
 # Run the jco-browser conformance adapter (the same guest + host modules inside
 # headless Chromium; Chrome 137+ ships JSPI). Writes
 # conformance/results/jco-browser.json.
-conformance-jco-browser: transpile-conformance-guest
-    cargo build -p conformance-signalingd
+conformance-jco-browser: transpile-conformance-guest build-signalingd
     cd conformance/adapters/jco && timeout {{conformance-timeout}} npm run run:browser
 
 # Run the enabled interop pairs (each in both orders): wasmtime<->jco-node —
@@ -143,8 +144,7 @@ conformance-jco-browser: transpile-conformance-guest
 # the same binary (drop the --pair flags to run them) but disabled by default:
 # the wasip3 peer exits before its final sentinel / SCTP close flushes, which
 # stalls the wasmtime peer indefinitely (see TODO.md item E3).
-conformance-interop: transpile-conformance-guest build-conformance-wasip3
-    cargo build -p conformance-signalingd
+conformance-interop: transpile-conformance-guest build-conformance-wasip3 build-signalingd
     cargo build --release -p conformance-adapter-wasmtime --bin conformance-interop
     timeout {{conformance-timeout}} target/release/conformance-interop \
         --pair wasmtime-x-jco-node --pair jco-node-x-wasmtime
@@ -160,8 +160,7 @@ conformance-interop: transpile-conformance-guest build-conformance-wasip3
 # on PATH for the non-`lan` scenarios (installed by scripts/setup.sh). The lab is
 # always torn down on exit. NOTE: `stun-srflx` needs NAT on the router to be
 # meaningful (see the README / Phase 6); `lan` and `turn-relay` run without it.
-conformance-ice scenario="lan": build-conformance-guest
-    cargo build -p conformance-signalingd
+conformance-ice scenario="lan": build-conformance-guest build-signalingd
     cargo build --release -p conformance-adapter-wasmtime \
         --bin conformance-peer --bin conformance-ice
     sudo timeout {{conformance-timeout}} target/release/conformance-ice \

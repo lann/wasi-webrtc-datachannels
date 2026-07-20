@@ -4106,6 +4106,7 @@ dependencies = [
  "futures",
  "tokio",
  "wasmtime",
+ "wasmtime-webrtc-host",
  "webrtc",
  "wit-component",
 ]

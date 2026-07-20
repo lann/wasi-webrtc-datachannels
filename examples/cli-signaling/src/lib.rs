@@ -7,8 +7,7 @@
 //! offerer prints one complete SDP offer (with all ICE candidates already
 //! embedded) and the answerer prints one complete SDP answer. Each blob is
 //! base64-encoded onto a single line so a user can copy/paste it into the other
-//! peer — including the sibling `browser-signaling` component, which speaks the
-//! exact same wire format.
+//! peer.
 //!
 //! It is a `wasm32-wasip2` `cdylib` that exports an *async* `wasi:cli/run` via
 //! the `wasip3` crate (a synchronous `run` cannot await the async signaling

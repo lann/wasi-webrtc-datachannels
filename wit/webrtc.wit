@@ -207,14 +207,13 @@ interface connections {
     /// A single WebRTC peer connection driving the full `RTCPeerConnection`-style
     /// signaling surface.
     ///
-    /// This is the design target for guest-driven connection setup and is
-    /// intended to be iterated on in parallel with the host implementations. It
-    /// mirrors enough of `RTCPeerConnection` to drive a real SDP offer/answer
-    /// exchange and trickle ICE. The runnable demo does not drive signaling
-    /// directly (it uses the demo `connect` convenience), but this resource
-    /// documents the shape a full guest-driven connection would take. See the
-    /// demo `rendezvous` interface for the transport that would carry these
-    /// blobs between remote peers.
+    /// This is the guest-driven connection surface: it mirrors enough of
+    /// `RTCPeerConnection` to drive a real SDP offer/answer exchange and
+    /// trickle ICE. It is implemented by the Wasmtime host, the conformance
+    /// jco host, and the in-guest `wasip3-impl` provider, and is exercised
+    /// across all of them by the conformance suite. See the demo `rendezvous`
+    /// interface for the transport that would carry these blobs between remote
+    /// peers.
     resource peer-connection {
         constructor();
 
