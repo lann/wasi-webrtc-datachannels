@@ -99,6 +99,20 @@ fn main() -> Result<()> {
     }
 
     if matrix.has_failures() {
+        eprintln!("\nconformance failures:");
+        for (row, test, cell) in matrix.failures() {
+            let target = if row.environment.is_empty() {
+                row.target.clone()
+            } else {
+                format!("{} [{}]", row.target, row.environment)
+            };
+            match &cell.detail {
+                Some(detail) => {
+                    eprintln!("  {target} / {test}: {} — {detail}", cell.status.symbol())
+                }
+                None => eprintln!("  {target} / {test}: {}", cell.status.symbol()),
+            }
+        }
         anyhow::bail!("conformance run has failing or unexpected-pass results");
     }
 

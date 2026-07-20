@@ -20,9 +20,8 @@ use crate::results::{AdapterReport, RawStatus, Status};
 #[derive(Debug, Clone)]
 pub struct Cell {
     pub status: Status,
-    /// Reason/detail behind the status; surfaced in a detailed report by a
-    /// later phase (the compact matrix shows only the status symbol).
-    #[allow(dead_code)]
+    /// Reason/detail behind the status; surfaced in the end-of-run failure
+    /// summary (the compact matrix shows only the status symbol).
     pub detail: Option<String>,
 }
 
@@ -114,6 +113,22 @@ impl Matrix {
     /// True if any classified cell is a failure (fail or unexpected-pass).
     pub fn has_failures(&self) -> bool {
         self.cells.values().any(|c| c.status.is_failure())
+    }
+
+    /// Every failing cell as `(row, test, cell)`, in row order then registry
+    /// test order.
+    pub fn failures(&self) -> Vec<(&Row, &str, &Cell)> {
+        let mut failures = Vec::new();
+        for row in &self.rows {
+            for test in &self.tests {
+                if let Some(cell) = self.cells.get(&row.key(test)) {
+                    if cell.status.is_failure() {
+                        failures.push((row, test.as_str(), cell));
+                    }
+                }
+            }
+        }
+        failures
     }
 
     /// Render the matrix as a markdown table (rows × test columns), with a

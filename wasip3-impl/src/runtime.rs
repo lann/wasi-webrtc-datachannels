@@ -196,6 +196,12 @@ impl Runtime {
         let socket = self.socket;
         let local = self.local;
 
+        // The in-flight receive lives across loop iterations: dropping a
+        // pending `receive()` future can discard a datagram the host has
+        // already dequeued into it, so the future is only replaced after it
+        // completes, never cancelled by a timer or wake.
+        let mut recv = std::pin::pin!(socket.receive());
+
         loop {
             // Flush + drain while holding the borrow only between awaits.
             flush(&shared, &socket).await;
@@ -232,11 +238,10 @@ impl Runtime {
                 .unwrap_or(MAX_WAIT_NANOS);
 
             let timer = std::pin::pin!(monotonic_clock::wait_for(delay));
-            let recv = std::pin::pin!(socket.receive());
             let wake = std::pin::pin!(wake_rx.next());
 
             // Wait on the earliest of a timer, an inbound datagram, or a wake.
-            match select(select(timer, recv), wake).await {
+            match select(select(timer, recv.as_mut()), wake).await {
                 Either::Left((Either::Left(_), _)) => {
                     // Feed the stack a time guaranteed to be at or past the
                     // deadline it asked for. Passing `Instant::now()` alone can
@@ -259,9 +264,12 @@ impl Runtime {
                         local,
                         Instant::now(),
                     );
+                    recv.set(socket.receive());
                 }
                 // A receive error just means no datagram this round; loop again.
-                Either::Left((Either::Right((Err(_), _)), _)) => {}
+                Either::Left((Either::Right((Err(_), _)), _)) => {
+                    recv.set(socket.receive());
+                }
                 // A wake (an exported method mutated the core): loop to flush.
                 Either::Right(_) => {}
             }
