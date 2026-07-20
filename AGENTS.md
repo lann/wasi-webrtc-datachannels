@@ -76,10 +76,10 @@ conformance/                           # cross-implementation conformance suite
   guest/                               #   the shared conformance guest component
   adapters/                            #   per-target drivers: wasmtime, jco (Node +
                                        #     browser), wasip3 (composed in-guest stack),
-                                       #     plus the interop-pair, ICE-lab, and
-                                       #     Shadow-lab binaries;
+                                       #     plus the interop-pair and ICE-lab binaries;
                                        #     common/ = the shared native building blocks
-                                       #     (conformance-adapter-common)
+                                       #     (conformance-adapter-common) + the
+                                       #     target-neutral Shadow-lab executor
   runner/                              #   classifies results against manifests and
                                        #     renders conformance/matrix.md
   signaling/                           #   conformance-signalingd HTTP mailbox server
@@ -210,8 +210,9 @@ just conformance
 # namespaces; needs sudo and coturn — see the recipe comments):
 just conformance-ice lan
 
-# Conformance Shadow lab (the two-peer corpus over a non-loopback path inside
-# the Shadow discrete-event network simulator — deterministic, no root or
+# Conformance Shadow lab (the two-peer corpus for the wasmtime and
+# wasip3-guest targets over a non-loopback path inside the Shadow
+# discrete-event network simulator — deterministic, no root or
 # network namespaces). Needs `shadow` on PATH (install with
 # scripts/download-shadow.sh or scripts/build-shadow.sh):
 just conformance-shadow
@@ -313,7 +314,9 @@ UDP loopback entirely in-guest and exchange a message each way.
 Because the sans-I/O model has no OS interface enumeration, each
 `peer-connection` supplies its own host candidate explicitly
 (`add_local_host_candidate`) from the socket it binds, rather than gathering from
-mDNS. `peer-connection` binds on IPv4 loopback, so it connects same-host peers;
-the remaining step is real (non-loopback) `wasi:sockets` paired with the
-`rendezvous` signaling above, so two separate components can connect across a
-network.
+mDNS. `peer-connection` binds the IP address named by the `WEBRTC_UDP_BIND_ADDR`
+environment variable, defaulting to IPv4 loopback (same-host peers); a routable
+address gives the peer a host candidate reachable across a real network path,
+as the conformance Shadow lab exercises. The remaining step is pairing that
+with the `rendezvous` signaling above, so two separate components can connect
+across a real deployment.
