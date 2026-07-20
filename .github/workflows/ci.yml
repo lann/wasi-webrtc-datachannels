@@ -30,9 +30,17 @@ jobs:
       - name: Cache cargo
         # Caches the cargo registry, `~/.cargo/bin` (so cargo-binstall'd
         # wasm-tools/just/nextest are reused), and the compiled `target/`
-        # artifacts, so clippy and test reuse prior builds.
+        # artifacts, so clippy and test reuse prior builds. A shared cache key
+        # (see below) lets every CI job across both workflows reuse the same
+        # cache instead of each job keeping its own.
         uses: Swatinem/rust-cache@v2
         with:
+          # Share one cache across every CI job (this workflow and
+          # conformance.yml). By default rust-cache keys the cache by job id, so
+          # each job kept a separate entry; a common `shared-key` replaces the
+          # job-id key so all jobs restore/save the same cache. They share one
+          # Cargo.lock, so dependency builds are reusable across them.
+          shared-key: cargo
           # The standalone manual-signaling test guest builds into a nested
           # target dir under ./target; keep the whole tree so it is not pruned.
           cache-all-crates: true
@@ -88,9 +96,17 @@ jobs:
       - name: Cache cargo
         # Caches the cargo registry, `~/.cargo/bin` (so cargo-binstall'd
         # wasm-tools/just/nextest are reused), and the compiled `target/`
-        # artifacts, so the guest component build reuses prior builds.
+        # artifacts, so the guest component build reuses prior builds. A shared
+        # cache key (see below) lets every CI job across both workflows reuse
+        # the same cache instead of each job keeping its own.
         uses: Swatinem/rust-cache@v2
         with:
+          # Share one cache across every CI job (this workflow and
+          # conformance.yml). By default rust-cache keys the cache by job id, so
+          # each job kept a separate entry; a common `shared-key` replaces the
+          # job-id key so all jobs restore/save the same cache. They share one
+          # Cargo.lock, so dependency builds are reusable across them.
+          shared-key: cargo
           cache-all-crates: true
 
       - name: Install dependencies
