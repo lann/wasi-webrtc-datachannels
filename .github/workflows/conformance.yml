@@ -7,7 +7,9 @@ name: Conformance
 # 5): the wasmtime two-peer corpus over a routed network-namespace topology with
 # real (non-loopback) candidate paths (`lan` and `turn-relay`). Job 3 runs the
 # NAT matrix (Phase 6) nightly with continue-on-error (`stun-srflx` behind a cone
-# NAT and `nat-symmetric` behind a symmetric NAT).
+# NAT and `nat-symmetric` behind a symmetric NAT). Job 4 runs the Shadow lab: the
+# same wasmtime two-peer corpus over the Shadow network simulator, which needs no
+# root or network namespaces.
 #
 # Phases enabled so far:
 #   - Phase 0: the runner, registry, and manifest schema.
@@ -217,4 +219,66 @@ jobs:
         with:
           name: conformance-nat-matrix
           path: conformance/nat-matrix.md
+          if-no-files-found: warn
+
+  # Job 4: the Shadow lab. Runs the wasmtime two-peer corpus inside the Shadow
+  # discrete-event network simulator (https://github.com/shadow/shadow), which
+  # gives the same "two peers on separate hosts over a non-loopback path"
+  # property as the ICE lab but simulates the network in user space — so it needs
+  # NO root or network namespaces and is deterministic. Shadow ships no prebuilt
+  # binary, so setup.sh builds it from source; the build is cached by ref across
+  # runs (the setup guard skips the build when `shadow` is already on PATH).
+  shadow-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cargo
+          cache-all-crates: true
+
+      # Cache the built Shadow (~/.local/bin/shadow + ~/.local/lib) keyed on the
+      # pinned SHADOW_REF so it is built from source only when the ref changes.
+      - name: Cache Shadow
+        uses: actions/cache@v4
+        with:
+          path: ~/.local
+          key: shadow-${{ runner.os }}-e2829ed32acde66124ce9c14cb5d2337cad7f8e0
+
+      # Make a cached Shadow visible to setup.sh's guard (which skips the build
+      # when `shadow` is already on PATH) and to the run step below.
+      - name: Add ~/.local/bin to PATH
+        run: echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      # The Shadow lab is wasmtime-only and needs no coturn/iproute2, so skip the
+      # Node and ICE-lab dependencies; setup.sh still builds/installs Shadow.
+      - name: Install dependencies
+        run: SKIP_NODE=1 SKIP_ICE_LAB=1 ./scripts/setup.sh
+
+      - name: Run Shadow lab
+        run: just conformance-shadow
+
+      # Classify the Shadow results (wasmtime-shadow.json) against the manifests
+      # and render the environment-columned matrix; exits nonzero on any failure.
+      - name: Classify Shadow matrix
+        run: |
+          cargo run -p conformance-runner -- \
+            --tests conformance/tests.toml \
+            --manifests conformance/manifests \
+            --results conformance/results \
+            --matrix-out conformance/shadow-matrix.md
+
+      - name: Upload Shadow matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-shadow-matrix
+          path: conformance/shadow-matrix.md
           if-no-files-found: warn

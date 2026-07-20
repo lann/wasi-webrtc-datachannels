@@ -271,9 +271,20 @@ pub fn new_store(engine: &Engine) -> Store<Ctx> {
 /// loopback candidates are *not* forced: lab peers connect over real interface
 /// addresses, so gathering the loopback host candidate would only add a
 /// never-connectable pair.
-pub fn new_store_with_ice(engine: &Engine, ice: WebrtcIceConfig) -> Store<Ctx> {
+///
+/// When `disable_mdns` is set, multicast-DNS candidate gathering is turned off.
+/// The Shadow environment (`conformance-shadow`) needs this because Shadow's
+/// simulated network stack does not implement the multicast-socket options
+/// (`SO_REUSEADDR`/`SO_REUSEPORT`) mDNS binds with; the routed netns lab leaves
+/// it on, so both environments keep their own behavior.
+pub fn new_store_with_ice(engine: &Engine, ice: WebrtcIceConfig, disable_mdns: bool) -> Store<Ctx> {
     let mut webrtc = WasiWebrtcCtx::new();
     webrtc.set_ice_config(ice);
+    if disable_mdns {
+        webrtc.set_setting_engine_hook(|engine| {
+            engine.set_multicast_dns_mode(rtc::ice::mdns::MulticastDnsMode::Disabled);
+        });
+    }
     Store::new(
         engine,
         Ctx {
@@ -309,15 +320,19 @@ pub async fn run_instance(
 /// configuration (bind address, STUN/TURN servers, relay-only policy). Used by
 /// the single-peer `conformance-peer` binary the ICE-lab orchestrator launches
 /// inside a network namespace.
+///
+/// `disable_mdns` turns off multicast-DNS candidate gathering; see
+/// [`new_store_with_ice`] for why the Shadow environment needs it.
 pub async fn run_instance_with_ice(
     engine: &Engine,
     component: &Component,
     test_id: &str,
     config: TestConfig,
     ice: WebrtcIceConfig,
+    disable_mdns: bool,
 ) -> Result<TestOutcome> {
     run_instance_in_store(
-        new_store_with_ice(engine, ice),
+        new_store_with_ice(engine, ice, disable_mdns),
         engine,
         component,
         test_id,

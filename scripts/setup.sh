@@ -19,6 +19,8 @@
 #     integration test (`just test-webrtc-composed`)
 #   - iproute2, nftables, and coturn, used by the conformance ICE lab
 #     (`just conformance-ice`; skip with SKIP_ICE_LAB=1)
+#   - the Shadow network simulator, used by the conformance Shadow lab
+#     (`just conformance-shadow`; built from source, skip with SKIP_SHADOW=1)
 #   - the Node host's npm dependencies (jco + @roamhq/wrtc), and the conformance
 #     jco adapter's npm dependencies (jco + @roamhq/wrtc + playwright-core)
 #
@@ -36,6 +38,8 @@
 #   JUST_VERSION         version of just to install (default below)
 #   NEXTEST_VERSION      version of cargo-nextest to install (default below)
 #   SKIP_ICE_LAB=1       skip installing the conformance ICE-lab tools (coturn…)
+#   SKIP_SHADOW=1        skip building/installing the Shadow network simulator
+#   SHADOW_REF           git ref of shadow/shadow to build (default below)
 #   SKIP_NODE=1          skip installing the Node host's npm dependencies
 
 set -euo pipefail
@@ -49,6 +53,9 @@ JUST_VERSION="${JUST_VERSION:-1.40.0}"
 NEXTEST_VERSION="${NEXTEST_VERSION:-0.9.140}"
 WAC_VERSION="${WAC_VERSION:-0.10.1}"
 WASMTIME_VERSION="${WASMTIME_VERSION:-46.0.1}"
+# Post-v3.3.0 shadow/shadow master, verified to build on Ubuntu 24.04 and run the
+# conformance Shadow lab. Pinned by commit for reproducibility.
+SHADOW_REF="${SHADOW_REF:-e2829ed32acde66124ce9c14cb5d2337cad7f8e0}"
 
 log() { printf '\n==> %s\n' "$1"; }
 
@@ -138,6 +145,41 @@ else
   fi
 fi
 
+if [ "${SKIP_SHADOW:-0}" = "1" ]; then
+  log "Skipping Shadow network simulator (SKIP_SHADOW=1)"
+elif command -v shadow >/dev/null 2>&1; then
+  log "shadow already present: $(shadow --version | head -1)"
+else
+  # The conformance Shadow lab (`just conformance-shadow`) runs the two-peer
+  # corpus inside the Shadow discrete-event network simulator, which simulates
+  # the network in user space (no root or network namespaces required). Shadow
+  # ships no prebuilt binary, so build it from source. Its build deps come from
+  # the distro package manager; this path is Debian/Ubuntu (apt-get). See
+  # https://shadow.github.io/docs/guide/install_dependencies.html.
+  log "Building Shadow (${SHADOW_REF}) from source"
+  if command -v apt-get >/dev/null 2>&1; then
+    APT_SUDO=""
+    [ "$(id -u)" -eq 0 ] || APT_SUDO="sudo"
+    ${APT_SUDO} apt-get update -y
+    DEBIAN_FRONTEND=noninteractive ${APT_SUDO} apt-get install -y --no-install-recommends \
+      cmake findutils libclang-dev libc-dbg libglib2.0-0 libglib2.0-dev make \
+      netbase python3 python3-networkx xz-utils util-linux gcc g++
+    SHADOW_SRC="$(mktemp -d)"
+    git clone --filter=blob:none https://github.com/shadow/shadow.git "${SHADOW_SRC}"
+    (
+      cd "${SHADOW_SRC}"
+      git checkout --quiet "${SHADOW_REF}"
+      # `./setup install` defaults to the ~/.local prefix (bin + lib).
+      ./setup build --jobs "$(nproc)"
+      ./setup install
+    )
+    rm -rf "${SHADOW_SRC}"
+    echo "shadow installed: $("${HOME}/.local/bin/shadow" --version | head -1)"
+  else
+    echo "apt-get not found; build Shadow from source per https://shadow.github.io (or set SKIP_SHADOW=1)"
+  fi
+fi
+
 if [ "${SKIP_NODE:-0}" = "1" ]; then
   log "Skipping Node host dependencies (SKIP_NODE=1)"
 else
@@ -153,6 +195,8 @@ fi
 # found by later `run:` steps even though they exist on disk.
 if [ -n "${GITHUB_PATH:-}" ]; then
   echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+  # Shadow installs to ~/.local/bin (see the SKIP_SHADOW block above).
+  echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 fi
 
 log "Setup complete"

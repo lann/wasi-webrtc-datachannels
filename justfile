@@ -181,6 +181,24 @@ conformance-ice scenario="lan": build-conformance-guest build-signalingd
 # proven stable). Requires the same privileges/tools as `conformance-ice`.
 conformance-nat: (conformance-ice "stun-srflx") (conformance-ice "nat-symmetric")
 
+# Run the two-peer corpus inside the Shadow network simulator
+# (https://github.com/shadow/shadow). Like the ICE lab it places the two peers
+# of each test on separate hosts over a routed, non-loopback path — but Shadow
+# simulates the network in user space, so it needs NO root, network namespaces,
+# or real kernel networking, which makes it reproducible and runnable in
+# restricted sandboxes and CI. The orchestrator (conformance-shadow) generates a
+# single Shadow config, runs `shadow` once, and writes
+# conformance/results/wasmtime-shadow.json (the `shadow` environment column).
+# Needs `shadow` on PATH (installed by scripts/setup.sh).
+conformance-shadow: build-conformance-guest build-signalingd
+    cargo build --release -p conformance-adapter-wasmtime \
+        --bin conformance-peer --bin conformance-shadow
+    timeout {{conformance-timeout}} target/release/conformance-shadow \
+        --guest conformance/guest/build/conformance-guest.component.wasm \
+        --signaling-bin target/debug/conformance-signalingd \
+        --peer-bin target/release/conformance-peer \
+        --out conformance/results
+
 # Build the echo-demo guest component into examples/echo-demo/build/.
 build-component:
     cd jco-impl && npm run build:component
