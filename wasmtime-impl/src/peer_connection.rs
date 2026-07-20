@@ -36,7 +36,7 @@ use webrtc::peer_connection::{
 };
 
 use crate::data_channel::{
-    close_peer_connections, new_peer_connection, spawn_channel_wiring, wire_open_channel,
+    close_peer_connections, new_peer_connection_with, spawn_channel_wiring, wire_open_channel,
     wiring_channel, CallbackHandler, ChannelError,
 };
 use crate::{DataChannel, SettingEngineHook};
@@ -182,6 +182,13 @@ impl PeerConnection {
     /// before the connection is built. Requires a running Tokio runtime; without
     /// one every subsequent operation fails.
     pub fn new(hook: Option<SettingEngineHook>) -> Self {
+        Self::new_with(hook, crate::WebrtcIceConfig::default())
+    }
+
+    /// Like [`PeerConnection::new`] but with an explicit
+    /// [`WebrtcIceConfig`](crate::WebrtcIceConfig) applied when the connection is
+    /// built (bind addresses, STUN/TURN servers, relay-only policy).
+    pub fn new_with(hook: Option<SettingEngineHook>, ice: crate::WebrtcIceConfig) -> Self {
         let (built_tx, built_rx) =
             oneshot::channel::<Result<Arc<dyn WebrtcPeerConnection>, String>>();
         let (cand_tx, cand_rx) = mpsc::unbounded::<LocalCandidate>();
@@ -194,12 +201,13 @@ impl PeerConnection {
             let pc_slot = pc_slot.clone();
             handle.spawn(async move {
                 let handler = connection_handler(cand_tx, inc_tx, state);
-                match new_peer_connection(
+                match new_peer_connection_with(
                     |engine| {
                         if let Some(hook) = &hook {
                             hook(engine);
                         }
                     },
+                    ice,
                     handler,
                 )
                 .await

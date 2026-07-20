@@ -100,7 +100,12 @@ fn main() -> Result<()> {
 
     if matrix.has_failures() {
         eprintln!("\nconformance failures:");
-        for (target, test, cell) in matrix.failures() {
+        for (row, test, cell) in matrix.failures() {
+            let target = if row.environment.is_empty() {
+                row.target.clone()
+            } else {
+                format!("{} [{}]", row.target, row.environment)
+            };
             match &cell.detail {
                 Some(detail) => {
                     eprintln!("  {target} / {test}: {} — {detail}", cell.status.symbol())
@@ -112,8 +117,8 @@ fn main() -> Result<()> {
     }
 
     eprintln!(
-        "conformance run OK: {} target(s), {} test(s), no failures",
-        matrix.targets.len(),
+        "conformance run OK: {} row(s), {} test(s), no failures",
+        matrix.rows.len(),
         matrix.tests.len()
     );
     Ok(())
@@ -223,7 +228,11 @@ mod tests {
     fn status_of(matrix: &Matrix, test: &str) -> Status {
         matrix
             .cells
-            .get(&("wasmtime".to_string(), test.to_string()))
+            .get(&(
+                "wasmtime".to_string(),
+                "loopback".to_string(),
+                test.to_string(),
+            ))
             .unwrap()
             .status
     }
@@ -232,7 +241,7 @@ mod tests {
     fn empty_run_has_no_failures() {
         let matrix = Matrix::classify(&registry(), &[], &[]);
         assert!(!matrix.has_failures());
-        assert!(matrix.targets.is_empty());
+        assert!(matrix.rows.is_empty());
     }
 
     #[test]
@@ -291,6 +300,63 @@ mod tests {
         assert_eq!(
             status_of(&matrix, "error-invalid-signaling"),
             Status::Missing
+        );
+        assert!(!matrix.has_failures());
+    }
+
+    fn report_env(environment: &str, results: Vec<(&str, RawStatus)>) -> AdapterReport {
+        AdapterReport {
+            target: "wasmtime".into(),
+            environment: environment.into(),
+            results: results
+                .into_iter()
+                .map(|(id, status)| RawResult {
+                    test_id: id.into(),
+                    status,
+                    detail: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn status_in(matrix: &Matrix, environment: &str, test: &str) -> Status {
+        matrix
+            .cells
+            .get(&(
+                "wasmtime".to_string(),
+                environment.to_string(),
+                test.to_string(),
+            ))
+            .unwrap()
+            .status
+    }
+
+    #[test]
+    fn environments_are_independent_rows() {
+        // The same target running in two environments yields two rows, each
+        // classified against its own raw results rather than a merge of them.
+        let reports = [
+            report_env("loopback", vec![("ordering", RawStatus::Pass)]),
+            report_env("lan", vec![("ordering", RawStatus::Fail)]),
+        ];
+        let matrix = Matrix::classify(&registry(), &[manifest()], &reports);
+        assert_eq!(matrix.rows.len(), 2);
+        assert_eq!(status_in(&matrix, "loopback", "ordering"), Status::Pass);
+        assert_eq!(status_in(&matrix, "lan", "ordering"), Status::Fail);
+        assert!(matrix.has_failures());
+    }
+
+    #[test]
+    fn manifest_only_target_is_a_planning_row() {
+        // With no adapter report, a target still yields one planning-only row
+        // (empty environment) so its manifest policy is visible in the matrix.
+        let matrix = Matrix::classify(&registry(), &[manifest()], &[]);
+        assert_eq!(matrix.rows.len(), 1);
+        assert!(matrix.rows[0].environment.is_empty());
+        assert_eq!(status_in(&matrix, "", "ordering"), Status::Missing);
+        assert_eq!(
+            status_in(&matrix, "", "peer-offer-answer"),
+            Status::SkipUnsupported
         );
         assert!(!matrix.has_failures());
     }

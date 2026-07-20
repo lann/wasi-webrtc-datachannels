@@ -46,6 +46,7 @@ use bindings::conformance::signaling::mailbox::{self, Role as MailboxRole};
 pub use bindings::exports::conformance::suite::runner::{Role, TestConfig, TestResult};
 use bindings::lann::webrtc_datachannels::types::Error;
 pub use bindings::Conformance;
+pub use wasmtime_webrtc_datachannels::{WebrtcIceConfig, WebrtcIceServer};
 
 /// Per-store host state: the WebRTC host context plus the resource table shared
 /// by the WebRTC and mailbox host resources.
@@ -291,6 +292,24 @@ pub fn new_store(engine: &Engine) -> Store<Ctx> {
     )
 }
 
+/// A fresh store whose WebRTC host uses an explicit [`WebrtcIceConfig`] — the ICE
+/// lab's per-scenario network configuration (bind address, STUN/TURN servers,
+/// relay-only policy; see `conformance/PLAN.md` Phase 5). Unlike [`new_store`],
+/// loopback candidates are *not* forced: lab peers connect over real interface
+/// addresses, so gathering the loopback host candidate would only add a
+/// never-connectable pair.
+pub fn new_store_with_ice(engine: &Engine, ice: WebrtcIceConfig) -> Store<Ctx> {
+    let mut webrtc = WasiWebrtcCtx::new();
+    webrtc.set_ice_config(ice);
+    Store::new(
+        engine,
+        Ctx {
+            webrtc,
+            table: ResourceTable::new(),
+        },
+    )
+}
+
 /// Build a test config for one instance.
 pub fn make_config(role: Role, base_url: &str, room: &str, count: u32, size: u32) -> TestConfig {
     TestConfig {
@@ -310,11 +329,42 @@ pub async fn run_instance(
     test_id: &str,
     config: TestConfig,
 ) -> Result<TestResult> {
+    run_instance_in_store(new_store(engine), engine, component, test_id, config).await
+}
+
+/// Run one guest instance to a [`TestResult`] with an explicit ICE-lab network
+/// configuration (bind address, STUN/TURN servers, relay-only policy). Used by
+/// the single-peer `conformance-peer` binary the ICE-lab orchestrator launches
+/// inside a network namespace.
+pub async fn run_instance_with_ice(
+    engine: &Engine,
+    component: &Component,
+    test_id: &str,
+    config: TestConfig,
+    ice: WebrtcIceConfig,
+) -> Result<TestResult> {
+    run_instance_in_store(
+        new_store_with_ice(engine, ice),
+        engine,
+        component,
+        test_id,
+        config,
+    )
+    .await
+}
+
+/// Instantiate the guest in `store` and drive one `run-test` call to its outcome.
+async fn run_instance_in_store(
+    mut store: Store<Ctx>,
+    engine: &Engine,
+    component: &Component,
+    test_id: &str,
+    config: TestConfig,
+) -> Result<TestResult> {
     let mut linker: Linker<Ctx> = Linker::new(engine);
     webrtc_host::add_to_linker(&mut linker)?;
     add_mailbox_to_linker(&mut linker)?;
 
-    let mut store = new_store(engine);
     let instance = Conformance::instantiate_async(&mut store, component, &linker).await?;
     let test_id = test_id.to_string();
     let result = store
@@ -353,5 +403,157 @@ pub fn fold_two(offerer: TestResult, answerer: TestResult) -> TestResult {
         (TestResult::Skipped(a), _) => TestResult::Skipped(a),
         (_, TestResult::Skipped(b)) => TestResult::Skipped(b),
         (TestResult::Pass, TestResult::Pass) => TestResult::Pass,
+    }
+}
+
+// ----- ICE lab scenarios ----------------------------------------------------
+
+/// The addresses and TURN credentials of a provisioned ICE lab, mirroring the
+/// defaults in `conformance/scenarios/lib.sh`. The orchestrator overrides these
+/// from CLI flags so the Rust side and the shell provisioning agree on where the
+/// peers, signaling server, and STUN/TURN server live.
+#[derive(Debug, Clone)]
+pub struct LabConfig {
+    /// UDP address the offerer peer binds and gathers host candidates from.
+    pub offerer_addr: String,
+    /// UDP address the answerer peer binds and gathers host candidates from.
+    pub answerer_addr: String,
+    /// STUN/TURN server URL host:port, e.g. `10.79.3.2:3478`.
+    pub server_addr: String,
+    /// TURN long-term-credential username.
+    pub turn_user: String,
+    /// TURN long-term-credential secret.
+    pub turn_pass: String,
+}
+
+impl Default for LabConfig {
+    fn default() -> Self {
+        Self {
+            offerer_addr: "10.79.1.2".to_string(),
+            answerer_addr: "10.79.2.2".to_string(),
+            server_addr: "10.79.3.2:3478".to_string(),
+            turn_user: "conf".to_string(),
+            turn_pass: "conf".to_string(),
+        }
+    }
+}
+
+/// An ICE-lab scenario: the candidate path a run is set up to exercise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scenario {
+    /// Direct host-candidate connectivity over the router (no STUN/TURN server).
+    Lan,
+    /// Server-reflexive candidates via a STUN server; the direct path is blocked.
+    StunSrflx,
+    /// Relayed candidates via a TURN server; the direct path is blocked and the
+    /// peers are relay-only.
+    TurnRelay,
+}
+
+impl Scenario {
+    /// The scenario id used on the command line, in result documents, and as the
+    /// matrix environment column.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Scenario::Lan => "lan",
+            Scenario::StunSrflx => "stun-srflx",
+            Scenario::TurnRelay => "turn-relay",
+        }
+    }
+
+    /// Parse a scenario id (`lan`, `stun-srflx`, `turn-relay`).
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "lan" => Ok(Scenario::Lan),
+            "stun-srflx" => Ok(Scenario::StunSrflx),
+            "turn-relay" => Ok(Scenario::TurnRelay),
+            other => anyhow::bail!("unknown scenario {other:?} (lan|stun-srflx|turn-relay)"),
+        }
+    }
+
+    /// The bind address for a peer role in `lab`.
+    pub fn bind_addr(self, role: Role, lab: &LabConfig) -> String {
+        match role {
+            Role::Answerer => lab.answerer_addr.clone(),
+            // `both` never appears in the two-peer lab; treat it as the offerer.
+            Role::Offerer | Role::Both => lab.offerer_addr.clone(),
+        }
+    }
+
+    /// The [`WebrtcIceConfig`] a peer of this scenario runs with: it always binds
+    /// its scenario interface address, and additionally points at the STUN or
+    /// TURN server (and forces relay-only) for the server-mediated scenarios.
+    pub fn ice_config(self, role: Role, lab: &LabConfig) -> WebrtcIceConfig {
+        let mut ice = WebrtcIceConfig {
+            udp_addrs: vec![format!("{}:0", self.bind_addr(role, lab))],
+            ..Default::default()
+        };
+        match self {
+            Scenario::Lan => {}
+            Scenario::StunSrflx => {
+                ice.ice_servers = vec![WebrtcIceServer {
+                    urls: vec![format!("stun:{}", lab.server_addr)],
+                    ..Default::default()
+                }];
+            }
+            Scenario::TurnRelay => {
+                ice.ice_servers = vec![WebrtcIceServer {
+                    urls: vec![format!("turn:{}?transport=udp", lab.server_addr)],
+                    username: lab.turn_user.clone(),
+                    credential: lab.turn_pass.clone(),
+                }];
+                ice.relay_only = true;
+            }
+        }
+        ice
+    }
+}
+
+#[cfg(test)]
+mod scenario_tests {
+    use super::*;
+
+    #[test]
+    fn scenario_ids_round_trip() {
+        for s in [Scenario::Lan, Scenario::StunSrflx, Scenario::TurnRelay] {
+            assert_eq!(Scenario::parse(s.as_str()).unwrap(), s);
+        }
+        assert!(Scenario::parse("nope").is_err());
+    }
+
+    #[test]
+    fn lan_binds_role_address_without_servers() {
+        let lab = LabConfig::default();
+        let off = Scenario::Lan.ice_config(Role::Offerer, &lab);
+        assert_eq!(off.udp_addrs, vec!["10.79.1.2:0".to_string()]);
+        assert!(off.ice_servers.is_empty());
+        assert!(!off.relay_only);
+        let ans = Scenario::Lan.ice_config(Role::Answerer, &lab);
+        assert_eq!(ans.udp_addrs, vec!["10.79.2.2:0".to_string()]);
+    }
+
+    #[test]
+    fn stun_srflx_adds_stun_server_only() {
+        let ice = Scenario::StunSrflx.ice_config(Role::Offerer, &LabConfig::default());
+        assert_eq!(ice.ice_servers.len(), 1);
+        assert_eq!(
+            ice.ice_servers[0].urls,
+            vec!["stun:10.79.3.2:3478".to_string()]
+        );
+        assert!(ice.ice_servers[0].username.is_empty());
+        assert!(!ice.relay_only);
+    }
+
+    #[test]
+    fn turn_relay_is_relay_only_with_credentials() {
+        let ice = Scenario::TurnRelay.ice_config(Role::Answerer, &LabConfig::default());
+        assert!(ice.relay_only);
+        assert_eq!(ice.ice_servers.len(), 1);
+        assert_eq!(
+            ice.ice_servers[0].urls,
+            vec!["turn:10.79.3.2:3478?transport=udp".to_string()]
+        );
+        assert_eq!(ice.ice_servers[0].username, "conf");
+        assert_eq!(ice.ice_servers[0].credential, "conf");
     }
 }

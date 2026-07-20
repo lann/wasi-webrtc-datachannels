@@ -496,7 +496,8 @@ fn from_sdp_error(err: SdpError) -> Error {
 impl HostPeerConnection for WasiWebrtcCtxView<'_> {
     fn new(&mut self) -> Result<Resource<PeerConnection>> {
         let hook = self.ctx.setting_engine_hook();
-        Ok(self.table.push(PeerConnection::new(hook))?)
+        let ice = self.ctx.ice_config();
+        Ok(self.table.push(PeerConnection::new_with(hook, ice))?)
     }
 
     fn create_data_channel(

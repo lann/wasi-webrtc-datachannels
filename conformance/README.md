@@ -121,6 +121,58 @@ cargo run -p conformance-signalingd
 cargo run -p conformance-signalingd -- --host 0.0.0.0 --port 8080
 ```
 
+## ICE lab (`scenarios/`, `just conformance-ice`)
+
+The default adapters connect their peers over the loopback interface. The **ICE
+lab** (Phase 5) instead runs the two peers of each test over a real routed
+network path, so the ICE handshake exercises non-loopback candidates — and, for
+the server-mediated scenarios, is forced through a STUN/TURN server. It is a
+small routed network of Linux **network namespaces** provisioned entirely with
+`ip`, `nft`, and coturn's `turnserver` (no containers): an offerer, an answerer,
+and a signaling namespace, each on its own `/30` subnet behind a router
+namespace (see [`scenarios/lib.sh`](scenarios/lib.sh) for the topology and
+addresses).
+
+Because the two peers live in separate namespaces, each runs as its own process
+(`conformance-peer`), placed with `ip netns exec`; an orchestrator
+(`conformance-ice`) provisions the lab, runs the signaling server (and coturn) in
+the signaling namespace, drives the corpus, and tears the lab down. Results are
+written to `conformance/results/wasmtime-<scenario>.json` with the scenario as
+the report's `environment`, so each scenario is its own matrix row.
+
+Scenarios:
+
+| Scenario | What it exercises |
+| --- | --- |
+| `lan` | Direct host-candidate connectivity over the router (no server). |
+| `stun-srflx` | coturn as a STUN server; the router blocks the direct peer↔peer path so a server-reflexive path must be used. |
+| `turn-relay` | coturn as a TURN server; the direct path is blocked and the peers are relay-only, so data is relayed by coturn. |
+
+Run a scenario from the repository root (requires **root**, for `ip netns
+exec`, and `turnserver` on `PATH` for the non-`lan` scenarios — both provided by
+[`scripts/setup.sh`](../scripts/setup.sh)):
+
+```sh
+just conformance-ice lan
+just conformance-ice turn-relay
+```
+
+The scenario scripts are also usable standalone for interactive debugging — for
+example `sudo bash conformance/scenarios/scenario.sh up turn-relay`, then
+`... scenario.sh env turn-relay` to print the lab parameters, and
+`... scenario.sh down` to tear it down.
+
+> **`stun-srflx` caveat.** Without NAT between the peers and the router, a peer's
+> server-reflexive address is identical to its host address, so blocking the
+> direct path also blocks the srflx path. A meaningful `stun-srflx` run therefore
+> needs NAT on the router (the NAT matrix is Phase 6 territory); the lab
+> provisions the STUN server and the block, but only `lan` and `turn-relay` are
+> asserted green in CI so far.
+
+CI runs the lab in a dedicated job (`ice-lab` in
+[`.github/workflows/conformance.yml`](../.github/workflows/conformance.yml)),
+because network namespaces need privileges a typical sandbox does not grant.
+
 ## Layout
 
 ```
@@ -167,8 +219,10 @@ loads only `*.toml`) does not treat it as an enabled target.
 
 ## Reading the matrix
 
-`conformance-runner` renders a markdown table with one row per target and one
-column per test. Cell values:
+`conformance-runner` renders a markdown table with one row per
+`(target, environment)` and one column per test. Most targets run only in the
+`loopback` environment; the ICE lab (above) adds `lan` / `turn-relay` rows for
+the `wasmtime` target. Cell values:
 
 | Symbol | Meaning |
 | --- | --- |

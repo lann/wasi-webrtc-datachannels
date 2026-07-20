@@ -19,9 +19,9 @@ mod host;
 mod peer_connection;
 
 pub use data_channel::{
-    close_peer_connections, new_peer_connection, spawn_channel_pump, spawn_channel_wiring,
-    wire_open_channel, wiring_channel, CallbackHandler, ChannelError, ChannelPump, DataChannel,
-    InboundMessage, Wired, WiredFuture,
+    close_peer_connections, new_peer_connection, new_peer_connection_with, spawn_channel_pump,
+    spawn_channel_wiring, wire_open_channel, wiring_channel, CallbackHandler, ChannelError,
+    ChannelPump, DataChannel, InboundMessage, Wired, WiredFuture,
 };
 pub use peer_connection::{LocalCandidate, PeerConnection, SdpError, SdpKind, WaitError};
 
@@ -33,6 +33,48 @@ use webrtc::peer_connection::SettingEngine;
 /// A hook run against a fresh [`SettingEngine`] before each peer connection is
 /// created. See [`WasiWebrtcCtx::set_setting_engine_hook`].
 pub type SettingEngineHook = Arc<dyn Fn(&mut SettingEngine) + Send + Sync>;
+
+/// A STUN/TURN server a peer connection may gather server-reflexive and relay
+/// candidates from. Mirrors `webrtc-rs`'s `RTCIceServer`; `username`/`credential`
+/// are ignored for STUN-only URLs.
+#[derive(Clone, Debug, Default)]
+pub struct WebrtcIceServer {
+    /// STUN/TURN URLs, e.g. `stun:host:3478` or `turn:host:3478?transport=udp`.
+    pub urls: Vec<String>,
+    /// TURN long-term-credential username (empty for STUN-only servers).
+    pub username: String,
+    /// TURN long-term-credential secret (empty for STUN-only servers).
+    pub credential: String,
+}
+
+/// Network/ICE configuration applied when a peer connection is built.
+///
+/// The default value reproduces the crate's built-in behavior: bind a single
+/// ephemeral UDP socket on IPv4 loopback, no STUN/TURN servers, and the `all`
+/// ICE transport policy. The conformance ICE lab (see `conformance/PLAN.md`
+/// Phase 5) overrides these to bind a scenario-specific interface address and to
+/// point at a STUN/TURN server, forcing server-reflexive or relay candidate
+/// paths.
+#[derive(Clone, Debug, Default)]
+pub struct WebrtcIceConfig {
+    /// UDP socket addresses to bind and gather host candidates from. When empty
+    /// the crate binds its default (`127.0.0.1:0`). Use a `:0` port to let the
+    /// OS choose an ephemeral port.
+    pub udp_addrs: Vec<String>,
+    /// STUN/TURN servers to gather server-reflexive and relay candidates from.
+    pub ice_servers: Vec<WebrtcIceServer>,
+    /// When `true`, only TURN relay candidates are used (the `relay` ICE
+    /// transport policy); requires at least one TURN server in `ice_servers`.
+    pub relay_only: bool,
+}
+
+impl WebrtcIceConfig {
+    /// True when this configuration leaves every field at its default, in which
+    /// case the crate's built-in loopback behavior is used unchanged.
+    pub fn is_default(&self) -> bool {
+        self.udp_addrs.is_empty() && self.ice_servers.is_empty() && !self.relay_only
+    }
+}
 
 /// Configuration and per-store state for the WebRTC data-channel host.
 ///
@@ -49,6 +91,7 @@ pub type SettingEngineHook = Arc<dyn Fn(&mut SettingEngine) + Send + Sync>;
 #[non_exhaustive]
 pub struct WasiWebrtcCtx {
     setting_engine_hook: Option<SettingEngineHook>,
+    ice_config: WebrtcIceConfig,
 }
 
 impl std::fmt::Debug for WasiWebrtcCtx {
@@ -58,6 +101,7 @@ impl std::fmt::Debug for WasiWebrtcCtx {
                 "setting_engine_hook",
                 &self.setting_engine_hook.as_ref().map(|_| "<hook>"),
             )
+            .field("ice_config", &self.ice_config)
             .finish()
     }
 }
@@ -94,6 +138,22 @@ impl WasiWebrtcCtx {
     /// can apply it without holding a borrow of the context.
     pub fn setting_engine_hook(&self) -> Option<SettingEngineHook> {
         self.setting_engine_hook.clone()
+    }
+
+    /// Set the network/ICE configuration applied to every peer connection this
+    /// context creates (bind addresses, STUN/TURN servers, relay-only policy).
+    ///
+    /// The default leaves the crate's built-in loopback behavior unchanged; the
+    /// conformance ICE lab overrides it per scenario (see `conformance/PLAN.md`
+    /// Phase 5).
+    pub fn set_ice_config(&mut self, config: WebrtcIceConfig) {
+        self.ice_config = config;
+    }
+
+    /// The configured network/ICE configuration, cheaply cloned so callers can
+    /// apply it without holding a borrow of the context.
+    pub fn ice_config(&self) -> WebrtcIceConfig {
+        self.ice_config.clone()
     }
 }
 

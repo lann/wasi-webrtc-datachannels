@@ -149,6 +149,29 @@ conformance-interop: transpile-conformance-guest build-conformance-wasip3
     timeout {{conformance-timeout}} target/release/conformance-interop \
         --pair wasmtime-x-jco-node --pair jco-node-x-wasmtime
 
+# Run the conformance ICE lab for one scenario (lan | stun-srflx | turn-relay;
+# see conformance/PLAN.md Phase 5). The orchestrator (conformance-ice) provisions
+# a routed network-namespace topology (conformance/scenarios/), places the two
+# peers of each two-peer test in separate namespaces, and — for the
+# server-mediated scenarios — routes them through coturn while the router blocks
+# the direct path, so the handshake exercises a real (non-loopback) candidate
+# path. Writes conformance/results/wasmtime-<scenario>.json (environment column
+# in the matrix). Needs root for `ip netns exec` (hence sudo) and `turnserver`
+# on PATH for the non-`lan` scenarios (installed by scripts/setup.sh). The lab is
+# always torn down on exit. NOTE: `stun-srflx` needs NAT on the router to be
+# meaningful (see the README / Phase 6); `lan` and `turn-relay` run without it.
+conformance-ice scenario="lan": build-conformance-guest
+    cargo build -p conformance-signalingd
+    cargo build --release -p conformance-adapter-wasmtime \
+        --bin conformance-peer --bin conformance-ice
+    sudo timeout {{conformance-timeout}} target/release/conformance-ice \
+        --scenario {{scenario}} \
+        --guest conformance/guest/build/conformance-guest.component.wasm \
+        --signaling-bin target/debug/conformance-signalingd \
+        --peer-bin target/release/conformance-peer \
+        --scenarios-dir conformance/scenarios \
+        --out conformance/results
+
 # Build the echo-demo guest component into examples/echo-demo/build/.
 build-component:
     cd jco-impl && npm run build:component

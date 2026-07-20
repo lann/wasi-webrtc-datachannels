@@ -34,7 +34,7 @@ use futures::{FutureExt, TryFutureExt};
 use webrtc::data_channel::{DataChannel as WebrtcDataChannel, DataChannelEvent};
 use webrtc::peer_connection::{
     PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCConfigurationBuilder,
-    SettingEngine,
+    RTCIceServer, RTCIceTransportPolicy, SettingEngine,
 };
 use webrtc::runtime::default_runtime;
 
@@ -349,15 +349,57 @@ pub async fn new_peer_connection(
     configure: impl FnOnce(&mut SettingEngine),
     handler: Arc<dyn PeerConnectionEventHandler>,
 ) -> Result<Arc<dyn PeerConnection>> {
+    new_peer_connection_with(configure, crate::WebrtcIceConfig::default(), handler).await
+}
+
+/// Like [`new_peer_connection`] but with an explicit [`WebrtcIceConfig`](crate::WebrtcIceConfig)
+/// controlling the UDP bind addresses, STUN/TURN servers, and ICE transport
+/// policy. A default config reproduces [`new_peer_connection`]'s built-in
+/// loopback behavior; the conformance ICE lab (see `conformance/PLAN.md` Phase 5)
+/// overrides it per scenario to exercise host, server-reflexive, and relay
+/// candidate paths.
+pub async fn new_peer_connection_with(
+    configure: impl FnOnce(&mut SettingEngine),
+    ice: crate::WebrtcIceConfig,
+    handler: Arc<dyn PeerConnectionEventHandler>,
+) -> Result<Arc<dyn PeerConnection>> {
     let mut setting = SettingEngine::default();
     configure(&mut setting);
     let runtime = default_runtime().ok_or_else(|| anyhow!("no async runtime found"))?;
+
+    // Bind the scenario-specified interface addresses, or the crate default.
+    let udp_addrs: Vec<String> = if ice.udp_addrs.is_empty() {
+        vec!["127.0.0.1:0".to_string()]
+    } else {
+        ice.udp_addrs.clone()
+    };
+
+    // Assemble the RTCConfiguration from the scenario's STUN/TURN servers and
+    // transport policy. An all-default config yields an empty builder, matching
+    // the previous `RTCConfigurationBuilder::new().build()`.
+    let mut config = RTCConfigurationBuilder::new();
+    if !ice.ice_servers.is_empty() {
+        config = config.with_ice_servers(
+            ice.ice_servers
+                .iter()
+                .map(|server| RTCIceServer {
+                    urls: server.urls.clone(),
+                    username: server.username.clone(),
+                    credential: server.credential.clone(),
+                })
+                .collect(),
+        );
+    }
+    if ice.relay_only {
+        config = config.with_ice_transport_policy(RTCIceTransportPolicy::Relay);
+    }
+
     let pc = PeerConnectionBuilder::new()
-        .with_configuration(RTCConfigurationBuilder::new().build())
+        .with_configuration(config.build())
         .with_setting_engine(setting)
         .with_handler(handler)
         .with_runtime(runtime)
-        .with_udp_addrs(vec!["127.0.0.1:0"])
+        .with_udp_addrs(udp_addrs)
         .build()
         .await?;
     Ok(Arc::new(pc))

@@ -3,7 +3,9 @@ name: Conformance
 # The conformance suite (see conformance/PLAN.md). Job 1 builds the conformance
 # guest once and runs the loopback + trickle-variants scenarios across all
 # enabled targets, including the pairwise interop matrix, uploading the matrix
-# artifact and failing on any unexpected status.
+# artifact and failing on any unexpected status. Job 2 runs the ICE lab (Phase
+# 5): the wasmtime two-peer corpus over a routed network-namespace topology with
+# real (non-loopback) candidate paths (`lan` and `turn-relay`).
 #
 # Phases enabled so far:
 #   - Phase 0: the runner, registry, and manifest schema.
@@ -26,6 +28,12 @@ name: Conformance
 #     the cross-runtime interop pair `wasmtime`<->`wasip3-guest` in both
 #     orders (wired but disabled by default pending a wasip3 teardown-flush
 #     fix; see TODO.md item E3).
+#   - Phase 5: the ICE lab (Job 2) — the wasmtime two-peer corpus run with each
+#     peer in its own network namespace over a routed veth topology
+#     (conformance/scenarios/), exercising direct host candidates (`lan`) and
+#     TURN-relayed candidates through coturn with the direct path blocked
+#     (`turn-relay`). `stun-srflx` is provisioned but not asserted (it needs NAT
+#     on the router to be meaningful; see the README / Phase 6).
 # Later phases enable more scenarios and additional jobs (see the workflow plan
 # in conformance/PLAN.md).
 
@@ -97,4 +105,56 @@ jobs:
         with:
           name: conformance-matrix
           path: conformance/matrix.md
+          if-no-files-found: warn
+
+  # Job 2: the ICE lab (PLAN.md Phase 5). Provisions a routed network-namespace
+  # topology (conformance/scenarios/) and runs the wasmtime two-peer corpus with
+  # each peer in its own namespace, so the handshake traverses a real
+  # (non-loopback) path. `lan` uses direct host candidates; `turn-relay` blocks
+  # the direct path and relays through coturn. (`stun-srflx` needs NAT on the
+  # router to be meaningful — see the README / Phase 6 — so it is provisioned but
+  # not asserted here.) This runs on a real runner because network namespaces and
+  # `ip netns exec` require privileges a sandbox does not grant.
+  ice-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: true
+
+      # The ICE lab is wasmtime-only, so the Node host dependencies are not
+      # needed; SKIP_NODE keeps setup fast while still installing coturn/iproute2.
+      - name: Install dependencies
+        run: SKIP_NODE=1 ./scripts/setup.sh
+
+      - name: Run ICE lab (lan)
+        run: just conformance-ice lan
+
+      - name: Run ICE lab (turn-relay)
+        run: just conformance-ice turn-relay
+
+      # Classify the lab results (wasmtime-<scenario>.json) against the manifests
+      # and render the environment-columned matrix; exits nonzero on any failure.
+      - name: Classify ICE-lab matrix
+        run: |
+          cargo run -p conformance-runner -- \
+            --tests conformance/tests.toml \
+            --manifests conformance/manifests \
+            --results conformance/results \
+            --matrix-out conformance/ice-matrix.md
+
+      - name: Upload ICE-lab matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-ice-matrix
+          path: conformance/ice-matrix.md
           if-no-files-found: warn
