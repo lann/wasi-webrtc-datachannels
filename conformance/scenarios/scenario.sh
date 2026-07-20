@@ -6,9 +6,9 @@
 # recipes use, and it is usable standalone for interactive debugging.
 #
 # Usage:
-#   scenario.sh up   <lan|stun-srflx|turn-relay>
+#   scenario.sh up   <lan|stun-srflx|turn-relay|nat-symmetric>
 #   scenario.sh down [scenario]     # scenario arg optional; tears the lab down
-#   scenario.sh env  <lan|stun-srflx|turn-relay>
+#   scenario.sh env  <lan|stun-srflx|turn-relay|nat-symmetric>
 #
 # `up` provisions the lab for the scenario; `down` removes everything; `env`
 # prints the lab parameters (addresses, signaling URL, TURN credentials) as
@@ -16,13 +16,15 @@
 # reads to place peers and point them at the signaling/coturn server.
 #
 # Scenarios:
-#   lan          direct host-candidate connectivity over the router (no server).
-#   stun-srflx   coturn as a STUN server; the direct peer<->peer path is blocked
-#                so a server-reflexive path must be used. NOTE: a meaningful srflx
-#                path also needs NAT on the router (see README / Phase 6); this
-#                provisions the server + block, the NAT topology is layered on top.
-#   turn-relay   coturn as a TURN server; the direct peer<->peer path is blocked,
-#                and peers are relay-only, so data must be relayed by coturn.
+#   lan            direct host-candidate connectivity over the router (no server).
+#   stun-srflx     coturn as a STUN server behind a port-restricted (cone) NAT;
+#                  the direct peer<->peer path is blocked, so a server-reflexive
+#                  path must be used, and the cone NAT lets it connect.
+#   turn-relay     coturn as a TURN server; the direct peer<->peer path is blocked,
+#                  and peers are relay-only, so data must be relayed by coturn.
+#   nat-symmetric  coturn as a STUN/TURN server behind a symmetric NAT; the direct
+#                  path is blocked and the symmetric NAT makes srflx unusable, so
+#                  ICE must fall back to a TURN relay (Phase 6).
 #
 # Requires root (or passwordless sudo).
 
@@ -34,7 +36,7 @@ CW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cw_valid_scenario() {
     case "$1" in
-        lan | stun-srflx | turn-relay) return 0 ;;
+        lan | stun-srflx | turn-relay | nat-symmetric) return 0 ;;
         *) return 1 ;;
     esac
 }

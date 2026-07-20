@@ -145,8 +145,9 @@ Scenarios:
 | Scenario | What it exercises |
 | --- | --- |
 | `lan` | Direct host-candidate connectivity over the router (no server). |
-| `stun-srflx` | coturn as a STUN server; the router blocks the direct peer↔peer path so a server-reflexive path must be used. |
+| `stun-srflx` | coturn as a STUN server behind a port-restricted (cone) NAT; the router blocks the direct peer↔peer path so a server-reflexive path must be used, and the cone NAT lets it connect. |
 | `turn-relay` | coturn as a TURN server; the direct path is blocked and the peers are relay-only, so data is relayed by coturn. |
+| `nat-symmetric` | coturn as a STUN/TURN server behind a symmetric NAT; the direct path is blocked and the symmetric NAT makes srflx unusable, so ICE falls back to a TURN relay (Phase 6). |
 
 Run a scenario from the repository root (requires **root**, for `ip netns
 exec`, and `turnserver` on `PATH` for the non-`lan` scenarios — both provided by
@@ -154,7 +155,11 @@ exec`, and `turnserver` on `PATH` for the non-`lan` scenarios — both provided 
 
 ```sh
 just conformance-ice lan
+just conformance-ice stun-srflx
 just conformance-ice turn-relay
+just conformance-ice nat-symmetric
+# or run both NAT scenarios (the Phase 6 matrix) at once:
+just conformance-nat
 ```
 
 The scenario scripts are also usable standalone for interactive debugging — for
@@ -162,12 +167,25 @@ example `sudo bash conformance/scenarios/scenario.sh up turn-relay`, then
 `... scenario.sh env turn-relay` to print the lab parameters, and
 `... scenario.sh down` to tear it down.
 
-> **`stun-srflx` caveat.** Without NAT between the peers and the router, a peer's
-> server-reflexive address is identical to its host address, so blocking the
-> direct path also blocks the srflx path. A meaningful `stun-srflx` run therefore
-> needs NAT on the router (the NAT matrix is Phase 6 territory); the lab
-> provisions the STUN server and the block, but only `lan` and `turn-relay` are
-> asserted green in CI so far.
+### NAT matrix (Phase 6)
+
+Server-reflexive candidates are only meaningful when a peer's mapped address
+differs from its host address, which requires NAT between the peers and the
+router. The NAT scenarios add an nftables source-NAT on the router
+([`scenarios/nftables.sh`](scenarios/nftables.sh)) that rewrites each peer's
+forwarded traffic to its own "public" address:
+
+- `stun-srflx` uses a **port-restricted (cone) NAT** (`snat … persistent`): the
+  mapping is endpoint-independent, so the two peers can hole-punch their srflx
+  candidates and connect — the meaningful server-reflexive path.
+- `nat-symmetric` uses a **symmetric NAT** (`snat … random`): the mapping is
+  endpoint-dependent, so the address the STUN server observed is useless to the
+  peer and ICE must fall back to a TURN relay.
+
+CI runs the NAT matrix in a dedicated **nightly** job (`nat-matrix` in
+[`.github/workflows/conformance.yml`](../.github/workflows/conformance.yml), also
+runnable via `workflow_dispatch`) with `continue-on-error` until the NAT paths
+prove stable enough to gate on.
 
 CI runs the lab in a dedicated job (`ice-lab` in
 [`.github/workflows/conformance.yml`](../.github/workflows/conformance.yml)),
@@ -224,8 +242,8 @@ loads only `*.toml`) does not treat it as an enabled target.
 
 `conformance-runner` renders a markdown table with one row per
 `(target, environment)` and one column per test. Most targets run only in the
-`loopback` environment; the ICE lab (above) adds `lan` / `turn-relay` rows for
-the `wasmtime` target. Cell values:
+`loopback` environment; the ICE lab (above) adds `lan` / `stun-srflx` /
+`turn-relay` / `nat-symmetric` rows for the `wasmtime` target. Cell values:
 
 | Symbol | Meaning |
 | --- | --- |

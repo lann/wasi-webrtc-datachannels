@@ -149,17 +149,19 @@ conformance-interop: transpile-conformance-guest build-conformance-wasip3 build-
     timeout {{conformance-timeout}} target/release/conformance-interop \
         --pair wasmtime-x-jco-node --pair jco-node-x-wasmtime
 
-# Run the conformance ICE lab for one scenario (lan | stun-srflx | turn-relay;
-# see conformance/PLAN.md Phase 5). The orchestrator (conformance-ice) provisions
-# a routed network-namespace topology (conformance/scenarios/), places the two
-# peers of each two-peer test in separate namespaces, and — for the
-# server-mediated scenarios — routes them through coturn while the router blocks
-# the direct path, so the handshake exercises a real (non-loopback) candidate
-# path. Writes conformance/results/wasmtime-<scenario>.json (environment column
-# in the matrix). Needs root for `ip netns exec` (hence sudo) and `turnserver`
-# on PATH for the non-`lan` scenarios (installed by scripts/setup.sh). The lab is
-# always torn down on exit. NOTE: `stun-srflx` needs NAT on the router to be
-# meaningful (see the README / Phase 6); `lan` and `turn-relay` run without it.
+# Run the conformance ICE lab for one scenario (lan | stun-srflx | turn-relay |
+# nat-symmetric; see conformance/PLAN.md Phases 5 and 6). The orchestrator
+# (conformance-ice) provisions a routed network-namespace topology
+# (conformance/scenarios/), places the two peers of each two-peer test in
+# separate namespaces, and — for the server-mediated scenarios — routes them
+# through coturn while the router blocks the direct path (and, for the NAT
+# scenarios, source-NATs each peer), so the handshake exercises a real
+# (non-loopback) candidate path. Writes conformance/results/wasmtime-<scenario>.json
+# (environment column in the matrix). Needs root for `ip netns exec` (hence sudo)
+# and `turnserver` on PATH for the non-`lan` scenarios (installed by
+# scripts/setup.sh). The lab is always torn down on exit. `stun-srflx` runs behind
+# a port-restricted (cone) NAT so its srflx path is meaningful; `nat-symmetric`
+# runs behind a symmetric NAT so ICE must fall back to a TURN relay.
 conformance-ice scenario="lan": build-conformance-guest build-signalingd
     cargo build --release -p conformance-adapter-wasmtime \
         --bin conformance-peer --bin conformance-ice
@@ -170,6 +172,14 @@ conformance-ice scenario="lan": build-conformance-guest build-signalingd
         --peer-bin target/release/conformance-peer \
         --scenarios-dir conformance/scenarios \
         --out conformance/results
+
+# Run the NAT matrix (conformance/PLAN.md Phase 6): the srflx scenario behind a
+# port-restricted (cone) NAT, where the server-reflexive candidates connect, and
+# the symmetric-NAT scenario, where srflx fails and ICE must fall back to a TURN
+# relay. Both write conformance/results/wasmtime-<scenario>.json. This is the
+# workstation entry point and the nightly CI Job 3 (continue-on-error until
+# proven stable). Requires the same privileges/tools as `conformance-ice`.
+conformance-nat: (conformance-ice "stun-srflx") (conformance-ice "nat-symmetric")
 
 # Build the echo-demo guest component into examples/echo-demo/build/.
 build-component:

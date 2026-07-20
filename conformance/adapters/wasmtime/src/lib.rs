@@ -392,11 +392,17 @@ impl Default for LabConfig {
 pub enum Scenario {
     /// Direct host-candidate connectivity over the router (no STUN/TURN server).
     Lan,
-    /// Server-reflexive candidates via a STUN server; the direct path is blocked.
+    /// Server-reflexive candidates via a STUN server behind a port-restricted
+    /// (cone) NAT; the direct path is blocked, and the cone NAT lets the srflx
+    /// candidates connect (see `conformance/PLAN.md` Phase 6).
     StunSrflx,
     /// Relayed candidates via a TURN server; the direct path is blocked and the
     /// peers are relay-only.
     TurnRelay,
+    /// A symmetric NAT with a STUN/TURN server available but no relay-only
+    /// policy: the direct path is blocked and the symmetric NAT makes the srflx
+    /// candidates unusable, so ICE must fall back to a TURN relay (Phase 6).
+    NatSymmetric,
 }
 
 impl Scenario {
@@ -407,16 +413,20 @@ impl Scenario {
             Scenario::Lan => "lan",
             Scenario::StunSrflx => "stun-srflx",
             Scenario::TurnRelay => "turn-relay",
+            Scenario::NatSymmetric => "nat-symmetric",
         }
     }
 
-    /// Parse a scenario id (`lan`, `stun-srflx`, `turn-relay`).
+    /// Parse a scenario id (`lan`, `stun-srflx`, `turn-relay`, `nat-symmetric`).
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "lan" => Ok(Scenario::Lan),
             "stun-srflx" => Ok(Scenario::StunSrflx),
             "turn-relay" => Ok(Scenario::TurnRelay),
-            other => anyhow::bail!("unknown scenario {other:?} (lan|stun-srflx|turn-relay)"),
+            "nat-symmetric" => Ok(Scenario::NatSymmetric),
+            other => anyhow::bail!(
+                "unknown scenario {other:?} (lan|stun-srflx|turn-relay|nat-symmetric)"
+            ),
         }
     }
 
@@ -453,6 +463,16 @@ impl Scenario {
                 }];
                 ice.relay_only = true;
             }
+            Scenario::NatSymmetric => {
+                // A TURN server (which also serves STUN, so the peer gathers both
+                // srflx and relay candidates) with no relay-only policy: under a
+                // symmetric NAT the srflx pair fails and ICE falls back to relay.
+                ice.ice_servers = vec![WebrtcIceServer {
+                    urls: vec![format!("turn:{}?transport=udp", lab.server_addr)],
+                    username: lab.turn_user.clone(),
+                    credential: lab.turn_pass.clone(),
+                }];
+            }
         }
         ice
     }
@@ -464,7 +484,12 @@ mod scenario_tests {
 
     #[test]
     fn scenario_ids_round_trip() {
-        for s in [Scenario::Lan, Scenario::StunSrflx, Scenario::TurnRelay] {
+        for s in [
+            Scenario::Lan,
+            Scenario::StunSrflx,
+            Scenario::TurnRelay,
+            Scenario::NatSymmetric,
+        ] {
             assert_eq!(Scenario::parse(s.as_str()).unwrap(), s);
         }
         assert!(Scenario::parse("nope").is_err());
@@ -497,6 +522,22 @@ mod scenario_tests {
     fn turn_relay_is_relay_only_with_credentials() {
         let ice = Scenario::TurnRelay.ice_config(Role::Answerer, &LabConfig::default());
         assert!(ice.relay_only);
+        assert_eq!(ice.ice_servers.len(), 1);
+        assert_eq!(
+            ice.ice_servers[0].urls,
+            vec!["turn:10.79.3.2:3478?transport=udp".to_string()]
+        );
+        assert_eq!(ice.ice_servers[0].username, "conf");
+        assert_eq!(ice.ice_servers[0].credential, "conf");
+    }
+
+    #[test]
+    fn nat_symmetric_offers_turn_without_relay_only() {
+        // The symmetric-NAT scenario configures a TURN server (which also serves
+        // STUN) but leaves relay-only off, so the peer gathers srflx *and* relay
+        // candidates and falls back to relay when srflx fails under symmetric NAT.
+        let ice = Scenario::NatSymmetric.ice_config(Role::Offerer, &LabConfig::default());
+        assert!(!ice.relay_only);
         assert_eq!(ice.ice_servers.len(), 1);
         assert_eq!(
             ice.ice_servers[0].urls,

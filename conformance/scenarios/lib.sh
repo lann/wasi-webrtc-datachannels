@@ -50,6 +50,16 @@ CW_OFF_SUBNET="${CW_OFF_SUBNET:-10.79.1.0/30}"
 CW_ANS_SUBNET="${CW_ANS_SUBNET:-10.79.2.0/30}"
 CW_SIG_SUBNET="${CW_SIG_SUBNET:-10.79.3.0/30}"
 
+# Per-peer "public" SNAT addresses used by the NAT scenarios (Phase 6). The
+# router source-NATs each peer's forwarded traffic to its own public address, so
+# a peer's server-reflexive candidate (the mapping the STUN server observes)
+# differs from its private host candidate — which is what makes a srflx path
+# meaningful. These addresses are not assigned to any interface; the router owns
+# them implicitly through connection tracking (the reverse of each peer's
+# outbound SNAT maps them back to the private address).
+CW_OFF_PUB="${CW_OFF_PUB:-10.79.11.1}"
+CW_ANS_PUB="${CW_ANS_PUB:-10.79.12.1}"
+
 # Service ports in cw-sig.
 CW_SIGNALING_PORT="${CW_SIGNALING_PORT:-8080}"
 CW_TURN_PORT="${CW_TURN_PORT:-3478}"
