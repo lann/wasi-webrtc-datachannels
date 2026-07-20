@@ -397,6 +397,9 @@ async fn run_peer(
     let output = command
         .stdin(Stdio::null())
         .stderr(Stdio::inherit())
+        // Reap the peer if the attempt times out and this future is dropped,
+        // so leaked peers don't hold TURN allocations/CPU across attempts.
+        .kill_on_drop(true)
         .output()
         .await
         .with_context(|| format!("spawning {} peer in {}", role_str, ns))?;

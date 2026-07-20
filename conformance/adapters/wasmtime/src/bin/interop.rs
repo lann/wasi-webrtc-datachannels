@@ -106,6 +106,8 @@ async fn run_jco_peer(
         .args(["--message-size", &size.to_string()])
         .stdin(Stdio::null())
         .stderr(Stdio::inherit())
+        // Reap the peer if the attempt times out and this future is dropped.
+        .kill_on_drop(true)
         .output()
         .await
         .with_context(|| format!("spawning jco-node peer ({})", cli.node_bin))?;
