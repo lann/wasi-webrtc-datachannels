@@ -355,7 +355,7 @@ pub async fn new_peer_connection(
 /// Like [`new_peer_connection`] but with an explicit [`WebrtcIceConfig`](crate::WebrtcIceConfig)
 /// controlling the UDP bind addresses, STUN/TURN servers, and ICE transport
 /// policy. A default config reproduces [`new_peer_connection`]'s built-in
-/// loopback behavior; the conformance ICE lab (see `conformance/PLAN.md` Phase 5)
+/// loopback behavior; the conformance netns lab (see `conformance/PLAN.md` Phase 5)
 /// overrides it per scenario to exercise host, server-reflexive, and relay
 /// candidate paths.
 pub async fn new_peer_connection_with(

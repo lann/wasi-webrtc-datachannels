@@ -19,18 +19,13 @@ path = "src/main.rs"
 name = "conformance-interop"
 path = "src/bin/interop.rs"
 
-# A single wasmtime peer, launched as a process (inside a network namespace) by
-# the ICE-lab orchestrator so the two peers of a test connect over a real path.
+# A single wasmtime peer, launched as a process by the environment executors
+# (the netns-lab `conformance-netns` and Shadow-lab `conformance-shadow` binaries in
+# conformance-adapter-common) so the two peers of a test connect over a real
+# (non-loopback) path.
 [[bin]]
 name = "conformance-peer"
 path = "src/bin/peer.rs"
-
-# The ICE-lab orchestrator: provisions a scenario's namespace topology, starts
-# the signaling (and STUN/TURN) servers, runs the two-peer corpus with each peer
-# in its own namespace, and writes a per-scenario result document.
-[[bin]]
-name = "conformance-ice"
-path = "src/bin/ice.rs"
 
 [dependencies]
 # The shared adapter building blocks: outcomes, the peer-subprocess invocation,

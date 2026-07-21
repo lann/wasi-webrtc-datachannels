@@ -77,7 +77,8 @@ conformance/
     wasmtime/              # Rust test-host adapter crate
     jco/                   # Node adapters (node + browser) incl. signaling.js
     wasip3/                # in-guest driver component
-  scenarios/               # ICE lab provisioning (netns/coturn/nftables scripts)
+  adapters/common/         # shared building blocks + netns-lab topology/provisioning
+                           #   (netns/nftables/coturn, in Rust) + the environment executors
 ```
 
 Follow the existing repo conventions: the shared `lann:webrtc-datachannels`
@@ -173,8 +174,9 @@ adapters report raw pass/fail/skip and the runner reclassifies.
 
 1. Reads `tests.toml` and `manifests/*.toml`; computes each target's test list
    (tags declared unsupported → planned as `skip-unsupported`).
-2. Provisions the scenario (spawns `conformance-signalingd`, and in ICE-lab
-   scenarios invokes `scenarios/` provisioning), then invokes the adapters.
+2. Provisions the scenario (spawns `conformance-signalingd`; the netns-lab
+   executor provisions its own netns topology in Rust), then invokes the
+   adapters.
 3. Aggregates adapter JSON, applies `expected-fail` policy (an expected-fail
    that passes becomes `unexpected-pass` and **fails CI** so manifests stay
    honest), renders a markdown conformance matrix
@@ -236,7 +238,7 @@ an HTTP mailbox:
   workstation cross-machine and NAT-lab runs.
 - In-memory state, per-room TTL, request-size caps, no auth (test-only,
   loopback/namespace-scoped).
-- In ICE-lab scenarios the server runs in a dedicated "signaling" namespace
+- In netns-lab scenarios the server runs in a dedicated "signaling" namespace
   reachable from both peer namespaces even when the direct peer media path is
   blocked — signaling always works while the media path is constrained, which
   is exactly what TURN-forcing scenarios require.
@@ -294,31 +296,32 @@ vs. non-trickle vs. late-candidate scenarios become pure blob schedules.
 | Scenario | Description | CI? |
 | --- | --- | --- |
 | `loopback` | Host candidates over 127.0.0.1 (existing setting-engine hook / fake-media patterns) | Yes, all targets |
-| `lan` | Two Linux netns joined by veth; host candidates only; signaling server reachable from both | Yes (Linux runners allow `sudo ip netns`) |
-| `stun-srflx` | Local coturn (apt/Docker) as STUN; peers in separate netns, host candidates filtered → forces srflx | Yes |
-| `turn-relay` | coturn as TURN; direct paths blocked with nftables → forces relay; signaling via signaling netns | Yes (wasmtime, jco-node, wasip3-guest) |
-| `nat-matrix` | Port-restricted and symmetric NAT via nftables masquerade; asserts srflx works where expected, relay fallback where required | Workstation-first; nightly CI once stable |
+| `lan` | Two Linux netns joined by veth; host candidates only; signaling server reachable from both | Workstation-only (CI's non-loopback coverage is the Shadow lab) |
+| `stun-srflx` | Local coturn (apt/Docker) as STUN; peers in separate netns, host candidates filtered → forces srflx | Workstation-only |
+| `turn-relay` | coturn as TURN; direct paths blocked with nftables → forces relay; signaling via signaling netns | Workstation-only |
+| `nat-matrix` | Port-restricted and symmetric NAT via nftables masquerade; asserts srflx works where expected, relay fallback where required | Workstation-only |
 | `trickle-variants` | Trickle vs. non-trickle (candidates embedded in SDP) vs. late-candidate arrival — pure mailbox blob schedules | Yes, all targets |
 
-Browser target: `loopback`, `stun-srflx`, `turn-relay` (Chrome can talk to a
-local coturn) in CI; netns/NAT scenarios are declared unsupported-in-CI in its
-manifest with workstation instructions in `README.md`.
+Browser target: `loopback` in CI; netns/NAT scenarios are declared
+unsupported-in-CI in its manifest with workstation instructions in `README.md`.
 
-Workstation entry point: `just conformance-ice` runs the full scenario set
+Workstation entry point: `just conformance-netns` runs the full scenario set
 including `nat-matrix`.
 
 ## CI integration
 
 New `.github/workflows/conformance.yml` mirrored by `just conformance`:
 
-- **Job 1 (every PR):** build the conformance guest once; `loopback` +
+- **`matrix` (every PR):** build the conformance guest once; `loopback` +
   `trickle-variants` across all targets, including the pairwise interop matrix
   over the local signaling server; upload matrix artifact; fail on unexpected
   statuses.
-- **Job 2 (every PR, Linux):** `lan` / `stun-srflx` / `turn-relay` for
-  wasmtime, jco-node, wasip3-guest.
-- **Job 3 (nightly / workflow_dispatch):** `nat-matrix` and soak variants;
-  `continue-on-error` until proven stable.
+- **`shadow-lab` (every PR):** the two-peer corpus for the wasmtime and
+  wasip3-guest targets over the Shadow network simulator (deterministic, no
+  root or network namespaces).
+- The netns lab and NAT matrix are **workstation-only** (`just
+  conformance-netns`, `just conformance-nat`); they trade speed for fidelity,
+  and CI prioritizes the fast deterministic Shadow path.
 
 Dependencies install through `scripts/setup.sh` (extended for coturn,
 iproute2, nftables), keeping one installer for developers, CI, and agents.
@@ -358,7 +361,7 @@ the reviewer directs otherwise.
   mailbox-driven handshake (JSON blob encoding incl. `end-of-candidates`).
 - Implement `adapters/wasmtime` (bindgen per `manual_host.rs` pattern; native
   mailbox host; loopback via `set_setting_engine_hook`; JSON results output).
-- Wire wasmtime into CI Job 1 (intra-target, both roles over real signaling).
+- Wire wasmtime into the CI `matrix` job (intra-target, both roles over real signaling).
 - Populate `manifests/wasmtime.toml` (expected-fails for error-taxonomy tests,
   tracking TODO item 5; `peer-connection` tag unsupported until the host
   implements the resource).
@@ -374,7 +377,7 @@ the reviewer directs otherwise.
   expected-fails for typed errors, tracking TODO item 16).
 - Enable the first interop pair in the runner: wasmtime ↔ jco-node (both
   orders).
-- **Done when:** three target rows + the first interop rows green in CI Job 1.
+- **Done when:** three target rows + the first interop rows green in the CI `matrix` job.
 
 ### Phase 4 — wasip3-guest adapter (**COMPLETED**)
 - `adapters/wasip3`: the conformance guest composed (`wac plug`) with the
@@ -385,66 +388,68 @@ the reviewer directs otherwise.
   provider cannot express yet; explicit host candidates only — `ifaces()` is
   `Unsupported` on wasm; loopback bind address only).
 - Include in loopback scenarios and the interop matrix.
-- **Done when:** wasip3-guest row green in CI Job 1 with a manifest the
+- **Done when:** wasip3-guest row green in the CI `matrix` job with a manifest the
   reviewer has signed off.
 
-### Phase 5 — ICE lab
-- `scenarios/`: netns/veth provisioning scripts (idempotent setup/teardown,
-  usable standalone), coturn config + launch, host-candidate filtering and
-  nftables direct-path blocking for `stun-srflx`/`turn-relay`; the
-  signaling-namespace topology.
-- Runner scenario selection; CI Job 2; `just conformance-ice`; workstation
-  docs in `README.md`; extend `scripts/setup.sh`.
-- **Done when:** `lan`, `stun-srflx`, `turn-relay` green in CI Job 2 for
-  wasmtime + jco-node (wasip3-guest where its manifest allows).
+### Phase 5 — netns lab
+- netns/veth provisioning (idempotent setup/teardown), coturn config + launch,
+  host-candidate filtering and nftables direct-path blocking for
+  `stun-srflx`/`turn-relay`; the signaling-namespace topology — all owned in
+  Rust by `conformance-adapter-common`'s `lab` module.
+- Runner scenario selection; `just conformance-netns`; workstation docs in
+  `README.md`; extend `scripts/setup.sh`.
+- **Done when:** `lan`, `stun-srflx`, `turn-relay` run green on a workstation
+  for wasmtime + jco-node (wasip3-guest where its manifest allows).
 
   **Status (COMPLETED for wasmtime):** the lab is built and wired — the
-  `scenarios/` scripts, the host per-peer-connection ICE config, the
-  `conformance-peer` / `conformance-ice` orchestrator, the runner's
+  Rust netns/nftables/coturn provisioning (`conformance-adapter-common`'s
+  `lab` module), the host per-peer-connection ICE config, the
+  `conformance-peer` / `conformance-netns` orchestrator, the runner's
   `(target, environment)` rows + environment matrix column, `just
-  conformance-ice`, CI Job 2 (`ice-lab`), and the `setup.sh` / README docs. With
+  conformance-netns`, and the `setup.sh` / README docs. With
   the Phase 6 NAT topology in place, `stun-srflx` is now meaningful (a peer's
   server-reflexive address differs from its host address behind the
-  port-restricted cone NAT) and is asserted in the nightly NAT matrix (CI Job 3),
-  resolving the Phase 5 blocker; `lan` and `turn-relay` remain asserted in the
-  every-PR Job 2. Two deviations from the done-when remain for the reviewer:
-  - **`stun-srflx` asserted nightly, not on every PR:** because it now depends on
-    the NAT paths, it follows Phase 6's "continue-on-error until stable" policy
-    (Job 3) rather than gating every PR in Job 2. Graduation to blocking is a
-    later, human decision.
-  - **wasmtime only:** the lab orchestrator runs the wasmtime host per peer.
-    jco-node in the lab is deferred (it needs a per-peer Node runner placed in a
-    namespace).
+  port-restricted cone NAT), resolving the Phase 5 blocker. The lab is
+  **workstation-only**: CI's non-loopback coverage is the Shadow lab, which is
+  deterministic and fast where the netns lab is slower and flake-prone; CI
+  re-adoption of the netns lab is a later, human decision. Two deviations from
+  the done-when remain for the reviewer:
+  - **not asserted in CI:** all four scenarios run via `just conformance-netns`
+    / `just conformance-nat` on a workstation only.
+  - **wasmtime only:** the lab orchestrator's `--peer-kind` covers wasmtime and
+    (for `lan`) wasip3-guest. jco-node in the lab is deferred (it needs a
+    per-peer Node runner placed in a namespace).
 
-  The data path (real veth / TURN relay / NAT) is validated on CI Job 2/3
-  runners; it cannot be exercised where non-loopback traffic is blocked, so
+  The data path (real veth / TURN relay / NAT) is validated on workstation
+  runs; it cannot be exercised where non-loopback traffic is blocked, so
   everything else is verified statically (Rust build/clippy/fmt/unit tests,
-  shellcheck, and provisioning up/down).
+  and provisioning up/down).
 
 ### Phase 6 — NAT matrix
 - nftables NAT simulations (port-restricted, symmetric); assertions that
   srflx connects where expected and relay fallback engages where required;
-  nightly CI Job 3 with `continue-on-error`; stability hardening (retries,
-  generous timeouts, diagnostic capture on failure).
-- **Done when:** NAT matrix runs clean on a workstation and the nightly job is
-  wired (stability graduation to blocking is a later, human decision).
+  stability hardening (retries, generous timeouts, diagnostic capture on
+  failure).
+- **Done when:** NAT matrix runs clean on a workstation (CI adoption is a
+  later, human decision).
 
   **Status (partial — reviewer sign-off / workstation run needed):** the NAT
-  simulations are built and wired — `scenarios/nftables.sh` source-NATs each
+  simulations are built and wired — the `lab` module's nftables policy
+  source-NATs each
   peer's forwarded traffic to its own public address (`snat … persistent` for the
   port-restricted cone NAT used by `stun-srflx`, `snat … random` for the
   symmetric NAT used by the new `nat-symmetric` scenario), the `Scenario` enum
   and per-peer ICE config gained `nat-symmetric` (STUN+TURN, no relay-only, so
-  ICE falls back to relay), `just conformance-nat` runs both NAT scenarios, and
-  CI Job 3 (`nat-matrix`) runs them nightly / on `workflow_dispatch` with
-  `continue-on-error`. The two assertions are: `stun-srflx` connects via a
+  ICE falls back to relay), and `just conformance-nat` runs both NAT scenarios
+  (workstation-only, like the rest of the netns lab). The two assertions are:
+  `stun-srflx` connects via a
   server-reflexive path behind the cone NAT (also completing Phase 5), and
   `nat-symmetric` connects only via a TURN relay behind the symmetric NAT.
 
   Because the sandbox blocks non-loopback traffic inside the lab namespaces, the
   NAT data path could not be exercised here; it is verified statically (Rust
   build/clippy/fmt/unit tests, nftables rule parsing, and provisioning up/down).
-  Running the matrix clean on a workstation (or the nightly runner) is left for
+  Running the matrix clean on a workstation is left for
   the reviewer to confirm.
 
 ### Phase 7 — Full interop matrix + reporting polish

@@ -76,14 +76,15 @@ conformance/                           # cross-implementation conformance suite
   guest/                               #   the shared conformance guest component
   adapters/                            #   per-target drivers: wasmtime, jco (Node +
                                        #     browser), wasip3 (composed in-guest stack),
-                                       #     plus the interop-pair and ICE-lab binaries;
+                                       #     plus the interop-pair binary;
                                        #     common/ = the shared native building blocks
-                                       #     (conformance-adapter-common) + the
-                                       #     target-neutral Shadow-lab executor
+                                       #     (conformance-adapter-common), the netns-lab
+                                       #     topology/provisioning (netns/nftables/coturn
+                                       #     in Rust), and the target-neutral netns-lab and
+                                       #     Shadow-lab executors
   runner/                              #   classifies results against manifests and
                                        #     renders conformance/matrix.md
   signaling/                           #   conformance-signalingd HTTP mailbox server
-  scenarios/                           #   netns/coturn scripts for the ICE lab
   manifests/, tests.toml               #   per-target expectations + the test corpus
 scripts/setup.sh                       # one-shot dependency setup (see below)
 ```
@@ -157,7 +158,7 @@ It is idempotent, so it is safe to re-run. Assuming a Rust toolchain (via
 It adds the `wasm32-unknown-unknown` and `wasm32-wasip2` Rust targets; installs
 `wasm-tools`, `just`, `cargo-nextest`, `wac`, and `wasmtime` (each skipped if
 already on `PATH`; versions pinned via `*_VERSION` variables); installs the
-ICE-lab tools (iproute2, nftables, coturn; skip with `SKIP_ICE_LAB=1`); and runs
+netns-lab tools (iproute2, nftables, coturn; skip with `SKIP_NETNS_LAB=1`); and runs
 `npm install` in `jco-impl` and `conformance/adapters/jco`. Set `SKIP_NODE=1` to
 skip the Node dependencies when you only need the Rust/Wasmtime path. It does
 **not** install the Shadow network simulator (see below). CI is kept in sync by
@@ -206,9 +207,9 @@ just test
 # conformance/matrix.md. Needs Node 24+ and a Chrome 137+ binary:
 just conformance
 
-# Conformance ICE lab (real non-loopback candidate paths via network
+# Conformance netns lab (real non-loopback candidate paths via network
 # namespaces; needs sudo and coturn — see the recipe comments):
-just conformance-ice lan
+just conformance-netns lan
 
 # Conformance Shadow lab (the two-peer corpus for the wasmtime and
 # wasip3-guest targets over a non-loopback path inside the Shadow
@@ -228,7 +229,11 @@ all run the same commands. Run `just` with no arguments to list every recipe.
 Run the check recipes that cover what you changed **before committing**, and fix
 anything they report. `just check` is the fast pre-commit gate; `just ci` mirrors
 CI exactly (it additionally builds the guest component, transpiles it, and runs
-the headless-browser test). Match the recipe to the change:
+the headless-browser test). Match the recipe to the change — and only the
+change: a recipe whose scope your edit does not touch can be skipped (e.g. a
+docs-, comments-, or workflow-only change needs no `just test`; a change
+confined to one crate does not need the recipes that only cover others). When
+in doubt about whether a recipe's scope is touched, run it.
 
 | Recipe | Run it when you change… |
 | --- | --- |

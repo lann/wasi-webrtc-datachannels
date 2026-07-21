@@ -9,7 +9,7 @@
 # are delivered by Chrome's SCTP stack, so `zero-length-message` passes and is
 # deliberately NOT an expected-fail.
 #
-# The netns / NAT ICE-lab scenarios (`lan`, `stun-srflx`, `turn-relay`,
+# The netns-lab / NAT scenarios (`lan`, `stun-srflx`, `turn-relay`,
 # `nat-matrix`) are declared unsupported-in-CI for this target when those
 # scenarios land (conformance/PLAN.md, Phases 5-6); on loopback there is nothing
 # to mark unsupported yet.

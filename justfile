@@ -149,40 +149,50 @@ conformance-interop: transpile-conformance-guest build-conformance-wasip3 build-
     timeout {{conformance-timeout}} target/release/conformance-interop \
         --pair wasmtime-x-jco-node --pair jco-node-x-wasmtime
 
-# Run the conformance ICE lab for one scenario (lan | stun-srflx | turn-relay |
-# nat-symmetric; see conformance/PLAN.md Phases 5 and 6). The orchestrator
-# (conformance-ice) provisions a routed network-namespace topology
-# (conformance/scenarios/), places the two peers of each two-peer test in
+# Run the conformance netns lab for one scenario (lan | stun-srflx | turn-relay |
+# nat-symmetric; see conformance/PLAN.md Phases 5 and 6). The target-neutral
+# environment executor (conformance-netns, in conformance/adapters/common)
+# provisions a routed network-namespace topology in Rust (netns + nftables +
+# coturn; the `lab` module), places the two peers of each two-peer test in
 # separate namespaces, and — for the server-mediated scenarios — routes them
 # through coturn while the router blocks the direct path (and, for the NAT
 # scenarios, source-NATs each peer), so the handshake exercises a real
-# (non-loopback) candidate path. Writes conformance/results/wasmtime-<scenario>.json
-# (environment column in the matrix). Needs root for `ip netns exec` (hence sudo)
-# and `turnserver` on PATH for the non-`lan` scenarios (installed by
-# scripts/setup.sh). The lab is always torn down on exit. `stun-srflx` runs behind
-# a port-restricted (cone) NAT so its srflx path is meaningful; `nat-symmetric`
-# runs behind a symmetric NAT so ICE must fall back to a TURN relay.
-conformance-ice scenario="lan": build-conformance-guest build-signalingd
-    cargo build --release -p conformance-adapter-wasmtime \
-        --bin conformance-peer --bin conformance-ice
-    sudo timeout {{conformance-timeout}} target/release/conformance-ice \
+# (non-loopback) candidate path. Writes conformance/results/<target>-<scenario>.json
+# (environment column in the matrix). The optional peer_kind argument selects
+# the peer (wasmtime | wasip3-guest); the wasip3-guest peer's in-guest sans-I/O
+# stack supports no STUN/TURN, so only `lan` works for it. Needs root for
+# `ip netns exec` (hence sudo) and `turnserver` on PATH for the non-`lan`
+# scenarios (installed by scripts/setup.sh). The lab is always torn down on
+# exit. `stun-srflx` runs behind a port-restricted (cone) NAT so its srflx path
+# is meaningful; `nat-symmetric` runs behind a symmetric NAT so ICE must fall
+# back to a TURN relay.
+conformance-netns scenario="lan" peer_kind="wasmtime": build-conformance-guest build-signalingd
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{peer_kind}}" = "wasip3-guest" ]; then
+        just build-conformance-wasip3
+    fi
+    cargo build --release -p conformance-adapter-wasmtime --bin conformance-peer
+    cargo build --release -p conformance-adapter-common --bin conformance-netns
+    sudo timeout {{conformance-timeout}} target/release/conformance-netns \
         --scenario {{scenario}} \
+        --peer-kind {{peer_kind}} \
         --guest conformance/guest/build/conformance-guest.component.wasm \
+        --component conformance/adapters/wasip3/build/conformance-wasip3.composed.wasm \
         --signaling-bin target/debug/conformance-signalingd \
         --peer-bin target/release/conformance-peer \
-        --scenarios-dir conformance/scenarios \
         --out conformance/results
 
 # Run the NAT matrix (conformance/PLAN.md Phase 6): the srflx scenario behind a
 # port-restricted (cone) NAT, where the server-reflexive candidates connect, and
 # the symmetric-NAT scenario, where srflx fails and ICE must fall back to a TURN
-# relay. Both write conformance/results/wasmtime-<scenario>.json. This is the
-# workstation entry point and the nightly CI Job 3 (continue-on-error until
-# proven stable). Requires the same privileges/tools as `conformance-ice`.
-conformance-nat: (conformance-ice "stun-srflx") (conformance-ice "nat-symmetric")
+# relay. Both write conformance/results/wasmtime-<scenario>.json. Like the rest
+# of the netns lab it is workstation-only (not run in CI). Requires the same
+# privileges/tools as `conformance-netns`.
+conformance-nat: (conformance-netns "stun-srflx") (conformance-netns "nat-symmetric")
 
 # Run the two-peer corpus inside the Shadow network simulator
-# (https://github.com/shadow/shadow). Like the ICE lab it places the two peers
+# (https://github.com/shadow/shadow). Like the netns lab it places the two peers
 # of each test on separate hosts over a routed, non-loopback path — but Shadow
 # simulates the network in user space, so it needs NO root, network namespaces,
 # or real kernel networking, which makes it reproducible and runnable in

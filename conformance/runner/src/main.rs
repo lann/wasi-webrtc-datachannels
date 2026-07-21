@@ -360,4 +360,160 @@ mod tests {
         );
         assert!(!matrix.has_failures());
     }
+
+    fn scoped_manifest() -> Manifest {
+        toml::from_str(
+            r#"
+            [target]
+            id = "wasmtime"
+
+            [[unsupported]]
+            tag = "peer-connection"
+            reason = "no peer-connection under shadow"
+            environments = ["shadow"]
+
+            [[expected-fail]]
+            test = "error-invalid-signaling"
+            reason = "relay path collapses the error"
+            tracking = "TODO.md item 9"
+            environments = ["turn-relay"]
+            "#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn unscoped_entries_apply_in_every_environment() {
+        let m = manifest();
+        let reports = [
+            report_env(
+                "loopback",
+                vec![("error-invalid-signaling", RawStatus::Fail)],
+            ),
+            report_env("shadow", vec![("error-invalid-signaling", RawStatus::Fail)]),
+        ];
+        let matrix = Matrix::classify(&registry(), &[m], &reports);
+        assert_eq!(
+            status_in(&matrix, "loopback", "error-invalid-signaling"),
+            Status::ExpectedFail
+        );
+        assert_eq!(
+            status_in(&matrix, "shadow", "error-invalid-signaling"),
+            Status::ExpectedFail
+        );
+        assert!(!matrix.has_failures());
+    }
+
+    #[test]
+    fn scoped_expected_fail_applies_only_in_its_environment() {
+        let m = scoped_manifest();
+        // Fail: xfail in turn-relay, a real FAIL elsewhere.
+        let reports = [
+            report_env(
+                "turn-relay",
+                vec![("error-invalid-signaling", RawStatus::Fail)],
+            ),
+            report_env(
+                "loopback",
+                vec![("error-invalid-signaling", RawStatus::Fail)],
+            ),
+        ];
+        let matrix = Matrix::classify(&registry(), std::slice::from_ref(&m), &reports);
+        assert_eq!(
+            status_in(&matrix, "turn-relay", "error-invalid-signaling"),
+            Status::ExpectedFail
+        );
+        assert_eq!(
+            status_in(&matrix, "loopback", "error-invalid-signaling"),
+            Status::Fail
+        );
+        assert!(matrix.has_failures());
+
+        // Pass: UNEXPECTED-PASS in turn-relay, plain pass elsewhere.
+        let reports = [
+            report_env(
+                "turn-relay",
+                vec![("error-invalid-signaling", RawStatus::Pass)],
+            ),
+            report_env(
+                "loopback",
+                vec![("error-invalid-signaling", RawStatus::Pass)],
+            ),
+        ];
+        let matrix = Matrix::classify(&registry(), &[m], &reports);
+        assert_eq!(
+            status_in(&matrix, "turn-relay", "error-invalid-signaling"),
+            Status::UnexpectedPass
+        );
+        assert_eq!(
+            status_in(&matrix, "loopback", "error-invalid-signaling"),
+            Status::Pass
+        );
+        assert!(matrix.has_failures());
+    }
+
+    #[test]
+    fn scoped_unsupported_skips_only_in_its_environment() {
+        let m = scoped_manifest();
+        let reports = [
+            report_env("shadow", vec![("peer-offer-answer", RawStatus::Fail)]),
+            report_env("loopback", vec![("peer-offer-answer", RawStatus::Fail)]),
+        ];
+        let matrix = Matrix::classify(&registry(), &[m], &reports);
+        assert_eq!(
+            status_in(&matrix, "shadow", "peer-offer-answer"),
+            Status::SkipUnsupported
+        );
+        assert_eq!(
+            status_in(&matrix, "loopback", "peer-offer-answer"),
+            Status::Fail
+        );
+    }
+
+    #[test]
+    fn empty_environments_list_is_rejected() {
+        let m: Manifest = toml::from_str(
+            r#"
+            [target]
+            id = "wasmtime"
+
+            [[expected-fail]]
+            test = "ordering"
+            reason = "r"
+            tracking = "t"
+            environments = []
+            "#,
+        )
+        .unwrap();
+        assert!(m.validate().is_err());
+
+        let m: Manifest = toml::from_str(
+            r#"
+            [target]
+            id = "wasmtime"
+
+            [[unsupported]]
+            tag = "errors"
+            reason = "r"
+            environments = []
+            "#,
+        )
+        .unwrap();
+        assert!(m.validate().is_err());
+    }
+
+    #[test]
+    fn existing_manifest_files_still_load() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifests");
+        let mut loaded = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) == Some("toml") {
+                Manifest::load(&path)
+                    .unwrap_or_else(|e| panic!("loading {}: {e:#}", path.display()));
+                loaded += 1;
+            }
+        }
+        assert!(loaded > 0, "no manifests found in {}", dir.display());
+    }
 }
