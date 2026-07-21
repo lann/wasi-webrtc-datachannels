@@ -13,13 +13,13 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::pin::pin;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use futures::channel::mpsc;
-use futures::future::{select, Either};
-use futures::StreamExt;
+use futures::{select_biased, FutureExt as _, StreamExt as _};
 
 use rtc::data_channel::RTCDataChannelId;
 
@@ -196,11 +196,17 @@ impl Runtime {
         let socket = self.socket;
         let local = self.local;
 
-        // The in-flight receive lives across loop iterations: dropping a
-        // pending `receive()` future can discard a datagram the host has
-        // already dequeued into it, so the future is only replaced after it
-        // completes, never cancelled by a timer or wake.
-        let mut recv = std::pin::pin!(socket.receive());
+        // The in-flight `receive()` and `wait-for` import futures live across
+        // loop iterations: each is a component-model subtask, and dropping one
+        // mid-flight cancels it in the host. Cancelling a pending `receive()`
+        // can discard a datagram the host has already dequeued into it, and
+        // per-iteration cancellation of `wait-for` subtasks needlessly stresses
+        // the runtime's cancel bookkeeping, so each future is replaced only
+        // after it completes — except the timer, which is additionally re-armed
+        // when the stack asks to be woken *earlier* than the armed deadline.
+        let mut recv = pin!(socket.receive().fuse());
+        let mut timer = pin!(monotonic_clock::wait_for(MAX_WAIT_NANOS).fuse());
+        let mut timer_target = Instant::now() + Duration::from_nanos(MAX_WAIT_NANOS);
 
         loop {
             // Flush + drain while holding the borrow only between awaits.
@@ -226,7 +232,8 @@ impl Runtime {
 
             // The stack's next timer deadline (if any). Wake at that instant,
             // capped by the safety net so retransmit/keep-alive timers fire even
-            // when the stack reports no deadline.
+            // when the stack reports no deadline. Re-arm the running timer only
+            // if the stack needs to be woken earlier than it is armed for.
             let deadline = shared.borrow_mut().peer.poll_timeout();
             let now = Instant::now();
             let delay = deadline
@@ -236,42 +243,49 @@ impl Runtime {
                         .min(u128::from(MAX_WAIT_NANOS)) as u64
                 })
                 .unwrap_or(MAX_WAIT_NANOS);
+            let target = now + Duration::from_nanos(delay);
+            if target < timer_target {
+                timer.set(monotonic_clock::wait_for(delay).fuse());
+                timer_target = target;
+            }
 
-            let timer = std::pin::pin!(monotonic_clock::wait_for(delay));
-            let wake = std::pin::pin!(wake_rx.next());
-
-            // Wait on the earliest of a timer, an inbound datagram, or a wake.
-            match select(select(timer, recv.as_mut()), wake).await {
-                Either::Left((Either::Left(_), _)) => {
-                    // Feed the stack a time guaranteed to be at or past the
-                    // deadline it asked for. Passing `Instant::now()` alone can
-                    // be a few nanoseconds short of `deadline` (the host timer
-                    // may return early / clock granularity), leaving the timer
-                    // unexpired: the stack would report the same past deadline
-                    // again, the pump would spin with `delay == 0`, and no
-                    // retransmit would ever be produced — stalling the
-                    // handshake. Using `max(now, deadline)` guarantees progress.
+            // Park on the earliest of an inbound datagram, the timer, or a wake.
+            select_biased! {
+                received = recv.as_mut() => {
+                    // A receive error just means no datagram this round.
+                    if let Ok((data, from)) = received {
+                        shared.borrow_mut().peer.handle_input(
+                            &data,
+                            from_wasi_addr(from),
+                            local,
+                            Instant::now(),
+                        );
+                    }
+                    recv.set(socket.receive().fuse());
+                }
+                _ = timer.as_mut() => {
+                    // If the fired timer covered the stack's deadline, feed the
+                    // stack a time guaranteed to be at or past it. Passing
+                    // `Instant::now()` alone can be a few nanoseconds short of
+                    // `deadline` (the host timer may return early / clock
+                    // granularity), leaving the timer unexpired: the stack
+                    // would report the same past deadline again, the pump would
+                    // spin with `delay == 0`, and no retransmit would ever be
+                    // produced — stalling the handshake. Using
+                    // `max(now, deadline)` guarantees progress. A safety-net
+                    // wake armed before the current deadline existed must not
+                    // jump ahead of the clock, so it reports plain `now`.
+                    let now = Instant::now();
                     let fire_at = match deadline {
-                        Some(d) => d.max(Instant::now()),
-                        None => Instant::now(),
+                        Some(d) if d <= timer_target => d.max(now),
+                        _ => now,
                     };
+                    timer.set(monotonic_clock::wait_for(MAX_WAIT_NANOS).fuse());
+                    timer_target = now + Duration::from_nanos(MAX_WAIT_NANOS);
                     shared.borrow_mut().peer.handle_timeout(fire_at);
                 }
-                Either::Left((Either::Right((Ok((data, from)), _)), _)) => {
-                    shared.borrow_mut().peer.handle_input(
-                        &data,
-                        from_wasi_addr(from),
-                        local,
-                        Instant::now(),
-                    );
-                    recv.set(socket.receive());
-                }
-                // A receive error just means no datagram this round; loop again.
-                Either::Left((Either::Right((Err(_), _)), _)) => {
-                    recv.set(socket.receive());
-                }
                 // A wake (an exported method mutated the core): loop to flush.
-                Either::Right(_) => {}
+                _ = wake_rx.next() => {}
             }
         }
     }
