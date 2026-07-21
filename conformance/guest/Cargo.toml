@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 # The conformance world's bindings (imports `connections` + `mailbox`, exports
 # the async `runner`): `async` pulls in the component-model stream/future
 # runtime, `async-spawn` provides `wit_bindgen::spawn`.
-wit-bindgen = { version = "0.57", features = ["async", "async-spawn"] }
+wit-bindgen = { version = "0.59", features = ["async", "async-spawn"] }
 # Concurrent send/receive within a single cooperative task (no OS threads).
 futures = { version = "0.3", default-features = false, features = ["async-await"] }
 # The opaque signaling blob encoding the guest owns (JSON session-description /

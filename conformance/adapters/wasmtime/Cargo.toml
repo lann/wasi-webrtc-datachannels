@@ -42,7 +42,7 @@ conformance-signalingd = { path = "../../signaling/server" }
 conformance-adapter-wasip3 = { path = "../wasip3" }
 # Wasmtime with component-model async (the guest's `run-test` export and the
 # host's stream/future plumbing use the async ABI).
-wasmtime = { version = "46", features = ["component-model", "component-model-async", "async", "cranelift", "runtime"] }
+wasmtime = { version = "47", features = ["component-model", "component-model-async", "async", "cranelift", "runtime"] }
 # Native HTTP client backing the mailbox host (plain HTTP/1.1 long-poll against
 # the in-process signaling server; no TLS needed for localhost).
 reqwest = { version = "0.12", default-features = false }

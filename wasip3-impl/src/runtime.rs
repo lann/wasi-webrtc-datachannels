@@ -4,7 +4,7 @@
 //! A [`Runtime`] owns one peer connection's socket and sans-I/O core. Because
 //! the component-model async model is single-threaded and cooperative (no
 //! cross-thread `spawn`), the event loop runs as a detached task started with
-//! [`wit_bindgen::spawn`]: [`Runtime::pump`] repeatedly flushes queued
+//! [`wit_bindgen::spawn_local`]: [`Runtime::pump`] repeatedly flushes queued
 //! datagrams, drains the core's events into the shared queues that back the
 //! exported resources, and parks on the earliest of a timer or an inbound
 //! datagram. The exported `data-channel` / `peer-connection` methods observe
@@ -190,7 +190,7 @@ impl Runtime {
     }
 
     /// Run the event loop until the connection closes or fails. Started once per
-    /// peer connection via [`wit_bindgen::spawn`].
+    /// peer connection via [`wit_bindgen::spawn_local`].
     pub async fn pump(self, mut wake_rx: mpsc::UnboundedReceiver<()>) {
         let shared = self.shared;
         let socket = self.socket;
