@@ -89,6 +89,11 @@ jobs:
 
       - name: Install dependencies
         run: ./scripts/setup.sh
+        # cargo-binstall resolves releases through api.github.com; unauthenticated
+        # requests share a 60/hour per-IP limit that pooled runner IPs exhaust
+        # (intermittent 403s). The token moves it to the per-token limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Test signaling server
         run: cargo nextest run -p conformance-signalingd
@@ -153,6 +158,11 @@ jobs:
       # above.
       - name: Install dependencies
         run: SKIP_NODE=1 SKIP_NETNS_LAB=1 ./scripts/setup.sh
+        # cargo-binstall resolves releases through api.github.com; unauthenticated
+        # requests share a 60/hour per-IP limit that pooled runner IPs exhaust
+        # (intermittent 403s). The token moves it to the per-token limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Run Shadow lab
         run: just conformance-shadow
