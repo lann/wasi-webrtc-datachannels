@@ -28,18 +28,7 @@ set -euo pipefail
 PREFIX="${1:-${HOME}/.local}"
 REPO="${SHADOW_RELEASE_REPO:-${GITHUB_REPOSITORY:-lann/component-webrtc-datachannels}}"
 TAG="${SHADOW_RELEASE_TAG:-shadow-dev}"
-
-# Pick the release asset matching the host architecture. The shadow-build
-# workflow publishes one tarball per arch (shadow-linux-<arch>.tar.gz).
-case "$(uname -m)" in
-  x86_64|amd64) ARCH="x86_64" ;;
-  aarch64|arm64) ARCH="aarch64" ;;
-  *)
-    echo "unsupported architecture $(uname -m); build Shadow with scripts/build-shadow.sh" >&2
-    exit 1
-    ;;
-esac
-ASSET="shadow-linux-${ARCH}.tar.gz"
+ASSET="shadow-linux-x86_64.tar.gz"
 
 log() { printf '\n==> %s\n' "$1"; }
 
