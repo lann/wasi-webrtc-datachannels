@@ -7,7 +7,7 @@
 // jco's `--instantiation` mode so this one process can stand up two independent
 // guest instances — an offerer and an answerer — for the two-peer behavioral
 // tests, exactly as the wasmtime adapter runs two stores. The shared driver
-// (`driver.js`) owns the plan/retry/fold orchestration.
+// (`driver.js`) owns the plan/fold orchestration.
 //
 // jco's async ABI needs JavaScript Promise Integration (JSPI), so this must run
 // under a JSPI-capable runtime: Node 24+ with `--experimental-wasm-jspi`. The

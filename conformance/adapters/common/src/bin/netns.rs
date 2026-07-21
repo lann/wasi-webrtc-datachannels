@@ -41,18 +41,14 @@ use clap::Parser;
 use conformance_adapter_common::lab::{LabTopology, Scenario};
 use conformance_adapter_common::peer_command::{PeerCommand, PeerKind, PeerRole, PeerRun};
 use conformance_adapter_common::{
-    default_is_flaky, fold_two, params_for, run_peer_command, run_with_retries, write_report,
-    AdapterReport, RawResult, RetryPolicy, TestOutcome, TWO_PEER_TESTS,
+    fold_two, params_for, run_peer_command, run_test, write_report, AdapterReport, RawResult,
+    TestOutcome, TWO_PEER_TESTS,
 };
 
-/// The retry policy for the lab. Lab handshakes (real routing, and a TURN relay
-/// for `turn-relay`) are slower to establish than loopback, so the per-attempt
-/// guard is more generous than the loopback adapters' 45s.
-const RETRY: RetryPolicy = RetryPolicy {
-    max_attempts: 3,
-    attempt_timeout: Duration::from_secs(60),
-    is_flaky: default_is_flaky,
-};
+/// The hang guard for one test. Lab handshakes (real routing, and a TURN relay
+/// for `turn-relay`) are slower to establish than loopback, so the guard is
+/// more generous than the loopback adapters' 45s.
+const TEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Parser)]
 #[command(name = "conformance-netns", version)]
@@ -247,9 +243,9 @@ async fn run_corpus(
     Ok(())
 }
 
-/// Run one test to a raw result, retrying flaky handshakes with fresh rooms.
+/// Run one test to a raw result (single attempt; no retries).
 ///
-/// Each attempt gets its own signaling server (in the signaling namespace, on
+/// Each test gets its own signaling server (in the signaling namespace, on
 /// its own port) brokering a single room, so a server never has to survive more
 /// than one handshake and concurrent tests never share one.
 async fn run_ice_test(
@@ -262,7 +258,7 @@ async fn run_ice_test(
 ) -> RawResult {
     let (count, size) = params_for(test_id);
 
-    run_with_retries(test_id, &RETRY, async || {
+    run_test(test_id, TEST_TIMEOUT, async || {
         let n = room_seq.fetch_add(1, Ordering::SeqCst);
         let room = format!("ice-{}-{}-{}", scenario.as_str(), test_id, n);
         let port = topology.signaling_port.wrapping_add(n as u16);

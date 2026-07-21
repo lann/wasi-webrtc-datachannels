@@ -90,6 +90,18 @@ struct HttpOutcome {
 
 /// Send one request through the WASIp3 HTTP client and collect the response.
 ///
+/// Every request carries an explicit `content-length` (the body is always
+/// fully known here, and usually empty). Without it, the wasip3 compat layer
+/// presents even an empty body as an open-ended stream, the host sends the
+/// request with `Transfer-Encoding: chunked`, and the chunk terminator is
+/// only written when the guest's executor runs the spawned body pump — which
+/// races a server that responds without reading the request body: the late
+/// terminator arriving after the server's close elicits a TCP RST that can
+/// destroy the buffered response (`hyper::Error(IncompleteMessage)` →
+/// `error-code.http-protocol-error`). With a declared length the host frames
+/// the request by `content-length` and a zero-length body is complete on the
+/// wire immediately.
+///
 /// Each fallible stage is tagged in the error detail (`build` / `convert` /
 /// `send` / `response-headers` / `collect`) so a raw `ErrorCode` in a test
 /// failure pinpoints where in the round trip it arose — in particular whether
@@ -100,7 +112,11 @@ async fn round_trip(
     url: &str,
     body: Option<Vec<u8>>,
 ) -> Result<HttpOutcome, Error> {
-    let builder = http::Request::builder().method(method).uri(url);
+    let body_len = body.as_ref().map_or(0, Vec::len);
+    let builder = http::Request::builder()
+        .method(method)
+        .uri(url)
+        .header(http::header::CONTENT_LENGTH, body_len);
     let request = match body {
         Some(bytes) => builder
             .body(Full::new(bytes::Bytes::from(bytes)).boxed())

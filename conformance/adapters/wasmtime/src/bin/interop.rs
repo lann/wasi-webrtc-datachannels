@@ -27,23 +27,15 @@ use wasmtime::component::Component;
 use wasmtime::Engine;
 
 use conformance_adapter_common::{
-    fold_two, params_for, run_corpus, run_peer_command, run_with_retries, write_report,
-    AdapterReport, RawResult, RetryPolicy, TestOutcome, TWO_PEER_TESTS,
+    fold_two, params_for, run_corpus, run_peer_command, run_test, write_report, AdapterReport,
+    RawResult, TestOutcome, TWO_PEER_TESTS,
 };
 use conformance_adapter_wasip3::Wasip3Peer;
 use conformance_adapter_wasmtime::{build_engine, make_config, run_instance, Role};
 
-/// The retry policy for the interop pairs: besides the handshake stalls every
-/// target retries, the wasip3 peer can additionally lose the data-channel open
-/// after connecting (TODO.md item E3), retried with a fresh room.
-const RETRY: RetryPolicy = RetryPolicy {
-    max_attempts: 3,
-    attempt_timeout: Duration::from_secs(45),
-    is_flaky: |detail| {
-        conformance_adapter_common::default_is_flaky(detail)
-            || detail.contains("no incoming data channel")
-    },
-};
+/// The hang guard for one test: long enough for a genuine `wait-connected`
+/// timeout to surface as a WIT outcome rather than tripping this bound.
+const TEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// One direction of a pair: which runtime the non-wasmtime peer runs on, which
 /// role the wasmtime peer plays (the other peer plays the opposite), and the
@@ -131,8 +123,7 @@ fn fold_pair(wasmtime_role: Role, wasmtime: TestOutcome, peer: TestOutcome) -> T
     }
 }
 
-/// Run one interop test to a raw result, retrying flaky handshakes with fresh
-/// rooms (mirroring the single-target adapters).
+/// Run one interop test to a raw result (single attempt; no retries).
 async fn run_interop_test(
     cli: &Cli,
     engine: &Engine,
@@ -145,7 +136,7 @@ async fn run_interop_test(
     let (count, size) = params_for(test_id);
     let peer_role = peer_role(direction.wasmtime_role);
 
-    run_with_retries(test_id, &RETRY, async || {
+    run_test(test_id, TEST_TIMEOUT, async || {
         let room = format!(
             "interop-{}-{}-{}",
             direction.target,

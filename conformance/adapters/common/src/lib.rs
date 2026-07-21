@@ -4,8 +4,8 @@
 //! and `conformance-shadow` environment-executor bins).
 //!
 //! Every adapter follows the same shape — pick each test's orchestration plan,
-//! run its guest instances (in-process or as peer subprocesses), retry flaky
-//! handshakes with fresh rooms, and record raw `pass`/`fail`/`skip` outcomes in
+//! run its guest instances (in-process or as peer subprocesses), and record
+//! raw `pass`/`fail`/`skip` outcomes in
 //! an adapter result document the conformance runner classifies. This crate
 //! owns that shared shape:
 //!
@@ -16,7 +16,7 @@
 //!   orchestration plans ([`plan_for`]) and message parameters ([`params_for`]),
 //! - the peer-subprocess invocation ([`run_peer_command`]) with its subtle but
 //!   load-bearing process plumbing,
-//! - the flaky-handshake retry loop ([`RetryPolicy`], [`run_with_retries`]),
+//! - the single-attempt test runner with its hang guard ([`run_test`]),
 //! - the bounded-concurrency corpus runner ([`run_corpus`]),
 //! - the in-process signaling server startup ([`start_signaling_server`]),
 //! - the per-target peer command templates the environment executors share
@@ -255,10 +255,14 @@ pub fn params_for(test_id: &str) -> (u32, u32) {
 /// `test-result` from stdout. `label` names the peer in error details.
 ///
 /// This owns the subtle process plumbing every out-of-process peer needs:
-/// stdin is closed, stderr flows through to the orchestrator's, and — crucially
-/// — the child is killed if this future is dropped (`kill_on_drop`), so an
-/// attempt abandoned by [`run_with_retries`]' timeout reaps its peers instead
-/// of leaking them to hold TURN allocations and CPU across attempts.
+/// stdin is closed; the child is killed if this future is dropped
+/// (`kill_on_drop`), so an attempt abandoned by [`run_test`]'s timeout reaps
+/// its peers instead of leaking them to hold TURN allocations and CPU; and the
+/// child's captured stderr is forwarded to the orchestrator's stderr after the
+/// child exits. The forwarding must be explicit: `tokio`'s `output()` forces
+/// both stdout and stderr to be captured, silently overriding an earlier
+/// `stderr(Stdio::inherit())`, so diagnostics (e.g. `WASMTIME_LOG` output)
+/// would otherwise be captured and dropped.
 pub async fn run_peer_command(
     mut command: tokio::process::Command,
     label: &str,
@@ -267,12 +271,17 @@ pub async fn run_peer_command(
     let started = std::time::Instant::now();
     let output = command
         .stdin(Stdio::null())
-        .stderr(Stdio::inherit())
         .kill_on_drop(true)
         .output()
         .await
         .with_context(|| format!("spawning {label}"))?;
     let elapsed = started.elapsed();
+    if !output.stderr.is_empty() {
+        use std::io::Write as _;
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(stderr, "--- {label} stderr ---");
+        let _ = stderr.write_all(&output.stderr);
+    }
     if !output.status.success() {
         tracing::warn!(target: "conformance", %label, status = %output.status, ?elapsed, "peer exited nonzero");
         anyhow::bail!("{label} exited with {}", output.status);
@@ -318,113 +327,38 @@ pub fn outcome_to_raw(test_id: &str, outcome: TestOutcome) -> RawResult {
     }
 }
 
-// ----- flaky-handshake retry loop --------------------------------------------
+// ----- single-attempt test runner ----------------------------------------------
 
-/// How [`run_with_retries`] treats a test's attempts: how many to make, how
-/// long each may run before it is abandoned as a stalled handshake, and which
-/// failure details look like retryable flakes.
-pub struct RetryPolicy {
-    /// Attempts before a flaky handshake is reported as a failure. Each attempt
-    /// runs fresh instances/processes with a fresh room.
-    pub max_attempts: u32,
-    /// How long a single attempt may run before it is abandoned and retried. It
-    /// must exceed the host's `wait-connected` timeout so a genuine connection
-    /// failure surfaces as a WIT outcome rather than tripping this guard.
-    pub attempt_timeout: Duration,
-    /// Whether a failure detail looks like a retryable flake.
-    pub is_flaky: fn(&str) -> bool,
-}
-
-/// Whether a failure detail looks like a retryable handshake flake: the
-/// loopback/lab ICE handshake occasionally stalls or times out waiting to
-/// connect. Targets with additional known flake modes wrap this predicate.
-pub fn default_is_flaky(detail: &str) -> bool {
-    detail.contains("timed-out") || detail.contains("wait-connected")
-}
-
-/// Run one test to a [`RawResult`], retrying flaky attempts per `policy`.
+/// Run one test to a [`RawResult`] in a single attempt.
 ///
-/// `attempt` runs one full attempt (allocating its own fresh room) to the
-/// folded [`TestOutcome`] of its instances. An attempt that outlives
-/// `policy.attempt_timeout` is dropped — cancelling in-process instances and
-/// killing peer subprocesses (see [`run_peer_command`]) — and retried; a
-/// non-flaky failure or an orchestration error ends the test immediately.
-pub async fn run_with_retries(
+/// `attempt` runs the test (allocating its own fresh room) to the folded
+/// [`TestOutcome`] of its instances. An attempt that outlives `timeout` is
+/// dropped — cancelling in-process instances and killing peer subprocesses
+/// (see [`run_peer_command`]) — and reported as a failure. The timeout must
+/// exceed the host's `wait-connected` timeout so a genuine connection failure
+/// surfaces as a WIT outcome rather than tripping this guard. There are no
+/// retries: a nondeterministic failure is a real signal and must surface, not
+/// be masked by a second attempt.
+pub async fn run_test(
     test_id: &str,
-    policy: &RetryPolicy,
-    mut attempt: impl AsyncFnMut() -> Result<TestOutcome>,
+    timeout: Duration,
+    attempt: impl AsyncFnOnce() -> Result<TestOutcome>,
 ) -> RawResult {
-    let mut last_detail = None;
-
-    for attempt_n in 1..=policy.max_attempts {
-        let outcome = match tokio::time::timeout(policy.attempt_timeout, attempt()).await {
-            Ok(outcome) => outcome,
-            // A stalled attempt is treated like a flaky handshake: retry with a
-            // fresh room rather than hanging the whole run.
-            Err(_) => {
-                tracing::warn!(
-                    target: "conformance",
-                    test_id,
-                    attempt = attempt_n,
-                    timeout = ?policy.attempt_timeout,
-                    "attempt timed out; retrying with a fresh room"
-                );
-                last_detail = Some("attempt timed-out".to_string());
-                continue;
-            }
-        };
-
-        match outcome {
-            Ok(TestOutcome::Pass) => {
-                if attempt_n > 1 {
-                    tracing::warn!(
-                        target: "conformance",
-                        test_id,
-                        attempt = attempt_n,
-                        "passed after flaky retries"
-                    );
-                }
-                return RawResult {
-                    test_id: test_id.to_string(),
-                    status: RawStatus::Pass,
-                    detail: None,
-                };
-            }
-            Ok(TestOutcome::Skipped(reason)) => {
-                return RawResult {
-                    test_id: test_id.to_string(),
-                    status: RawStatus::Skip,
-                    detail: Some(reason),
-                }
-            }
-            Ok(TestOutcome::Fail(detail)) => {
-                let flaky = (policy.is_flaky)(&detail);
-                tracing::warn!(
-                    target: "conformance",
-                    test_id,
-                    attempt = attempt_n,
-                    flaky,
-                    %detail,
-                    "attempt failed"
-                );
-                last_detail = Some(detail);
-                if !flaky {
-                    break;
-                }
-            }
-            Err(err) => {
-                tracing::warn!(target: "conformance", test_id, attempt = attempt_n, error = format!("{err:#}"), "adapter error");
-                last_detail = Some(format!("adapter error: {err:#}"));
-                break;
-            }
+    let outcome = match tokio::time::timeout(timeout, attempt()).await {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(err)) => {
+            tracing::warn!(target: "conformance", test_id, error = format!("{err:#}"), "adapter error");
+            TestOutcome::Fail(format!("adapter error: {err:#}"))
         }
+        Err(_) => {
+            tracing::warn!(target: "conformance", test_id, ?timeout, "attempt timed out");
+            TestOutcome::Fail("attempt timed-out".to_string())
+        }
+    };
+    if let TestOutcome::Fail(detail) = &outcome {
+        tracing::warn!(target: "conformance", test_id, %detail, "test failed");
     }
-
-    RawResult {
-        test_id: test_id.to_string(),
-        status: RawStatus::Fail,
-        detail: last_detail,
-    }
+    outcome_to_raw(test_id, outcome)
 }
 
 // ----- corpus runner ----------------------------------------------------------
@@ -432,8 +366,8 @@ pub async fn run_with_retries(
 /// Run `tests` (each via `run`, filtered by `only` when non-empty) concurrently,
 /// bounded by `jobs`, logging each result as it lands.
 ///
-/// Tests are independent — fresh instances/processes, a fresh room per attempt
-/// — so they can safely overlap; `buffered` preserves the registry order of the
+/// Tests are independent — fresh instances/processes, a fresh room per test —
+/// so they can safely overlap; `buffered` preserves the registry order of the
 /// results.
 pub async fn run_corpus<F, Fut>(
     tests: &[&'static str],
