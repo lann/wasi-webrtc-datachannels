@@ -24,35 +24,17 @@ use anyhow::Result;
 use clap::Parser;
 
 use conformance_adapter_common::{
-    fold_two, params_for, plan_for, run_corpus, run_with_retries, write_report, AdapterReport,
-    Plan, RawResult, RetryPolicy, TESTS,
+    fold_two, params_for, plan_for, run_corpus, write_report, AdapterReport, Plan, RawResult, TESTS,
 };
 use conformance_adapter_wasip3::Wasip3Peer;
 
 // ----- orchestration --------------------------------------------------------
 
-/// Whether a failure detail looks like a retryable loopback flake. Besides the
-/// `timed-out` / `wait-connected` handshake stalls every target retries, the
-/// in-guest sans-I/O stack occasionally reaches `connected` and then loses the
-/// data-channel open (the answerer sees no incoming channel while the offerer's
-/// channel closes) — the same upstream `rtc` timing issue tracked in TODO.md
-/// item E3, retried here with a fresh room.
-fn is_flaky(detail: &str) -> bool {
-    conformance_adapter_common::default_is_flaky(detail)
-        || detail.contains("no incoming data channel")
-}
+/// The hang guard for one test: long enough for a genuine `wait-connected`
+/// timeout to surface as a WIT outcome rather than tripping this bound.
+const TEST_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// The retry policy for this target: the in-guest sans-I/O stack stalls more
-/// often than the native hosts (TODO.md item E3), so it gets a couple more
-/// attempts than the wasmtime adapter's three; the per-attempt guard mirrors
-/// the wasmtime adapter's.
-const RETRY: RetryPolicy = RetryPolicy {
-    max_attempts: 5,
-    attempt_timeout: Duration::from_secs(45),
-    is_flaky,
-};
-
-/// Run one test to a raw result, retrying flaky handshakes with fresh rooms.
+/// Run one test to a raw result (single attempt; no retries).
 async fn run_test(
     peer: &Wasip3Peer,
     base_url: &str,
@@ -61,7 +43,7 @@ async fn run_test(
 ) -> RawResult {
     let (count, size) = params_for(test_id);
 
-    run_with_retries(test_id, &RETRY, async || {
+    conformance_adapter_common::run_test(test_id, TEST_TIMEOUT, async || {
         let room = format!(
             "wasip3-{}-{}",
             test_id,

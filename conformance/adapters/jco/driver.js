@@ -8,9 +8,10 @@
 // instance (peer-connection API + invalid-signaling probes), a single instance
 // the guest reports `skipped` regardless of role (streaming + remaining
 // error-taxonomy tests), or two instances — an offerer and an answerer sharing
-// one signaling room — for the behavioral/interop tests. Two flaky loopback-ICE
-// handshakes are retried with fresh rooms before a failure is reported. The
-// guest owns every assertion; the driver only orchestrates and records.
+// one signaling room — for the behavioral/interop tests. Tests run in a single
+// attempt (no retries): a nondeterministic failure is a real signal and must
+// surface, not be masked by a second attempt. The guest owns every assertion;
+// the driver only orchestrates and records.
 
 /** The registry of test ids, mirroring `conformance/tests.toml`. */
 export const TESTS = [
@@ -84,19 +85,10 @@ export function paramsFor(testId) {
   }
 }
 
-// The number of connection attempts before a flaky handshake is reported as a
-// failure. Each attempt uses fresh peer connections and a fresh room.
-const MAX_ATTEMPTS = 3;
-
-// How long a single attempt may run before it is abandoned as a stalled
-// handshake and retried, bounding an attempt whose data-channel wait never
-// resolves.
-const ATTEMPT_TIMEOUT_MS = 45_000;
-
-/** Whether a failure detail looks like a retryable loopback-ICE flake. */
-function isFlaky(detail) {
-  return detail.includes("timed-out") || detail.includes("wait-connected");
-}
+// The hang guard for one test, bounding a run whose data-channel wait never
+// resolves. Long enough for a genuine `wait-connected` timeout to surface as a
+// WIT outcome rather than tripping this bound.
+const TEST_TIMEOUT_MS = 45_000;
 
 /** Build a test config for one instance. */
 function makeConfig(role, base, room, count, size) {
@@ -141,54 +133,44 @@ async function runInstance(newInstance, testId, config) {
 }
 
 /**
- * Run one test to a raw result, retrying flaky handshakes with fresh rooms.
- * `roomSeq` is a mutable `{ n }` counter shared across the corpus so rooms never
- * collide between concurrent tests.
+ * Run one test to a raw result (single attempt; no retries). `roomSeq` is a
+ * mutable `{ n }` counter shared across the corpus so rooms never collide
+ * between concurrent tests.
  */
 async function runTest(newInstance, base, testId, roomSeq) {
   const [count, size] = paramsFor(testId);
   const plan = planFor(testId);
-  let lastDetail = null;
+  const room = `conf-${testId}-${roomSeq.n++}`;
 
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const room = `conf-${testId}-${roomSeq.n++}`;
-    let result;
-    try {
-      const run = (async () => {
-        switch (plan) {
-          case "two-peer": {
-            const [offerer, answerer] = await Promise.all([
-              runInstance(newInstance, testId, makeConfig("offerer", base, room, count, size)),
-              runInstance(newInstance, testId, makeConfig("answerer", base, room, count, size)),
-            ]);
-            return foldTwo(offerer, answerer);
-          }
-          case "in-process":
-            return runInstance(newInstance, testId, makeConfig("both", base, room, count, size));
-          default: // skip
-            return runInstance(newInstance, testId, makeConfig("offerer", base, room, count, size));
+  let result;
+  try {
+    const run = (async () => {
+      switch (plan) {
+        case "two-peer": {
+          const [offerer, answerer] = await Promise.all([
+            runInstance(newInstance, testId, makeConfig("offerer", base, room, count, size)),
+            runInstance(newInstance, testId, makeConfig("answerer", base, room, count, size)),
+          ]);
+          return foldTwo(offerer, answerer);
         }
-      })();
-      result = await withTimeout(run, ATTEMPT_TIMEOUT_MS, "attempt timed-out");
-    } catch (err) {
-      // A stalled attempt or a host/adapter error: retry with a fresh room.
-      lastDetail = String(err && err.message ? err.message : err);
-      if (lastDetail !== "attempt timed-out") break;
-      continue;
-    }
-
-    if (result.tag === "pass") {
-      return { test_id: testId, status: "pass" };
-    }
-    if (result.tag === "skipped") {
-      return { test_id: testId, status: "skip", detail: result.val };
-    }
-    // fail
-    lastDetail = result.val;
-    if (!isFlaky(result.val)) break;
+        case "in-process":
+          return runInstance(newInstance, testId, makeConfig("both", base, room, count, size));
+        default: // skip
+          return runInstance(newInstance, testId, makeConfig("offerer", base, room, count, size));
+      }
+    })();
+    result = await withTimeout(run, TEST_TIMEOUT_MS, "attempt timed-out");
+  } catch (err) {
+    return { test_id: testId, status: "fail", detail: String(err && err.message ? err.message : err) };
   }
 
-  return { test_id: testId, status: "fail", detail: lastDetail };
+  if (result.tag === "pass") {
+    return { test_id: testId, status: "pass" };
+  }
+  if (result.tag === "skipped") {
+    return { test_id: testId, status: "skip", detail: result.val };
+  }
+  return { test_id: testId, status: "fail", detail: result.val };
 }
 
 /**

@@ -28,8 +28,8 @@ use wasmtime::component::Component;
 use wasmtime::Engine;
 
 use conformance_adapter_common::{
-    default_is_flaky, fold_two, params_for, plan_for, run_corpus, run_with_retries, write_report,
-    AdapterReport, Plan, RawResult, RetryPolicy, TestOutcome, TESTS,
+    fold_two, params_for, plan_for, run_corpus, write_report, AdapterReport, Plan, RawResult,
+    TestOutcome, TESTS,
 };
 use conformance_adapter_wasmtime::{build_engine, make_config, run_instance, Role};
 
@@ -62,16 +62,11 @@ async fn run_two_peer(
     Ok(fold_two(offerer?, answerer?))
 }
 
-/// The retry policy for this target: the loopback ICE handshake occasionally
-/// stalls or times out waiting to connect; each attempt uses fresh peer
-/// connections and a fresh room.
-const RETRY: RetryPolicy = RetryPolicy {
-    max_attempts: 3,
-    attempt_timeout: Duration::from_secs(45),
-    is_flaky: default_is_flaky,
-};
+/// The hang guard for one test: long enough for a genuine `wait-connected`
+/// timeout to surface as a WIT outcome rather than tripping this bound.
+const TEST_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// Run one test to a raw result, retrying flaky handshakes with fresh rooms.
+/// Run one test to a raw result (single attempt; no retries).
 async fn run_test(
     engine: &Engine,
     component: &Component,
@@ -81,7 +76,7 @@ async fn run_test(
 ) -> RawResult {
     let (count, size) = params_for(test_id);
 
-    run_with_retries(test_id, &RETRY, async || {
+    conformance_adapter_common::run_test(test_id, TEST_TIMEOUT, async || {
         let room = format!(
             "conf-{}-{}",
             test_id,
