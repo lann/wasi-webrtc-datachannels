@@ -255,10 +255,14 @@ pub fn params_for(test_id: &str) -> (u32, u32) {
 /// `test-result` from stdout. `label` names the peer in error details.
 ///
 /// This owns the subtle process plumbing every out-of-process peer needs:
-/// stdin is closed, stderr flows through to the orchestrator's, and — crucially
-/// — the child is killed if this future is dropped (`kill_on_drop`), so an
-/// attempt abandoned by [`run_test`]'s timeout reaps its peers instead of
-/// leaking them to hold TURN allocations and CPU.
+/// stdin is closed; the child is killed if this future is dropped
+/// (`kill_on_drop`), so an attempt abandoned by [`run_test`]'s timeout reaps
+/// its peers instead of leaking them to hold TURN allocations and CPU; and the
+/// child's captured stderr is forwarded to the orchestrator's stderr after the
+/// child exits. The forwarding must be explicit: `tokio`'s `output()` forces
+/// both stdout and stderr to be captured, silently overriding an earlier
+/// `stderr(Stdio::inherit())`, so diagnostics (e.g. `WASMTIME_LOG` output)
+/// would otherwise be captured and dropped.
 pub async fn run_peer_command(
     mut command: tokio::process::Command,
     label: &str,
@@ -267,12 +271,17 @@ pub async fn run_peer_command(
     let started = std::time::Instant::now();
     let output = command
         .stdin(Stdio::null())
-        .stderr(Stdio::inherit())
         .kill_on_drop(true)
         .output()
         .await
         .with_context(|| format!("spawning {label}"))?;
     let elapsed = started.elapsed();
+    if !output.stderr.is_empty() {
+        use std::io::Write as _;
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(stderr, "--- {label} stderr ---");
+        let _ = stderr.write_all(&output.stderr);
+    }
     if !output.status.success() {
         tracing::warn!(target: "conformance", %label, status = %output.status, ?elapsed, "peer exited nonzero");
         anyhow::bail!("{label} exited with {}", output.status);
