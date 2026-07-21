@@ -137,7 +137,7 @@ pub async fn spawn(addr: SocketAddr, config: Config) -> Result<RunningServer> {
             let _ = rx.await;
         });
         if let Err(e) = server.await {
-            eprintln!("conformance-signalingd serve error: {e}");
+            tracing::error!(target: "signalingd", error = %e, "serve error");
         }
         let _ = evict_stop_tx.send(());
         let _ = evict_join.await;
@@ -185,9 +185,18 @@ async fn publish(
     }
 
     match app.rooms.publish(&room, role, body).await {
-        Publish::Seq(seq) => (StatusCode::OK, Json(json!({ "seq": seq }))).into_response(),
-        Publish::Done => error(StatusCode::CONFLICT, "done", None),
-        Publish::Capacity => error(StatusCode::TOO_MANY_REQUESTS, "capacity", None),
+        Publish::Seq(seq) => {
+            tracing::debug!(target: "signalingd", %room, ?role, seq, "publish");
+            (StatusCode::OK, Json(json!({ "seq": seq }))).into_response()
+        }
+        Publish::Done => {
+            tracing::warn!(target: "signalingd", %room, ?role, "publish to done mailbox");
+            error(StatusCode::CONFLICT, "done", None)
+        }
+        Publish::Capacity => {
+            tracing::warn!(target: "signalingd", %room, ?role, "publish over capacity");
+            error(StatusCode::TOO_MANY_REQUESTS, "capacity", None)
+        }
     }
 }
 
@@ -220,6 +229,7 @@ async fn fetch(
 
     match app.rooms.fetch(&room, role, seq, wait).await {
         Fetch::Blob(bytes) => {
+            tracing::debug!(target: "signalingd", %room, ?role, seq, len = bytes.len(), "fetch: blob");
             let mut headers = HeaderMap::new();
             headers.insert("x-seq", seq.to_string().parse().unwrap());
             headers.insert(
@@ -229,11 +239,13 @@ async fn fetch(
             (StatusCode::OK, headers, bytes).into_response()
         }
         Fetch::Done => {
+            tracing::debug!(target: "signalingd", %room, ?role, seq, "fetch: done");
             let mut headers = HeaderMap::new();
             headers.insert("x-done", "true".parse().unwrap());
             (StatusCode::NO_CONTENT, headers).into_response()
         }
         Fetch::Pending => {
+            tracing::debug!(target: "signalingd", %room, ?role, seq, "fetch: pending (long-poll expired)");
             let mut headers = HeaderMap::new();
             headers.insert("x-seq", seq.to_string().parse().unwrap());
             (StatusCode::NOT_MODIFIED, headers).into_response()
@@ -253,6 +265,7 @@ async fn mark_done(
         None => return error(StatusCode::BAD_REQUEST, "bad-role", None),
     };
     let len = app.rooms.mark_done(&room, role).await;
+    tracing::debug!(target: "signalingd", %room, ?role, len, "mark done");
     (StatusCode::OK, Json(json!({ "done": true, "len": len }))).into_response()
 }
 

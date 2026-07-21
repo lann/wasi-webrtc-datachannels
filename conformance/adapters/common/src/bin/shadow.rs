@@ -159,6 +159,7 @@ impl Placement {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    conformance_adapter_common::init_tracing();
 
     // Shadow runs each managed process with its working directory set to that
     // host's output directory, not the caller's, so every path handed to a

@@ -153,6 +153,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    conformance_adapter_common::init_tracing();
 
     let engine = build_engine()?;
     let component = Component::from_file(&engine, &cli.guest)

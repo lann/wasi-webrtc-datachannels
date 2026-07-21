@@ -89,6 +89,12 @@ struct HttpOutcome {
 }
 
 /// Send one request through the WASIp3 HTTP client and collect the response.
+///
+/// Each fallible stage is tagged in the error detail (`build` / `convert` /
+/// `send` / `response-headers` / `collect`) so a raw `ErrorCode` in a test
+/// failure pinpoints where in the round trip it arose — in particular whether
+/// the request never got out (`send`) or the response could not be read back
+/// (`collect`).
 async fn round_trip(
     method: http::Method,
     url: &str,
@@ -98,19 +104,19 @@ async fn round_trip(
     let request = match body {
         Some(bytes) => builder
             .body(Full::new(bytes::Bytes::from(bytes)).boxed())
-            .map_err(mailbox_error)?,
+            .map_err(|e| mailbox_error(format!("build: {e}")))?,
         None => builder
             .body(Empty::<bytes::Bytes>::new().boxed())
-            .map_err(mailbox_error)?,
+            .map_err(|e| mailbox_error(format!("build: {e}")))?,
     };
 
     let wasi_request = wasip3::http_compat::http_into_wasi_request(request)
-        .map_err(|e| mailbox_error(format!("{e:?}")))?;
+        .map_err(|e| mailbox_error(format!("convert: {e:?}")))?;
     let wasi_response = wasip3::http::client::send(wasi_request)
         .await
-        .map_err(|e| mailbox_error(format!("{e:?}")))?;
+        .map_err(|e| mailbox_error(format!("send: {e:?}")))?;
     let response = wasip3::http_compat::http_from_wasi_response(wasi_response)
-        .map_err(|e| mailbox_error(format!("{e:?}")))?;
+        .map_err(|e| mailbox_error(format!("response-headers: {e:?}")))?;
 
     let status = response.status();
     let done = response
@@ -121,7 +127,7 @@ async fn round_trip(
         .into_body()
         .collect()
         .await
-        .map_err(|e| mailbox_error(format!("{e:?}")))?
+        .map_err(|e| mailbox_error(format!("collect: {e:?}")))?
         .to_bytes()
         .to_vec();
     Ok(HttpOutcome { status, done, body })
