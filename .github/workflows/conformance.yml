@@ -78,14 +78,13 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          # Share one cache across every CI job (this workflow and ci.yml). By
-          # default rust-cache keys the cache by job id, so each job had its own
-          # entry and this conformance job never reused the registry or the
-          # compiled workspace dependencies built by the ci.yml jobs. A common
-          # `shared-key` replaces the job-id key so all jobs restore/save the
-          # same cache; they share one Cargo.lock, so dependency builds are
-          # reusable across them.
-          shared-key: cargo
+          # One cache entry per job: GitHub caches are immutable per key, so a
+          # key shared across jobs is only ever saved by whichever job finishes
+          # first. This job's artifact set (release-profile natives plus the
+          # wasm32-unknown-unknown / wasm32-wasip2 guest builds) barely overlaps
+          # the other jobs', so under a shared key it recompiled every
+          # dependency on every run and could never save the result.
+          shared-key: conformance-matrix
           cache-all-crates: true
 
       - name: Install dependencies
@@ -134,7 +133,9 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: cargo
+          # One cache entry per job (see the matrix job for why a cross-job
+          # shared key never actually shared compiled artifacts).
+          shared-key: conformance-shadow-lab
           cache-all-crates: true
 
       # Fetch the prebuilt Shadow from the `shadow-dev` prerelease into ~/.local

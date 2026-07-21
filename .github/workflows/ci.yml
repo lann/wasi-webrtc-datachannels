@@ -30,17 +30,14 @@ jobs:
       - name: Cache cargo
         # Caches the cargo registry, `~/.cargo/bin` (so cargo-binstall'd
         # wasm-tools/just/nextest are reused), and the compiled `target/`
-        # artifacts, so clippy and test reuse prior builds. A shared cache key
-        # (see below) lets every CI job across both workflows reuse the same
-        # cache instead of each job keeping its own.
+        # artifacts, so clippy and test reuse prior builds.
         uses: Swatinem/rust-cache@v2
         with:
-          # Share one cache across every CI job (this workflow and
-          # conformance.yml). By default rust-cache keys the cache by job id, so
-          # each job kept a separate entry; a common `shared-key` replaces the
-          # job-id key so all jobs restore/save the same cache. They share one
-          # Cargo.lock, so dependency builds are reusable across them.
-          shared-key: cargo
+          # One cache entry per job: GitHub caches are immutable per key, so a
+          # key shared across jobs is only ever saved by whichever job finishes
+          # first — every other job restores artifacts for the wrong
+          # profile/target set and recompiles from scratch on every run.
+          shared-key: rust-checks
           # The standalone manual-signaling test guest builds into a nested
           # target dir under ./target; keep the whole tree so it is not pruned.
           cache-all-crates: true
@@ -99,17 +96,12 @@ jobs:
       - name: Cache cargo
         # Caches the cargo registry, `~/.cargo/bin` (so cargo-binstall'd
         # wasm-tools/just/nextest are reused), and the compiled `target/`
-        # artifacts, so the guest component build reuses prior builds. A shared
-        # cache key (see below) lets every CI job across both workflows reuse
-        # the same cache instead of each job keeping its own.
+        # artifacts, so the guest component build reuses prior builds.
         uses: Swatinem/rust-cache@v2
         with:
-          # Share one cache across every CI job (this workflow and
-          # conformance.yml). By default rust-cache keys the cache by job id, so
-          # each job kept a separate entry; a common `shared-key` replaces the
-          # job-id key so all jobs restore/save the same cache. They share one
-          # Cargo.lock, so dependency builds are reusable across them.
-          shared-key: cargo
+          # One cache entry per job (see the rust-checks job for why a
+          # cross-job shared key never actually shared compiled artifacts).
+          shared-key: browser
           cache-all-crates: true
 
       - name: Install dependencies
