@@ -36,6 +36,21 @@ use futures::StreamExt as _;
 use serde::Serialize;
 use serde_json::Value;
 
+// ----- tracing ----------------------------------------------------------------
+
+/// Install the stderr `tracing` subscriber every adapter/executor binary uses.
+///
+/// The filter comes from `RUST_LOG` when set, defaulting to `warn` so retry and
+/// peer-failure diagnostics are visible in CI logs without any configuration.
+/// Call once at the top of `main`.
+pub fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
+        .with_writer(std::io::stderr)
+        .init();
+}
+
 // ----- test outcomes ---------------------------------------------------------
 
 /// The WIT-observable outcome of one guest instance: the target-independent
@@ -248,6 +263,8 @@ pub async fn run_peer_command(
     mut command: tokio::process::Command,
     label: &str,
 ) -> Result<TestOutcome> {
+    tracing::debug!(target: "conformance", %label, command = ?command.as_std(), "spawning peer");
+    let started = std::time::Instant::now();
     let output = command
         .stdin(Stdio::null())
         .stderr(Stdio::inherit())
@@ -255,9 +272,12 @@ pub async fn run_peer_command(
         .output()
         .await
         .with_context(|| format!("spawning {label}"))?;
+    let elapsed = started.elapsed();
     if !output.status.success() {
+        tracing::warn!(target: "conformance", %label, status = %output.status, ?elapsed, "peer exited nonzero");
         anyhow::bail!("{label} exited with {}", output.status);
     }
+    tracing::debug!(target: "conformance", %label, ?elapsed, "peer completed");
     let stdout =
         String::from_utf8(output.stdout).with_context(|| format!("{label} stdout not UTF-8"))?;
     parse_result_line(&stdout).with_context(|| format!("reading {label} result"))
@@ -336,12 +356,19 @@ pub async fn run_with_retries(
 ) -> RawResult {
     let mut last_detail = None;
 
-    for _ in 0..policy.max_attempts {
+    for attempt_n in 1..=policy.max_attempts {
         let outcome = match tokio::time::timeout(policy.attempt_timeout, attempt()).await {
             Ok(outcome) => outcome,
             // A stalled attempt is treated like a flaky handshake: retry with a
             // fresh room rather than hanging the whole run.
             Err(_) => {
+                tracing::warn!(
+                    target: "conformance",
+                    test_id,
+                    attempt = attempt_n,
+                    timeout = ?policy.attempt_timeout,
+                    "attempt timed out; retrying with a fresh room"
+                );
                 last_detail = Some("attempt timed-out".to_string());
                 continue;
             }
@@ -349,11 +376,19 @@ pub async fn run_with_retries(
 
         match outcome {
             Ok(TestOutcome::Pass) => {
+                if attempt_n > 1 {
+                    tracing::warn!(
+                        target: "conformance",
+                        test_id,
+                        attempt = attempt_n,
+                        "passed after flaky retries"
+                    );
+                }
                 return RawResult {
                     test_id: test_id.to_string(),
                     status: RawStatus::Pass,
                     detail: None,
-                }
+                };
             }
             Ok(TestOutcome::Skipped(reason)) => {
                 return RawResult {
@@ -364,12 +399,21 @@ pub async fn run_with_retries(
             }
             Ok(TestOutcome::Fail(detail)) => {
                 let flaky = (policy.is_flaky)(&detail);
+                tracing::warn!(
+                    target: "conformance",
+                    test_id,
+                    attempt = attempt_n,
+                    flaky,
+                    %detail,
+                    "attempt failed"
+                );
                 last_detail = Some(detail);
                 if !flaky {
                     break;
                 }
             }
             Err(err) => {
+                tracing::warn!(target: "conformance", test_id, attempt = attempt_n, error = format!("{err:#}"), "adapter error");
                 last_detail = Some(format!("adapter error: {err:#}"));
                 break;
             }

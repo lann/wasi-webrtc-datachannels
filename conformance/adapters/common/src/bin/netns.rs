@@ -162,6 +162,7 @@ impl Drop for TeardownOnDrop<'_> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    conformance_adapter_common::init_tracing();
     let scenario = cli.scenario;
 
     // The in-guest sans-I/O stack supports no STUN/TURN servers, so the

@@ -133,6 +133,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    conformance_adapter_common::init_tracing();
 
     anyhow::ensure!(
         cli.component.exists(),
