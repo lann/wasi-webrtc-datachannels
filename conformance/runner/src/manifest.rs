@@ -37,6 +37,9 @@ pub struct Unsupported {
     pub tag: String,
     /// Why the tag is unsupported (required; surfaced in the matrix).
     pub reason: String,
+    /// Environments this entry applies to. Absent ⇒ every environment.
+    /// Must be non-empty when present.
+    pub environments: Option<Vec<String>>,
 }
 
 /// An `[[expected-fail]]` entry: a test id plus mandatory tracking reference.
@@ -49,6 +52,18 @@ pub struct ExpectedFail {
     pub reason: String,
     /// Tracking reference (e.g. a TODO.md item); required to stay honest.
     pub tracking: String,
+    /// Environments this entry applies to. Absent ⇒ every environment.
+    /// Must be non-empty when present.
+    pub environments: Option<Vec<String>>,
+}
+
+/// True if an entry's optional `environments` scope covers `environment`.
+/// An absent scope covers every environment (including planning-only rows).
+fn scope_applies(environments: &Option<Vec<String>>, environment: &str) -> bool {
+    match environments {
+        None => true,
+        Some(envs) => envs.iter().any(|e| e == environment),
+    }
 }
 
 impl Manifest {
@@ -58,18 +73,57 @@ impl Manifest {
             .with_context(|| format!("reading manifest {}", path.display()))?;
         let manifest: Manifest = toml::from_str(&text)
             .with_context(|| format!("parsing manifest {}", path.display()))?;
+        manifest
+            .validate()
+            .with_context(|| format!("validating manifest {}", path.display()))?;
         Ok(manifest)
     }
 
-    /// True if any `unsupported` entry names a tag the test carries.
-    pub fn is_unsupported(&self, tags: &[String]) -> Option<&Unsupported> {
-        self.unsupported
-            .iter()
-            .find(|u| tags.iter().any(|t| t == &u.tag))
+    /// Structural checks beyond what serde enforces: an `environments` list,
+    /// when present, must be non-empty (an empty list would match nothing and
+    /// is always a mistake).
+    pub fn validate(&self) -> Result<()> {
+        for u in &self.unsupported {
+            if matches!(&u.environments, Some(envs) if envs.is_empty()) {
+                anyhow::bail!(
+                    "[[unsupported]] entry for tag {:?} has an empty `environments` list; \
+                     omit the key to apply to every environment",
+                    u.tag
+                );
+            }
+        }
+        for e in &self.expected_fail {
+            if matches!(&e.environments, Some(envs) if envs.is_empty()) {
+                anyhow::bail!(
+                    "[[expected-fail]] entry for test {:?} has an empty `environments` list; \
+                     omit the key to apply to every environment",
+                    e.test
+                );
+            }
+        }
+        Ok(())
     }
 
-    /// The `expected-fail` entry for a test id, if any.
-    pub fn expected_fail(&self, test_id: &str) -> Option<&ExpectedFail> {
-        self.expected_fail.iter().find(|e| e.test == test_id)
+    /// The `unsupported` entry that applies to a test with these tags in this
+    /// environment, if any. Environment-scoped entries take precedence over
+    /// unscoped ones when both match.
+    pub fn is_unsupported(&self, tags: &[String], environment: &str) -> Option<&Unsupported> {
+        let matches = |u: &&Unsupported| tags.iter().any(|t| t == &u.tag);
+        self.unsupported
+            .iter()
+            .filter(|u| scope_applies(&u.environments, environment))
+            .filter(matches)
+            .max_by_key(|u| u.environments.is_some())
+    }
+
+    /// The `expected-fail` entry that applies to a test id in this environment,
+    /// if any. Environment-scoped entries take precedence over unscoped ones
+    /// when both match.
+    pub fn expected_fail(&self, test_id: &str, environment: &str) -> Option<&ExpectedFail> {
+        self.expected_fail
+            .iter()
+            .filter(|e| scope_applies(&e.environments, environment))
+            .filter(|e| e.test == test_id)
+            .max_by_key(|e| e.environments.is_some())
     }
 }

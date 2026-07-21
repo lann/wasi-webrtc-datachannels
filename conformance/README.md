@@ -75,12 +75,14 @@ The suite separates *what runs a peer* from *where its network lives*:
   single-peer contract (`--test`/`--role`/`--server`/`--room`/…, one JSON
   `test-result` line on stdout).
 - **Environment executors** own the network environment and drive the corpus
-  through those peers: `conformance-ice` (in `adapters/wasmtime`) provisions
-  the netns ICE lab and places each peer with `ip netns exec`;
-  `conformance-shadow` (in `adapters/common`) renders a Shadow simulation
+  through those peers: `conformance-netns` (in `adapters/common`) provisions
+  the netns lab and places each peer with `ip netns exec`;
+  `conformance-shadow` (also in `adapters/common`) renders a Shadow simulation
   config and lets the simulator launch the peers. Executors decide addresses,
   scenarios, and process placement, and pass everything a peer needs as
-  configuration.
+  configuration; both build each peer's command line from the shared
+  per-target templates in `conformance-adapter-common`'s `peer_command`
+  module.
 
 Supporting a peer in a new environment therefore means teaching the executor a
 per-role command template — not the peer about the environment.
@@ -147,7 +149,7 @@ cargo run -p conformance-signalingd
 cargo run -p conformance-signalingd -- --host 0.0.0.0 --port 8080
 ```
 
-## ICE lab (`scenarios/`, `just conformance-ice`)
+## netns lab (`just conformance-netns`)
 
 The default adapters connect their peers over the loopback interface. The **ICE
 lab** (Phase 5) instead runs the two peers of each test over a real routed
@@ -156,15 +158,21 @@ the server-mediated scenarios, is forced through a STUN/TURN server. It is a
 small routed network of Linux **network namespaces** provisioned entirely with
 `ip`, `nft`, and coturn's `turnserver` (no containers): an offerer, an answerer,
 and a signaling namespace, each on its own `/30` subnet behind a router
-namespace (see [`scenarios/lib.sh`](scenarios/lib.sh) for the topology and
-addresses).
+namespace. The topology (namespace names, addresses, ports, TURN credentials)
+and its provisioning live in Rust, in `conformance-adapter-common`'s `lab`
+module (see its docs for the topology diagram and addresses).
 
-Because the two peers live in separate namespaces, each runs as its own process
-(`conformance-peer`), placed with `ip netns exec`; an environment executor
-(`conformance-ice`) provisions the lab, runs the signaling server (and coturn) in
-the signaling namespace, drives the corpus, and tears the lab down. Results are
-written to `conformance/results/wasmtime-<scenario>.json` with the scenario as
-the report's `environment`, so each scenario is its own matrix row.
+Because the two peers live in separate namespaces, each runs as its own process,
+placed with `ip netns exec`; the target-neutral environment executor
+(`conformance-netns`, in `adapters/common`) provisions the lab, runs the signaling
+server (and coturn) in the signaling namespace, drives the corpus, and tears the
+lab down. Like the Shadow lab, its `--peer-kind` flag selects the peer: the
+native `conformance-peer` binary (`wasmtime`, the default) or the composed
+wasip3 conformance component under `wasmtime run` (`wasip3-guest`, whose
+in-guest sans-I/O stack supports no STUN/TURN — only the `lan` scenario fits).
+Results are written to `conformance/results/<target>-<scenario>.json` with the
+scenario as the report's `environment`, so each scenario is its own matrix
+row.
 
 Scenarios:
 
@@ -180,26 +188,27 @@ exec`, and `turnserver` on `PATH` for the non-`lan` scenarios — both provided 
 [`scripts/setup.sh`](../scripts/setup.sh)):
 
 ```sh
-just conformance-ice lan
-just conformance-ice stun-srflx
-just conformance-ice turn-relay
-just conformance-ice nat-symmetric
+just conformance-netns lan
+just conformance-netns stun-srflx
+just conformance-netns turn-relay
+just conformance-netns nat-symmetric
 # or run both NAT scenarios (the Phase 6 matrix) at once:
 just conformance-nat
+# or run the lan scenario with the wasip3-guest peer:
+just conformance-netns lan wasip3-guest
 ```
 
-The scenario scripts are also usable standalone for interactive debugging — for
-example `sudo bash conformance/scenarios/scenario.sh up turn-relay`, then
-`... scenario.sh env turn-relay` to print the lab parameters, and
-`... scenario.sh down` to tear it down.
+For interactive debugging, a provisioned lab can be kept up across runs: run the
+executor once, then re-run it with `--no-provision` (it neither provisions nor
+tears down) while inspecting the namespaces with `ip netns exec` by hand.
 
 ### NAT matrix (Phase 6)
 
 Server-reflexive candidates are only meaningful when a peer's mapped address
 differs from its host address, which requires NAT between the peers and the
-router. The NAT scenarios add an nftables source-NAT on the router
-([`scenarios/nftables.sh`](scenarios/nftables.sh)) that rewrites each peer's
-forwarded traffic to its own "public" address:
+router. The NAT scenarios add an nftables source-NAT on the router (applied by the
+`lab` module's nftables provisioning) that rewrites each peer's forwarded
+traffic to its own "public" address:
 
 - `stun-srflx` uses a **port-restricted (cone) NAT** (`snat … persistent`): the
   mapping is endpoint-independent, so the two peers can hole-punch their srflx
@@ -208,25 +217,26 @@ forwarded traffic to its own "public" address:
   endpoint-dependent, so the address the STUN server observed is useless to the
   peer and ICE must fall back to a TURN relay.
 
-CI runs the NAT matrix in a dedicated **nightly** job (`nat-matrix` in
-[`.github/workflows/conformance.yml`](../.github/workflows/conformance.yml), also
-runnable via `workflow_dispatch`) with `continue-on-error` until the NAT paths
-prove stable enough to gate on.
+The NAT scenarios are part of the workstation-only netns lab (see below); run
+them with `just conformance-nat`.
 
-CI runs the lab in a dedicated job (`ice-lab` in
+The netns lab is **workstation-only**: CI does not run it. CI's non-loopback
+coverage comes from the Shadow lab (`shadow-lab` in
 [`.github/workflows/conformance.yml`](../.github/workflows/conformance.yml)),
-because network namespaces need privileges a typical sandbox does not grant.
+which needs no root or network namespaces; the netns lab remains the
+higher-fidelity environment for exercising the STUN/TURN/NAT candidate paths
+on a real kernel.
 
 ## Shadow lab (`just conformance-shadow`)
 
 The **Shadow lab** gives the same "two peers on separate hosts over a
-non-loopback path" property as the ICE lab, but runs the peers inside the
+non-loopback path" property as the netns lab, but runs the peers inside the
 [Shadow](https://github.com/shadow/shadow) discrete-event network simulator
 instead of network namespaces. Shadow runs the *unmodified* peer and
 `conformance-signalingd` binaries under a single deterministic simulation,
 intercepting their syscalls to model the network in user space — so it needs
 **no root and no network namespaces**, which makes it reproducible in
-sandboxes and hosted CI where the netns ICE lab cannot run.
+sandboxes and hosted CI where the netns lab cannot run.
 
 A target-neutral environment executor (`conformance-shadow`, in
 `adapters/common`) generates a Shadow YAML config with three hosts per test (a
@@ -259,7 +269,7 @@ just conformance-shadow
 Shadow does not implement UDP `SO_REUSEADDR`/`SO_REUSEPORT`, which webrtc's mDNS
 multicast socket sets, so the `wasmtime` peers run with `--disable-mdns` (they
 connect over explicit host candidates, so mDNS is unused); the sans-I/O wasip3
-stack has no mDNS at all. Only the Shadow peers pass the flag; the netns ICE
+stack has no mDNS at all. Only the Shadow peers pass the flag; the netns
 lab, which runs on a real kernel, is unchanged.
 
 CI runs the Shadow lab in a dedicated job (`shadow-lab` in
@@ -286,9 +296,10 @@ conformance/
   adapters/                # per-target adapters (wasmtime / jco / wasip3);
                            #   common/ holds the shared native building blocks
                            #   (registry/plans, peer subprocess invocation,
-                           #   retry loop, corpus runner, result document) and
-                           #   the target-neutral Shadow-lab executor
-  scenarios/               # ICE lab provisioning (Phase 5+)
+                           #   retry loop, corpus runner, result document),
+                           #   the netns-lab topology/provisioning (netns +
+                           #   nftables + coturn, in Rust), and the
+                           #   target-neutral netns-lab and Shadow-lab executors
 ```
 
 ## Test registry (`tests.toml`)
@@ -312,6 +323,15 @@ Each target gets one manifest declaring:
   **passes** becomes `unexpected-pass` and **fails** the run, forcing the
   manifest to be cleaned up.
 
+Either kind of entry may carry an optional `environments = ["shadow", ...]`
+list scoping it to specific environments (the same strings adapters report,
+e.g. `loopback`, `lan`, `stun-srflx`, `turn-relay`, `nat-symmetric`, `shadow`).
+An entry without `environments` applies to every environment (the original
+behavior, so existing manifests are unchanged); a scoped entry applies only
+when the report's environment is in the list, and takes precedence over an
+unscoped entry for the same tag/test in its environments. An empty
+`environments = []` list is a manifest error.
+
 See [`manifests/example.toml.example`](manifests/example.toml.example) for the
 full schema. That template has a `.toml.example` extension so the runner (which
 loads only `*.toml`) does not treat it as an enabled target.
@@ -320,7 +340,7 @@ loads only `*.toml`) does not treat it as an enabled target.
 
 `conformance-runner` renders a markdown table with one row per
 `(target, environment)` and one column per test. Most targets run only in the
-`loopback` environment; the ICE lab (above) adds `lan` / `stun-srflx` /
+`loopback` environment; the netns lab (above) adds `lan` / `stun-srflx` /
 `turn-relay` / `nat-symmetric` rows for the `wasmtime` target, and the Shadow
 lab adds a `shadow` row for the `wasmtime` and `wasip3-guest` targets. Cell
 values:

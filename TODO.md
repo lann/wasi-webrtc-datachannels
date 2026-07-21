@@ -25,14 +25,14 @@ gap is the *demo* jco host (`jco-impl/webrtc.js`), which still implements only
 the `openEcho` shortcut + `data-channel`; port the conformance adapter's
 `peer-connection` implementation there if the demo should exercise it.
 
-### A3. Cross-host conformance: loopback matrix + ICE lab in place; NAT still open
+### A3. Cross-host conformance: loopback matrix + netns lab in place; NAT still open
 
 `conformance/PLAN.md` is now implemented through Phase 5: a shared conformance
 guest, the `conformance-signalingd` mailbox, adapters for `wasmtime`,
 `jco-node`, `jco-browser`, and `wasip3-guest` (the guest composed with the
 in-guest `wasip3-impl` provider, run under `wasmtime run`), the
 `wasmtime`<->`jco-node` interop pair (both orders) — all run in CI over
-loopback via `just conformance` — and the ICE lab (`just conformance-ice`,
+loopback via `just conformance` — and the netns lab (`just conformance-netns`,
 CI job 2): the wasmtime two-peer corpus over a routed network-namespace
 topology exercising real non-loopback paths (`lan` direct and `turn-relay`
 through coturn). No manifest expected-fails remain. The

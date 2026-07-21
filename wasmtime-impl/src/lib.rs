@@ -51,7 +51,7 @@ pub struct WebrtcIceServer {
 ///
 /// The default value reproduces the crate's built-in behavior: bind a single
 /// ephemeral UDP socket on IPv4 loopback, no STUN/TURN servers, and the `all`
-/// ICE transport policy. The conformance ICE lab (see `conformance/PLAN.md`
+/// ICE transport policy. The conformance netns lab (see `conformance/PLAN.md`
 /// Phase 5) overrides these to bind a scenario-specific interface address and to
 /// point at a STUN/TURN server, forcing server-reflexive or relay candidate
 /// paths.
@@ -144,7 +144,7 @@ impl WasiWebrtcCtx {
     /// context creates (bind addresses, STUN/TURN servers, relay-only policy).
     ///
     /// The default leaves the crate's built-in loopback behavior unchanged; the
-    /// conformance ICE lab overrides it per scenario (see `conformance/PLAN.md`
+    /// conformance netns lab overrides it per scenario (see `conformance/PLAN.md`
     /// Phase 5).
     pub fn set_ice_config(&mut self, config: WebrtcIceConfig) {
         self.ice_config = config;

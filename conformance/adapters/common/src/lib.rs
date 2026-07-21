@@ -1,7 +1,7 @@
 //! Target-independent building blocks shared by the native conformance
 //! adapters and environment executors (the wasmtime and wasip3-guest adapters,
-//! the cross-runtime interop orchestrator, the ICE-lab executor, and the
-//! Shadow-lab executor in this crate's `conformance-shadow` bin).
+//! the cross-runtime interop orchestrator, and this crate's `conformance-netns`
+//! and `conformance-shadow` environment-executor bins).
 //!
 //! Every adapter follows the same shape — pick each test's orchestration plan,
 //! run its guest instances (in-process or as peer subprocesses), retry flaky
@@ -17,8 +17,14 @@
 //! - the peer-subprocess invocation ([`run_peer_command`]) with its subtle but
 //!   load-bearing process plumbing,
 //! - the flaky-handshake retry loop ([`RetryPolicy`], [`run_with_retries`]),
-//! - the bounded-concurrency corpus runner ([`run_corpus`]), and
-//! - the in-process signaling server startup ([`start_signaling_server`]).
+//! - the bounded-concurrency corpus runner ([`run_corpus`]),
+//! - the in-process signaling server startup ([`start_signaling_server`]),
+//! - the per-target peer command templates the environment executors share
+//!   ([`peer_command`]), and
+//! - the netns-lab topology and its netns/nftables/coturn provisioning ([`lab`]).
+
+pub mod lab;
+pub mod peer_command;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -165,7 +171,7 @@ pub const TESTS: &[&str] = &[
 
 /// The two-peer behavioral subset of [`TESTS`]: the tests whose outcome depends
 /// on a working data channel between two independent peers. This is the corpus
-/// the interop pairs and the ICE lab run — the peer-connection API tests are
+/// the interop pairs and the netns lab run — the peer-connection API tests are
 /// in-process (single-runtime) and the streaming / remaining error-taxonomy
 /// tests are guest-skipped, so neither exercises a runtime boundary or a
 /// candidate path.
@@ -254,13 +260,42 @@ pub async fn run_peer_command(
     }
     let stdout =
         String::from_utf8(output.stdout).with_context(|| format!("{label} stdout not UTF-8"))?;
-    let line = stdout
+    parse_result_line(&stdout).with_context(|| format!("reading {label} result"))
+}
+
+/// Parse a peer's captured stdout to its [`TestOutcome`]: the last non-empty
+/// line is the single-line JSON `test-result` (trailing blank lines, e.g. from
+/// output capture, are tolerated).
+pub fn parse_result_line(text: &str) -> Result<TestOutcome> {
+    let line = text
         .lines()
-        .last()
-        .with_context(|| format!("{label} produced no result line"))?;
-    let value: Value =
-        serde_json::from_str(line).with_context(|| format!("parsing {label} result {line:?}"))?;
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .context("no result line in output")?;
+    let value: Value = serde_json::from_str(line.trim())
+        .with_context(|| format!("parsing result line {line:?}"))?;
     parse_outcome(&value)
+}
+
+/// Convert a folded [`TestOutcome`] into the runner's raw result vocabulary.
+pub fn outcome_to_raw(test_id: &str, outcome: TestOutcome) -> RawResult {
+    match outcome {
+        TestOutcome::Pass => RawResult {
+            test_id: test_id.to_string(),
+            status: RawStatus::Pass,
+            detail: None,
+        },
+        TestOutcome::Skipped(reason) => RawResult {
+            test_id: test_id.to_string(),
+            status: RawStatus::Skip,
+            detail: Some(reason),
+        },
+        TestOutcome::Fail(detail) => RawResult {
+            test_id: test_id.to_string(),
+            status: RawStatus::Fail,
+            detail: Some(detail),
+        },
+    }
 }
 
 // ----- flaky-handshake retry loop --------------------------------------------
@@ -443,6 +478,22 @@ mod tests {
             fold_two(TestOutcome::Pass, TestOutcome::Pass),
             TestOutcome::Pass
         ));
+    }
+
+    #[test]
+    fn result_line_is_last_non_empty_line() {
+        let text = "log noise\n{ \"tag\": \"pass\" }\n\n  \n";
+        assert!(matches!(
+            parse_result_line(text).unwrap(),
+            TestOutcome::Pass
+        ));
+        assert!(matches!(
+            parse_result_line("{\"tag\":\"fail\",\"val\":\"boom\"}").unwrap(),
+            TestOutcome::Fail(d) if d == "boom"
+        ));
+        assert!(parse_result_line("").is_err());
+        assert!(parse_result_line("\n  \n").is_err());
+        assert!(parse_result_line("not json").is_err());
     }
 
     #[test]

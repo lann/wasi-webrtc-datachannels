@@ -17,8 +17,8 @@
 #     wasip3 provider (`just compose-webrtc`)
 #   - wasmtime, the host runtime that runs the composed in-guest WebRTC
 #     integration test (`just test-webrtc-composed`)
-#   - iproute2, nftables, and coturn, used by the conformance ICE lab
-#     (`just conformance-ice`; skip with SKIP_ICE_LAB=1)
+#   - iproute2, nftables, and coturn, used by the conformance netns lab
+#     (`just conformance-netns`; skip with SKIP_NETNS_LAB=1)
 #   - the conformance Shadow lab (`just conformance-shadow`) needs the Shadow
 #     network simulator, which this script does NOT install. Shadow ships no
 #     upstream prebuilt binary and is slow to build, so it is built once by the
@@ -42,7 +42,7 @@
 #   WASM_TOOLS_VERSION   version of wasm-tools to install (default below)
 #   JUST_VERSION         version of just to install (default below)
 #   NEXTEST_VERSION      version of cargo-nextest to install (default below)
-#   SKIP_ICE_LAB=1       skip installing the conformance ICE-lab tools (coturn…)
+#   SKIP_NETNS_LAB=1       skip installing the conformance netns-lab tools (coturn…)
 #   SKIP_NODE=1          skip installing the Node host's npm dependencies
 
 set -euo pipefail
@@ -121,15 +121,16 @@ else
   binstall "wasmtime-cli@${WASMTIME_VERSION}"
 fi
 
-if [ "${SKIP_ICE_LAB:-0}" = "1" ]; then
-  log "Skipping conformance ICE-lab dependencies (SKIP_ICE_LAB=1)"
+if [ "${SKIP_NETNS_LAB:-0}" = "1" ]; then
+  log "Skipping conformance netns-lab dependencies (SKIP_NETNS_LAB=1)"
 else
-  # The conformance ICE lab (conformance/scenarios/, `just conformance-ice`;
+  # The conformance netns lab (`just conformance-netns`, provisioned in Rust by
+  # the conformance-netns executor in conformance/adapters/common;
   # PLAN.md Phase 5) provisions a routed network-namespace topology with `ip`
   # (iproute2) and `nft` (nftables) and relays through coturn's `turnserver`.
   # These come from the distro package manager; install them on Debian/Ubuntu
   # when apt-get is available (harmless no-op elsewhere — provide them yourself).
-  log "Ensuring ICE-lab tools (iproute2, nftables, coturn) are installed"
+  log "Ensuring netns-lab tools (iproute2, nftables, coturn) are installed"
   if command -v apt-get >/dev/null 2>&1; then
     APT_SUDO=""
     [ "$(id -u)" -eq 0 ] || APT_SUDO="sudo"

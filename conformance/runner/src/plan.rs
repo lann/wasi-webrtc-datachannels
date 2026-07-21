@@ -3,12 +3,13 @@
 //! render the markdown conformance matrix.
 //!
 //! A target can run in more than one *environment* — the loopback path the
-//! default adapters use, plus the ICE-lab scenarios (`lan`, `stun-srflx`,
+//! default adapters use, plus the netns-lab scenarios (`lan`, `stun-srflx`,
 //! `turn-relay`; see `conformance/PLAN.md` Phase 5) that route each peer through
 //! its own network namespace. Each `(target, environment)` pair reported by an
 //! adapter is its own matrix row, so a scenario's outcome is classified against
 //! the same manifest policy as its target's loopback run without being merged
-//! into it.
+//! into it. Manifest entries may carry an optional `environments` list scoping
+//! them to specific environments; unscoped entries apply everywhere.
 
 use std::collections::BTreeMap;
 
@@ -99,8 +100,13 @@ impl Matrix {
                     environment,
                 };
                 for entry in &registry.test {
-                    let cell =
-                        classify_one(manifest, &entry.id, &entry.tags, raw.get(entry.id.as_str()));
+                    let cell = classify_one(
+                        manifest,
+                        &row.environment,
+                        &entry.id,
+                        &entry.tags,
+                        raw.get(entry.id.as_str()),
+                    );
                     cells.insert(row.key(&entry.id), cell);
                 }
                 rows.push(row);
@@ -182,19 +188,20 @@ impl Matrix {
 
 fn classify_one(
     manifest: &Manifest,
+    environment: &str,
     test_id: &str,
     tags: &[String],
     raw: Option<&(RawStatus, Option<String>)>,
 ) -> Cell {
     // Unsupported tags win regardless of whether a result was reported.
-    if let Some(unsupported) = manifest.is_unsupported(tags) {
+    if let Some(unsupported) = manifest.is_unsupported(tags, environment) {
         return Cell {
             status: Status::SkipUnsupported,
             detail: Some(unsupported.reason.clone()),
         };
     }
 
-    let expected_fail = manifest.expected_fail(test_id);
+    let expected_fail = manifest.expected_fail(test_id, environment);
 
     match raw {
         None => Cell {

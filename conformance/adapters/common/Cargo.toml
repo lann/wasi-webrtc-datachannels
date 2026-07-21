@@ -13,17 +13,27 @@ path = "src/lib.rs"
 # config placing each two-peer test on its own simulated hosts, runs `shadow`
 # once, and writes the `<target>-shadow.json` result document. Target-neutral:
 # `--peer-kind` selects the per-role peer command (the native conformance-peer
-# or the composed wasip3 component under `wasmtime run`). Unlike the ICE lab it
+# or the composed wasip3 component under `wasmtime run`). Unlike the netns lab it
 # needs no root or network namespaces.
 [[bin]]
 name = "conformance-shadow"
 path = "src/bin/shadow.rs"
 
+# The netns-lab environment executor: provisions a scenario's network-namespace
+# topology (netns/nftables/coturn, owned by the crate's `lab` module), starts
+# the signaling (and STUN/TURN) servers, runs the two-peer corpus with each peer
+# placed in its own namespace (`ip netns exec`), and writes a per-scenario
+# result document. Target-neutral like conformance-shadow (`--peer-kind`);
+# unlike it, requires root.
+[[bin]]
+name = "conformance-netns"
+path = "src/bin/netns.rs"
+
 [dependencies]
 # The suite-owned signaling server, started in-process so each adapter run owns
 # its own mailbox without managing a subprocess.
 conformance-signalingd = { path = "../../signaling/server" }
-tokio = { version = "1", features = ["process", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "time"] }
 futures = "0.3"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

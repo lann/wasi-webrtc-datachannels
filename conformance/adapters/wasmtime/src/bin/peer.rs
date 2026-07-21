@@ -1,8 +1,9 @@
-//! A single wasmtime conformance peer, launched as a process by the ICE-lab
-//! orchestrator ([`crate::bin::ice`](super)) inside a network namespace.
+//! A single wasmtime conformance peer, launched as a process by the
+//! environment executors (the netns-lab `conformance-netns` orchestrator, inside a
+//! network namespace, and the Shadow-lab `conformance-shadow` simulation).
 //!
 //! Each invocation runs exactly one guest instance — one role of one test —
-//! against the wasmtime host, configured with an explicit ICE-lab network
+//! against the wasmtime host, configured with an explicit netns-lab network
 //! configuration (the interface address to bind and, for the server-mediated
 //! scenarios, the STUN/TURN server and relay-only policy). The single-line JSON
 //! `test-result` it prints to stdout matches the shape the orchestrator (and the
@@ -115,7 +116,7 @@ async fn main() -> Result<()> {
         cli.message_size,
     );
 
-    // A bind address selects the ICE-lab path (real interface); its absence keeps
+    // A bind address selects the netns-lab path (real interface); its absence keeps
     // the plain loopback behavior so this binary is also usable for local
     // smoke-testing without a provisioned lab.
     let result = match &cli.bind_addr {
