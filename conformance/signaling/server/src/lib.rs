@@ -256,6 +256,12 @@ async fn fetch(
 async fn mark_done(
     State(app): State<AppState>,
     Path((room, role)): Path<(String, String)>,
+    // Accepting (and thereby draining) the request body matters even though the
+    // protocol sends none: a client that streams an empty body (e.g. chunked
+    // with just a terminator) races a handler that responds without reading it
+    // — body data arriving after the server side closes elicits a TCP RST that
+    // can destroy the client's buffered response.
+    _body: Bytes,
 ) -> Response {
     if !valid_room(&room) {
         return error(StatusCode::BAD_REQUEST, "bad-room", None);

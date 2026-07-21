@@ -111,9 +111,29 @@ where
 
     let headers = parts.headers.try_into().map_err(to_internal_error_code)?;
 
-    let (body_writer, contents_rx, trailers_rx) = BodyWriter::new();
-
-    let (req, _result) = WasiHttpRequest::new(headers, Some(contents_rx), trailers_rx, options);
+    // VENDOR PATCH: pass no contents stream for a body that is already at end
+    // of stream (e.g. `Empty`, an empty `Full`). Wrapping such a body in a
+    // stream leaves the host unable to see the request as bodyless: hyper
+    // sends `Transfer-Encoding: chunked` and waits on the guest's spawned
+    // body-pump task for the empty terminator. A server that responds without
+    // reading the request body (its handler takes no body) then races that
+    // late terminator: data arriving after the server closes elicits a TCP
+    // RST that can destroy the client's buffered response, surfacing as
+    // `hyper::Error(IncompleteMessage)` → `ErrorCode::HttpProtocolError`.
+    // With no contents stream the host sends a proper bodyless request and
+    // the race cannot occur.
+    let req = if body.is_end_stream() {
+        let (req, _result) = WasiHttpRequest::new(headers, None, trailers_ready(), options);
+        req
+    } else {
+        let (body_writer, contents_rx, trailers_rx) = BodyWriter::new();
+        let (req, _result) = WasiHttpRequest::new(headers, Some(contents_rx), trailers_rx, options);
+        wit_bindgen::spawn_local(async move {
+            let mut body = std::pin::pin!(body);
+            _ = body_writer.send_http_body(&mut body).await;
+        });
+        req
+    };
 
     req.set_method(&parts.method.into())
         .map_err(|()| ErrorCode::HttpRequestMethodInvalid)?;
@@ -128,12 +148,19 @@ where
     req.set_path_with_query(parts.uri.path_and_query().map(|pq| pq.as_str()))
         .map_err(|()| ErrorCode::HttpRequestUriInvalid)?;
 
-    wit_bindgen::spawn_local(async move {
-        let mut body = std::pin::pin!(body);
-        _ = body_writer.send_http_body(&mut body).await;
-    });
-
     Ok(req)
+}
+
+/// A trailers future that resolves immediately with no trailers, for bodyless
+/// requests (part of the vendor patch above).
+fn trailers_ready() -> crate::wit_bindgen::FutureReader<super::body_writer::BodyResult> {
+    let (writer, reader) = crate::wit_future::new(|| Ok(None));
+    // Complete the future eagerly; dropping the writer after `new` would
+    // resolve it with the default `Ok(None)` as well, but be explicit.
+    wit_bindgen::spawn_local(async move {
+        _ = writer.write(Ok(None)).await;
+    });
+    reader
 }
 
 /// Converts a WASI HTTP request (`WasiHttpRequest`) into a standard host-side
