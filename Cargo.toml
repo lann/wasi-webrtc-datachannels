@@ -31,3 +31,12 @@ rtc = "0.20.0-rc.3"
 # git dependency is what lets the fix reach `webrtc`'s own copy of `rtc`.
 [patch.crates-io]
 rtc = { git = "https://github.com/lann/rtc.git", rev = "e3046a97c9f32965e2ae85d70a7104727f7d226b" }
+
+# Redirect `wasip3` to the vendored copy under vendor/wasip3: the crates-io
+# release pins wit-bindgen 0.57, which predates the 0.58/0.59 async-runtime
+# fixes (task polling/spawn behavior, waitable-set handling around
+# cancellation). The vendored copy is the published 0.7.0+wasi-0.3.0 source
+# with wit-bindgen bumped to 0.59 and its bindings regenerated; see
+# vendor/wasip3/Cargo.toml. Drop the patch once upstream wasi-rs moves to
+# wit-bindgen >= 0.59.
+wasip3 = { path = "vendor/wasip3" }

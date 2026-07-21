@@ -278,7 +278,7 @@ impl GuestDataChannel for DataChannel {
         let shared = self.shared.clone();
         let id = self.id;
         let (tx, rx) = crate::wit_stream::new();
-        wit_bindgen::spawn(pump_receive(shared, id, tx));
+        wit_bindgen::spawn_local(pump_receive(shared, id, tx));
         Ok(rx)
     }
 }
@@ -312,7 +312,7 @@ impl PeerConnection {
             return;
         }
         if let Some((runtime, wake_rx)) = state.runtime.take() {
-            wit_bindgen::spawn(runtime.pump(wake_rx));
+            wit_bindgen::spawn_local(runtime.pump(wake_rx));
             state.started_pump = true;
         }
     }
@@ -383,7 +383,7 @@ impl GuestPeerConnection for PeerConnection {
         let waker = state.waker.clone();
         let local_channel = state.local_channel;
         let (tx, rx) = crate::wit_stream::new();
-        wit_bindgen::spawn(pump_incoming(shared, waker, local_channel, tx));
+        wit_bindgen::spawn_local(pump_incoming(shared, waker, local_channel, tx));
         rx
     }
 
@@ -459,7 +459,7 @@ impl GuestPeerConnection for PeerConnection {
                 sdp_mline_index: None,
             })
         };
-        wit_bindgen::spawn(async move {
+        wit_bindgen::spawn_local(async move {
             if let Some(candidate) = candidate {
                 let _ = tx.write_all(vec![candidate]).await;
             }

@@ -14,7 +14,10 @@ crate-type = ["cdylib"]
 wasip3 = { version = "0.7", features = ["async-spawn"] }
 # `wit-bindgen` generates the guest bindings for the imported
 # `lann:webrtc-datachannels/manual-signaling` interface.
-wit-bindgen = { version = "0.57", features = ["async", "async-spawn"] }
+# Must match the wit-bindgen version of the (vendored) `wasip3` crate: this
+# crate shares wit-bindgen runtime types with wasip3, and mixing two runtime
+# versions in one component is unsupported.
+wit-bindgen = { version = "0.59", features = ["async", "async-spawn"] }
 futures = { version = "0.3", default-features = false, features = ["async-await"] }
 # base64 keeps the copy/pasteable signaling blobs on a single line.
 base64 = "0.22"

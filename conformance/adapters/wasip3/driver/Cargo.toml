@@ -15,5 +15,8 @@ crate-type = ["cdylib"]
 # `run-test` import).
 wasip3 = { version = "0.7", features = ["async-spawn"] }
 # The imported `runner` bindings.
-wit-bindgen = { version = "0.57", features = ["async", "async-spawn"] }
+# Must match the wit-bindgen version of the (vendored) `wasip3` crate: this
+# crate shares wit-bindgen runtime types with wasip3, and mixing two runtime
+# versions in one component is unsupported.
+wit-bindgen = { version = "0.59", features = ["async", "async-spawn"] }
 serde_json = "1"
