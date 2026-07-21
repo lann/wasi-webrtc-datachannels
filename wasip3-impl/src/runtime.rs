@@ -30,10 +30,11 @@ use crate::wasi::sockets::types::{
     ErrorCode, IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, Ipv6SocketAddress, UdpSocket,
 };
 
-/// The safety-net wake interval, so the pump re-checks timers even when the
-/// stack reports no deadline. Mirrors the reference driver's 50ms cap: a short
-/// bound on how long the pump can sleep so retransmit and keep-alive timers
-/// still fire promptly.
+/// The pump's timer-service tick interval. The stack's retransmit and
+/// keep-alive deadlines are serviced on the next tick rather than at their
+/// exact instant, bounding timer latency at one interval — mirroring the
+/// reference driver's 50ms cap — in exchange for a tick future that is never
+/// cancelled mid-flight.
 const MAX_WAIT_NANOS: u64 = 50_000_000;
 
 /// How long the pump keeps draining after a local `close` when the core has not
@@ -199,14 +200,15 @@ impl Runtime {
         // The in-flight `receive()` and `wait-for` import futures live across
         // loop iterations: each is a component-model subtask, and dropping one
         // mid-flight cancels it in the host. Cancelling a pending `receive()`
-        // can discard a datagram the host has already dequeued into it, and
-        // per-iteration cancellation of `wait-for` subtasks needlessly stresses
-        // the runtime's cancel bookkeeping, so each future is replaced only
-        // after it completes — except the timer, which is additionally re-armed
-        // when the stack asks to be woken *earlier* than the armed deadline.
+        // can discard a datagram the host has already dequeued into it, so it
+        // is replaced only after it completes. The timer is a fixed
+        // [`MAX_WAIT_NANOS`] tick that is likewise never cancelled: the stack's
+        // deadlines are simply serviced on the next tick, trading at most the
+        // safety-net interval of timer latency (which the sans-I/O stack's
+        // retransmit/keep-alive granularity already tolerates) for an event
+        // loop that never cancels an in-flight import subtask.
         let mut recv = pin!(socket.receive().fuse());
         let mut timer = pin!(monotonic_clock::wait_for(MAX_WAIT_NANOS).fuse());
-        let mut timer_target = Instant::now() + Duration::from_nanos(MAX_WAIT_NANOS);
 
         loop {
             // Flush + drain while holding the borrow only between awaits.
@@ -230,26 +232,7 @@ impl Runtime {
                 return;
             }
 
-            // The stack's next timer deadline (if any). Wake at that instant,
-            // capped by the safety net so retransmit/keep-alive timers fire even
-            // when the stack reports no deadline. Re-arm the running timer only
-            // if the stack needs to be woken earlier than it is armed for.
-            let deadline = shared.borrow_mut().peer.poll_timeout();
-            let now = Instant::now();
-            let delay = deadline
-                .map(|d| {
-                    d.saturating_duration_since(now)
-                        .as_nanos()
-                        .min(u128::from(MAX_WAIT_NANOS)) as u64
-                })
-                .unwrap_or(MAX_WAIT_NANOS);
-            let target = now + Duration::from_nanos(delay);
-            if target < timer_target {
-                timer.set(monotonic_clock::wait_for(delay).fuse());
-                timer_target = target;
-            }
-
-            // Park on the earliest of an inbound datagram, the timer, or a wake.
+            // Park on the earliest of an inbound datagram, the tick, or a wake.
             select_biased! {
                 received = recv.as_mut() => {
                     // A receive error just means no datagram this round.
@@ -264,25 +247,12 @@ impl Runtime {
                     recv.set(socket.receive().fuse());
                 }
                 _ = timer.as_mut() => {
-                    // If the fired timer covered the stack's deadline, feed the
-                    // stack a time guaranteed to be at or past it. Passing
-                    // `Instant::now()` alone can be a few nanoseconds short of
-                    // `deadline` (the host timer may return early / clock
-                    // granularity), leaving the timer unexpired: the stack
-                    // would report the same past deadline again, the pump would
-                    // spin with `delay == 0`, and no retransmit would ever be
-                    // produced — stalling the handshake. Using
-                    // `max(now, deadline)` guarantees progress. A safety-net
-                    // wake armed before the current deadline existed must not
-                    // jump ahead of the clock, so it reports plain `now`.
-                    let now = Instant::now();
-                    let fire_at = match deadline {
-                        Some(d) if d <= timer_target => d.max(now),
-                        _ => now,
-                    };
+                    // Service any stack deadline that has come due. `now` is at
+                    // least one full tick past the previous service point, so a
+                    // deadline that landed between ticks is strictly in the
+                    // past and expires; there is no zero-delay spin.
                     timer.set(monotonic_clock::wait_for(MAX_WAIT_NANOS).fuse());
-                    timer_target = now + Duration::from_nanos(MAX_WAIT_NANOS);
-                    shared.borrow_mut().peer.handle_timeout(fire_at);
+                    shared.borrow_mut().peer.handle_timeout(Instant::now());
                 }
                 // A wake (an exported method mutated the core): loop to flush.
                 _ = wake_rx.next() => {}
