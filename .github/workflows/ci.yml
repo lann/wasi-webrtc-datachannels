@@ -45,6 +45,11 @@ jobs:
       - name: Install dependencies
         # This job never runs the Node host, so skip its npm dependencies.
         run: SKIP_NODE=1 ./scripts/setup.sh
+        # cargo-binstall resolves releases through api.github.com; unauthenticated
+        # requests share a 60/hour per-IP limit that pooled runner IPs exhaust
+        # (intermittent 403s). The token moves it to the per-token limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       # Cheap checks first so an obvious formatting or WIT mistake fails the job
       # before the slower clippy/test compilation.
@@ -106,6 +111,11 @@ jobs:
 
       - name: Install dependencies
         run: ./scripts/setup.sh
+        # cargo-binstall resolves releases through api.github.com; unauthenticated
+        # requests share a 60/hour per-IP limit that pooled runner IPs exhaust
+        # (intermittent 403s). The token moves it to the per-token limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Build echo-demo guest component
         run: just build-component

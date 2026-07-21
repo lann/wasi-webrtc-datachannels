@@ -56,3 +56,8 @@ jobs:
 
       - name: Install dependencies
         run: ./scripts/setup.sh
+        # cargo-binstall resolves releases through api.github.com; unauthenticated
+        # requests share a 60/hour per-IP limit that pooled runner IPs exhaust
+        # (intermittent 403s). The token moves it to the per-token limit.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
