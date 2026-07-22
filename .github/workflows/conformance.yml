@@ -1,6 +1,6 @@
 name: Conformance
 
-# The conformance suite (see conformance/PLAN.md). The `matrix` job builds the
+# The conformance suite (see conformance/README.md). The `matrix` job builds the
 # conformance guest once and runs the loopback scenarios across all enabled
 # targets, including the pairwise interop matrix, uploading the matrix artifact
 # and failing on any unexpected status. The `shadow-lab` job runs the two-peer
@@ -13,31 +13,16 @@ name: Conformance
 # is workstation-only and is not exercised in CI; Shadow provides CI's
 # non-loopback coverage.
 #
-# Phases enabled so far:
-#   - Phase 0: the runner, registry, and manifest schema.
-#   - Phase 1: the conformance-signalingd HTTP mailbox server — its integration
-#     tests run here, and the runner starts/health-checks/stops a live server.
-#   - Phase 2: the shared conformance guest + the wasmtime adapter — `just
-#     conformance` builds the guest component, runs the adapter over the
-#     wasmtime host (loopback ICE, in-process signaling), and classifies the
-#     wasmtime row of the matrix against conformance/manifests/wasmtime.toml.
-#   - Phase 3: the jco adapters — the browser-first host transpiled by jco and
-#     run under Node (`jco-node`, via @roamhq/wrtc) and headless Chromium
-#     (`jco-browser`), plus the cross-runtime interop pair
-#     `wasmtime`<->`jco-node` in both orders. jco's async ABI always uses JSPI
-#     (WebAssembly.Suspending), so the Node driver requires Node 24+ with
-#     --experimental-wasm-jspi (the browser gets JSPI natively).
-#   - Phase 4: the wasip3-guest adapter — the conformance guest composed
-#     (`wac plug`) with the wasip3-impl provider (the sans-I/O rtc stack over
-#     WASIp3 wasi:sockets), an in-guest wasi:http mailbox client, and a CLI
-#     driver, run under `wasmtime run` (installed by scripts/setup.sh) — plus
-#     the cross-runtime interop pair `wasmtime`<->`wasip3-guest` in both
-#     orders (wired but disabled by default pending a wasip3 teardown-flush
-#     fix; see TODO.md item E3).
-#   - Phases 5 and 6: the netns lab and its NAT scenarios — workstation-only
-#     (see above).
-# Later phases enable more scenarios and additional jobs (see the workflow plan
-# in conformance/PLAN.md).
+# Enabled targets: wasmtime (native webrtc-rs), jco-node (the browser-first
+# host transpiled by jco, under Node 24+ with --experimental-wasm-jspi and
+# @roamhq/wrtc), jco-browser (the same host in headless Chromium, which has
+# JSPI natively), wasip3-guest (the conformance guest composed via `wac plug`
+# with the wasip3-impl provider — the sans-I/O rtc stack over WASIp3
+# wasi:sockets — plus an in-guest wasi:http mailbox client and a CLI driver,
+# run under `wasmtime run`), and the cross-runtime interop pair
+# `wasmtime`<->`jco-node` in both orders. The `wasmtime`<->`wasip3-guest`
+# pairs are wired but disabled by default pending a wasip3 teardown-flush fix
+# (see TODO.md item E3).
 
 on:
   push:

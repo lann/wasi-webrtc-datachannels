@@ -4,7 +4,7 @@
 //!
 //! A target can run in more than one *environment* — the loopback path the
 //! default adapters use, plus the netns-lab scenarios (`lan`, `stun-srflx`,
-//! `turn-relay`; see `conformance/PLAN.md` Phase 5) that route each peer through
+//! `turn-relay`; see the netns lab in `conformance/README.md`) that route each peer through
 //! its own network namespace. Each `(target, environment)` pair reported by an
 //! adapter is its own matrix row, so a scenario's outcome is classified against
 //! the same manifest policy as its target's loopback run without being merged

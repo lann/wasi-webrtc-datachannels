@@ -13,20 +13,30 @@ lettering has gaps.
 
 ## A. Strategic / whole-project
 
-### A3. Cross-host conformance: loopback matrix + netns lab in place; NAT still open
+### A3. Cross-host conformance: loopback matrix + labs in place; interop matrix incomplete
 
-`conformance/PLAN.md` is now implemented through Phase 5: a shared conformance
-guest, the `conformance-signalingd` mailbox, adapters for `wasmtime`,
-`jco-node`, `jco-browser`, and `wasip3-guest` (the guest composed with the
-in-guest `wasip3-impl` provider, run under `wasmtime run`), the
+The suite (see `conformance/README.md`) is built and green in CI: a shared
+conformance guest, the `conformance-signalingd` mailbox, adapters for
+`wasmtime`, `jco-node`, `jco-browser`, and `wasip3-guest`, the
 `wasmtime`<->`jco-node` interop pair (both orders) — all run in CI over
-loopback via `just conformance` — and the netns lab (`just conformance-netns`,
-CI job 2): the wasmtime two-peer corpus over a routed network-namespace
-topology exercising real non-loopback paths (`lan` direct and `turn-relay`
-through coturn). No manifest expected-fails remain. The
-`wasmtime`<->`wasip3-guest` pairs are wired into `conformance-interop` but
-disabled by default pending the teardown-flush fix (item E3). Still open from
-the plan: NAT on the router so `stun-srflx` is meaningful (Phase 6).
+loopback via `just conformance` — plus the Shadow lab in CI (non-loopback,
+deterministic) and the workstation-only netns lab (`just conformance-netns` /
+`just conformance-nat`) covering `lan`, `stun-srflx` (behind a port-restricted
+cone NAT), `turn-relay`, and `nat-symmetric`. No manifest expected-fails
+remain. Still open:
+
+- **Full interop matrix.** The `wasmtime`<->`wasip3-guest` pairs are wired
+  into `conformance-interop` but disabled by default pending the
+  teardown-flush fix (item E3); no jco-browser interop pairs exist; interop
+  pairs run over loopback only.
+- **NAT-matrix confirmation.** The NAT scenarios are built and verified
+  statically, but a clean `just conformance-nat` run on a workstation (real
+  kernel, root) has not been confirmed; they briefly ran as a nightly
+  continue-on-error CI job before the netns lab was made workstation-only.
+- **netns-lab peer coverage.** The lab's `--peer-kind` covers `wasmtime` (all
+  scenarios) and `wasip3-guest` (`lan` only — the in-guest sans-I/O stack
+  supports no STUN/TURN); a jco-node lab peer (a per-peer Node runner placed
+  in a namespace) is deferred.
 
 ## B. Correctness bugs (both hosts unless noted)
 
@@ -210,4 +220,5 @@ flags from the WIT) so a drifted rename fails fast with a clear message.
    implements only the `openEcho` shortcut), wire `rendezvous` (F3), and take
    `wasip3`'s WIT-speaking component to a real network (F4).
 5. Cheap hygiene: streaming parity in the jco host (E1), the transpile-flag CI
-   check (G1), NAT for `stun-srflx` (A3), demo payload verification (F1).
+   check (G1), the remaining conformance-matrix gaps (A3), demo payload
+   verification (F1).

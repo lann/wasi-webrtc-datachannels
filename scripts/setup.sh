@@ -126,7 +126,7 @@ if [ "${SKIP_NETNS_LAB:-0}" = "1" ]; then
 else
   # The conformance netns lab (`just conformance-netns`, provisioned in Rust by
   # the conformance-netns executor in conformance/adapters/common;
-  # PLAN.md Phase 5) provisions a routed network-namespace topology with `ip`
+  # README.md) provisions a routed network-namespace topology with `ip`
   # (iproute2) and `nft` (nftables) and relays through coturn's `turnserver`.
   # These come from the distro package manager; install them on Debian/Ubuntu
   # when apt-get is available (harmless no-op elsewhere — provide them yourself).
