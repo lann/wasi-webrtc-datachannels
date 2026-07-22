@@ -71,6 +71,14 @@ impl Wasip3Peer {
                 "-S",
                 "inherit-network",
             ])
+            .args([
+                "--env",
+                &format!(
+                    "{}={}",
+                    conformance_adapter_common::MAX_INBOUND_BUFFER_ENV,
+                    conformance_adapter_common::CONFORMANCE_MAX_INBOUND_BUFFER_BYTES
+                ),
+            ])
             .arg(&self.component)
             .args(["--test", test_id])
             .args(["--role", role])

@@ -22,7 +22,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
@@ -30,7 +30,7 @@ use futures::channel::mpsc::{self, UnboundedReceiver};
 use futures::channel::oneshot;
 use futures::future::Shared;
 use futures::lock::Mutex as AsyncMutex;
-use futures::{FutureExt, TryFutureExt};
+use futures::{FutureExt, StreamExt, TryFutureExt};
 use webrtc::data_channel::{DataChannel as WebrtcDataChannel, DataChannelEvent};
 use webrtc::peer_connection::{
     PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCConfigurationBuilder,
@@ -48,6 +48,116 @@ pub struct InboundMessage {
     pub is_string: bool,
     /// The raw message payload.
     pub data: Vec<u8>,
+}
+
+/// The default bound on inbound payload bytes buffered per channel while
+/// waiting for the guest to `receive` them.
+///
+/// There is no wire-level inbound backpressure (the WIT contract deliberately
+/// matches the W3C `RTCDataChannel` floor, where none is possible), so this
+/// bound is what protects host memory from a slow guest reader: when it would
+/// be exceeded the channel is closed and, once the buffered backlog drains,
+/// `receive` fails with `error.receive-buffer-overflow`. Mirrors the outbound
+/// SCTP send-buffer bound the jco hosts use. Overridable through
+/// [`MAX_INBOUND_BUFFER_ENV`].
+pub const DEFAULT_MAX_INBOUND_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
+/// The environment variable overriding [`DEFAULT_MAX_INBOUND_BUFFER_BYTES`]
+/// (a byte count). Primarily a test knob: the conformance suite shrinks the
+/// bound so its overflow probe needs only a small flood.
+pub const MAX_INBOUND_BUFFER_ENV: &str = "WEBRTC_MAX_INBOUND_BUFFER_BYTES";
+
+/// The configured inbound buffer bound: [`MAX_INBOUND_BUFFER_ENV`] when set to
+/// a positive integer, else [`DEFAULT_MAX_INBOUND_BUFFER_BYTES`].
+pub fn max_inbound_buffer_bytes() -> usize {
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        std::env::var(MAX_INBOUND_BUFFER_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|&bytes| bytes > 0)
+            .unwrap_or(DEFAULT_MAX_INBOUND_BUFFER_BYTES)
+    })
+}
+
+/// The buffered-byte accounting shared between a channel's pump (which
+/// reserves capacity for each inbound message) and its readers (which release
+/// it as messages are consumed).
+#[derive(Debug)]
+pub struct InboundBudget {
+    /// The bound on buffered payload bytes.
+    limit: usize,
+    /// Payload bytes currently buffered and not yet consumed by a reader.
+    buffered: AtomicUsize,
+    /// Latched once an inbound message would have exceeded the bound.
+    overflowed: AtomicBool,
+}
+
+impl Default for InboundBudget {
+    fn default() -> Self {
+        Self {
+            limit: max_inbound_buffer_bytes(),
+            buffered: AtomicUsize::new(0),
+            overflowed: AtomicBool::new(false),
+        }
+    }
+}
+
+impl InboundBudget {
+    /// Reserve `len` buffered bytes. Returns `false` — latching the overflow —
+    /// if the reservation would exceed the bound or an overflow was already
+    /// latched.
+    pub fn reserve(&self, len: usize) -> bool {
+        if self.overflowed.load(Ordering::SeqCst) {
+            return false;
+        }
+        if self.buffered.load(Ordering::SeqCst).saturating_add(len) > self.limit {
+            self.overflowed.store(true, Ordering::SeqCst);
+            return false;
+        }
+        self.buffered.fetch_add(len, Ordering::SeqCst);
+        true
+    }
+
+    /// Release `len` buffered bytes after a reader consumed a message.
+    pub fn release(&self, len: usize) {
+        self.buffered.fetch_sub(len, Ordering::SeqCst);
+    }
+
+    /// Whether an inbound message overflowed the buffer bound.
+    pub fn overflowed(&self) -> bool {
+        self.overflowed.load(Ordering::SeqCst)
+    }
+}
+
+/// A channel's inbound-message queue: the receiving half of the pump's message
+/// stream plus the shared [`InboundBudget`] its consumption releases.
+pub struct InboundQueue {
+    rx: UnboundedReceiver<InboundMessage>,
+    budget: Arc<InboundBudget>,
+}
+
+impl InboundQueue {
+    /// Build a queue over a raw receiver and its budget.
+    pub fn new(rx: UnboundedReceiver<InboundMessage>, budget: Arc<InboundBudget>) -> Self {
+        Self { rx, budget }
+    }
+
+    /// The next buffered message, or `None` once the pump has stopped (the
+    /// channel closed or its inbound buffer overflowed) and the backlog is
+    /// drained. Releases the message's bytes from the budget.
+    pub async fn next(&mut self) -> Option<InboundMessage> {
+        let message = self.rx.next().await?;
+        self.budget.release(message.data.len());
+        Some(message)
+    }
+
+    /// Whether the channel's inbound buffer overflowed. When `true`, the queue
+    /// ends after the pre-overflow backlog and readers should surface
+    /// `error.receive-buffer-overflow` rather than `closed`.
+    pub fn overflowed(&self) -> bool {
+        self.budget.overflowed()
+    }
 }
 
 impl InboundMessage {
@@ -88,7 +198,7 @@ pub struct Wired {
     pub channel: Arc<dyn WebrtcDataChannel>,
     /// Inbound messages, delivered one per `receive` call. Behind an async mutex
     /// so concurrent receivers serialize and each takes the next message.
-    pub incoming: Arc<AsyncMutex<UnboundedReceiver<InboundMessage>>>,
+    pub incoming: Arc<AsyncMutex<InboundQueue>>,
 }
 
 /// A future resolving to a channel's wired transport parts (or a wiring error),
@@ -104,8 +214,9 @@ fn ready_wired(wired: Wired) -> WiredFuture {
 
 /// The open signal and inbound-message stream produced by a channel's pump task.
 pub struct ChannelPump {
-    /// Inbound messages drained from the channel, in arrival order.
-    pub incoming: UnboundedReceiver<InboundMessage>,
+    /// Inbound messages drained from the channel, in arrival order, bounded by
+    /// the configured [`max_inbound_buffer_bytes`] bound.
+    pub incoming: InboundQueue,
     /// Resolves once the channel reports `open`.
     pub open: oneshot::Receiver<()>,
 }
@@ -117,9 +228,16 @@ pub struct ChannelPump {
 /// (including a zero-length payload) is forwarded as an [`InboundMessage`], and
 /// `OnClose` (or a `None` poll) ends the pump, dropping the inbound sender so
 /// receivers observe end-of-stream.
+///
+/// Inbound buffering is bounded by [`max_inbound_buffer_bytes`]: a message that
+/// would exceed it latches the overflow on the shared [`InboundBudget`], closes
+/// the channel, and discards that and any later messages; readers drain the
+/// pre-overflow backlog and then surface `error.receive-buffer-overflow`.
 pub fn spawn_channel_pump(channel: Arc<dyn WebrtcDataChannel>) -> ChannelPump {
     let (in_tx, in_rx) = mpsc::unbounded::<InboundMessage>();
     let (open_tx, open_rx) = oneshot::channel::<()>();
+    let budget = Arc::new(InboundBudget::default());
+    let pump_budget = budget.clone();
     tokio::spawn(async move {
         let mut open_tx = Some(open_tx);
         while let Some(event) = channel.poll().await {
@@ -130,6 +248,12 @@ pub fn spawn_channel_pump(channel: Arc<dyn WebrtcDataChannel>) -> ChannelPump {
                     }
                 }
                 DataChannelEvent::OnMessage(message) => {
+                    if !pump_budget.reserve(message.data.len()) {
+                        // The bounded inbound buffer overflowed: close the
+                        // channel and discard this and any later messages.
+                        let _ = channel.close().await;
+                        continue;
+                    }
                     let _ = in_tx.unbounded_send(InboundMessage {
                         is_string: message.is_string,
                         data: message.data.to_vec(),
@@ -141,7 +265,7 @@ pub fn spawn_channel_pump(channel: Arc<dyn WebrtcDataChannel>) -> ChannelPump {
         }
     });
     ChannelPump {
-        incoming: in_rx,
+        incoming: InboundQueue::new(in_rx, budget),
         open: open_rx,
     }
 }
@@ -216,7 +340,7 @@ impl DataChannel {
     pub fn new(
         label: String,
         channel: Arc<dyn WebrtcDataChannel>,
-        incoming: UnboundedReceiver<InboundMessage>,
+        incoming: InboundQueue,
         keep_alive: Vec<Arc<dyn PeerConnection>>,
     ) -> Self {
         let wired = ready_wired(Wired {

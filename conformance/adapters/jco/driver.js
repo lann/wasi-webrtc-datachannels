@@ -28,6 +28,7 @@ export const TESTS = [
   "receive-via-stream",
   "receive-via-stream-once",
   "post-close-send",
+  "receive-buffer-overflow",
   "max-retransmits-accepted",
   "error-invalid-signaling",
   "error-closed",
@@ -52,6 +53,7 @@ const IN_PROCESS = new Set([
   "peer-close-releases",
   "peer-invalid-sdp",
   "error-invalid-signaling",
+  "receive-buffer-overflow",
 ]);
 const SKIP = new Set([
   "send-via-stream",
@@ -74,6 +76,10 @@ export function paramsFor(testId) {
   switch (testId) {
     case "large-message":
       return [1, 16384];
+    // A 1 MiB flood: twice the MAX_INBOUND_BUFFER_BYTES bound the runners
+    // configure, so the receiving side must overflow.
+    case "receive-buffer-overflow":
+      return [64, 16384];
     case "message-boundaries":
     case "ordering":
     case "payload-integrity":
@@ -84,6 +90,14 @@ export function paramsFor(testId) {
       return [4, 256];
   }
 }
+
+// The inbound-buffer bound (in bytes) the jco runners configure through the
+// host's `WEBRTC_MAX_INBOUND_BUFFER_BYTES` knob: small enough that the
+// `receive-buffer-overflow` probe overflows it with a ~1 MiB flood instead of
+// flooding the default 8 MiB bound (which starves concurrently running tests
+// of the corpus). Mirrors the native adapters'
+// CONFORMANCE_MAX_INBOUND_BUFFER_BYTES.
+export const MAX_INBOUND_BUFFER_BYTES = 512 * 1024;
 
 // The hang guard for one test, bounding a run whose data-channel wait never
 // resolves. Long enough for a genuine `wait-connected` timeout to surface as a

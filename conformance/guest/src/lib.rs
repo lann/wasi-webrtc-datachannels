@@ -98,6 +98,10 @@ fn corpus() -> &'static [(&'static str, &'static [&'static str])] {
         ),
         ("post-close-send", &["data-channel", "errors"]),
         (
+            "receive-buffer-overflow",
+            &["data-channel", "errors", "flow-control"],
+        ),
+        (
             "max-retransmits-accepted",
             &["data-channel", "unreliable-channels"],
         ),
@@ -127,7 +131,8 @@ async fn run(test_id: &str, config: &TestConfig) -> Outcome {
         | "peer-wait-connected"
         | "peer-close-releases"
         | "peer-invalid-sdp"
-        | "error-invalid-signaling" => run_inproc(test_id).await,
+        | "error-invalid-signaling"
+        | "receive-buffer-overflow" => run_inproc(test_id, config).await,
 
         // Streaming forms and the remaining error-taxonomy tests are not yet
         // exercised by this guest; report them as skipped rather than asserting
@@ -481,9 +486,10 @@ fn verify_ordered(received: &[Vec<u8>], count: u32) -> Result<(), String> {
 
 /// Run a single-instance peer-connection test: stand up two peers in-process
 /// (no external signaling) and exercise the targeted API surface.
-async fn run_inproc(test_id: &str) -> Outcome {
+async fn run_inproc(test_id: &str, config: &TestConfig) -> Outcome {
     match test_id {
         "error-invalid-signaling" | "peer-invalid-sdp" => Outcome::from_result(invalid_sdp().await),
+        "receive-buffer-overflow" => Outcome::from_result(receive_overflow(config).await),
         _ => Outcome::from_result(inproc_round_trip(test_id).await),
     }
 }
@@ -506,6 +512,24 @@ async fn invalid_sdp() -> Result<(), String> {
 /// Stand up two in-process peers, connect them, and exercise `test_id`'s
 /// peer-connection surface over the connection.
 async fn inproc_round_trip(test_id: &str) -> Result<(), String> {
+    let (offerer, answerer, offer_dc, answer_dc) = inproc_connect(test_id).await?;
+
+    // A message each way proves the channel surfaced by `create-data-channel` /
+    // `incoming-data-channels` is usable.
+    if !exchange_once(&offer_dc, &answer_dc).await? {
+        return Err("data channel round trip failed".to_string());
+    }
+
+    offerer.close();
+    answerer.close();
+    Ok(())
+}
+
+/// Stand up two in-process peers (no external signaling), connect them, and
+/// return both peers with the two ends of the offerer-created data channel.
+async fn inproc_connect(
+    test_id: &str,
+) -> Result<(PeerConnection, PeerConnection, DataChannel, DataChannel), String> {
     let offerer = PeerConnection::new();
     let answerer = PeerConnection::new();
 
@@ -572,11 +596,61 @@ async fn inproc_round_trip(test_id: &str) -> Result<(), String> {
     answerer_connected.map_err(|e| format!("answerer wait-connected: {}", describe(&e)))?;
 
     let answer_dc = first_incoming(&answerer).await?;
+    Ok((offerer, answerer, offer_dc, answer_dc))
+}
 
-    // A message each way proves the channel surfaced by `create-data-channel` /
-    // `incoming-data-channels` is usable.
-    if !exchange_once(&offer_dc, &answer_dc).await? {
-        return Err("data channel round trip failed".to_string());
+/// Assert the bounded-inbound-buffer contract: flood one side of a channel
+/// while the other side never receives, and require that the receiving side's
+/// buffer overflow closes the channel and surfaces
+/// `error.receive-buffer-overflow` (not `closed`, and not unbounded buffering).
+///
+/// The flood volume is `message-count` messages of `message-size` bytes; the
+/// runner configures it to exceed the target's inbound buffer bound (which the
+/// adapters shrink through the `WEBRTC_MAX_INBOUND_BUFFER_BYTES` knob so the
+/// probe needs only a small flood). If the flood never overflows the buffer,
+/// the flood-side receive below never resolves and the attempt times out.
+async fn receive_overflow(config: &TestConfig) -> Result<(), String> {
+    let (offerer, answerer, offer_dc, answer_dc) =
+        inproc_connect("receive-buffer-overflow").await?;
+
+    // Flood without the answerer receiving. Sends may start failing once the
+    // receiving side overflows and closes the channel; that ends the flood.
+    let payload = vec![0xABu8; config.message_size.max(1) as usize];
+    for _ in 0..config.message_count.max(1) {
+        if offer_dc
+            .send(Message::Binary(payload.clone()))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    // Wait for the overflow-triggered close to reach this side: the receiving
+    // side closes the channel when its bounded inbound buffer overflows, and
+    // nothing is ever sent toward the flooder, so a receive here resolves with
+    // `closed` once the close arrives. (This wait is also what lets an
+    // in-guest implementation drive its event loop while the flood drains.)
+    match offer_dc.receive().await {
+        Ok(_) => return Err("unexpected message on the flooding side".to_string()),
+        Err(Error::Closed | Error::ReceiveBufferOverflow) => {}
+        Err(other) => return Err(format!("flood-side receive: {}", describe(&other))),
+    }
+
+    // Drain the receiving side: the pre-overflow backlog (bounded by the
+    // buffer) stays deliverable, after which receive must fail with
+    // `receive-buffer-overflow` rather than `closed`.
+    loop {
+        match answer_dc.receive().await {
+            Ok(_) => {}
+            Err(Error::ReceiveBufferOverflow) => break,
+            Err(other) => {
+                return Err(format!(
+                    "expected receive-buffer-overflow, got {}",
+                    describe(&other)
+                ))
+            }
+        }
     }
 
     offerer.close();
@@ -723,6 +797,7 @@ fn describe(error: &Error) -> String {
         Error::TimedOut => "timed-out".to_string(),
         Error::InvalidSignaling(detail) => format!("invalid-signaling: {detail}"),
         Error::ReceivingViaStream => "receiving-via-stream".to_string(),
+        Error::ReceiveBufferOverflow => "receive-buffer-overflow".to_string(),
         Error::Other(detail) => format!("other: {detail}"),
     }
 }

@@ -19,9 +19,11 @@ mod host;
 mod peer_connection;
 
 pub use data_channel::{
-    close_peer_connections, new_peer_connection, new_peer_connection_with, spawn_channel_pump,
-    spawn_channel_wiring, wire_open_channel, wiring_channel, CallbackHandler, ChannelError,
-    ChannelPump, DataChannel, InboundMessage, Wired, WiredFuture,
+    close_peer_connections, max_inbound_buffer_bytes, new_peer_connection,
+    new_peer_connection_with, spawn_channel_pump, spawn_channel_wiring, wire_open_channel,
+    wiring_channel, CallbackHandler, ChannelError, ChannelPump, DataChannel, InboundBudget,
+    InboundMessage, InboundQueue, Wired, WiredFuture, DEFAULT_MAX_INBOUND_BUFFER_BYTES,
+    MAX_INBOUND_BUFFER_ENV,
 };
 pub use peer_connection::{LocalCandidate, PeerConnection, SdpError, SdpKind, WaitError};
 

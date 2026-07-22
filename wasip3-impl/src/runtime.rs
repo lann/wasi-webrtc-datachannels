@@ -53,6 +53,34 @@ pub struct InboundMessage {
     pub data: Vec<u8>,
 }
 
+/// The default bound on inbound payload bytes buffered per channel while
+/// waiting for the guest to `receive` them.
+///
+/// There is no wire-level inbound backpressure (the WIT contract deliberately
+/// matches the W3C `RTCDataChannel` floor, where none is possible), so this
+/// bound is what protects memory from a slow reader: when it would be exceeded
+/// the channel is closed and, once the buffered backlog drains, `receive`
+/// fails with `error.receive-buffer-overflow`. Matches the other hosts' bound.
+pub const DEFAULT_MAX_INBOUND_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
+/// The environment variable overriding [`DEFAULT_MAX_INBOUND_BUFFER_BYTES`]
+/// (a byte count). Primarily a test knob: the conformance suite shrinks the
+/// bound so its overflow probe needs only a small flood.
+pub const MAX_INBOUND_BUFFER_ENV: &str = "WEBRTC_MAX_INBOUND_BUFFER_BYTES";
+
+/// The configured inbound buffer bound: [`MAX_INBOUND_BUFFER_ENV`] when set to
+/// a positive integer, else [`DEFAULT_MAX_INBOUND_BUFFER_BYTES`].
+fn max_inbound_buffer_bytes() -> usize {
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        std::env::var(MAX_INBOUND_BUFFER_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|&bytes| bytes > 0)
+            .unwrap_or(DEFAULT_MAX_INBOUND_BUFFER_BYTES)
+    })
+}
+
 /// A data channel observed by the peer connection: its id plus the label and an
 /// inbound-message queue that the exported `data-channel` drains.
 pub struct Channel {
@@ -62,6 +90,13 @@ pub struct Channel {
     pub label: String,
     /// Messages received on this channel, oldest first.
     pub inbox: VecDeque<InboundMessage>,
+    /// Payload bytes currently held in `inbox`, bounded by the configured
+    /// [`max_inbound_buffer_bytes`].
+    pub inbox_bytes: usize,
+    /// True once an inbound message overflowed the buffer bound. The channel is
+    /// closed; the `inbox` backlog stays deliverable, after which `receive`
+    /// surfaces `error.receive-buffer-overflow` rather than `closed`.
+    pub overflowed: bool,
     /// True once the channel (or its connection) has closed.
     pub closed: bool,
 }
@@ -72,8 +107,17 @@ impl Channel {
             id,
             label,
             inbox: VecDeque::new(),
+            inbox_bytes: 0,
+            overflowed: false,
             closed: false,
         }
+    }
+
+    /// Pop the oldest buffered message, releasing its bytes from the bound.
+    pub fn pop(&mut self) -> Option<InboundMessage> {
+        let message = self.inbox.pop_front()?;
+        self.inbox_bytes -= message.data.len();
+        Some(message)
     }
 }
 
@@ -283,9 +327,31 @@ fn apply_event(s: &mut Shared, event: PeerEvent) {
                 s.channels.push(Channel::new(id, label));
             }
         }
-        PeerEvent::Message { id, text, data } => {
+        PeerEvent::ChannelClosed { id } => {
             if let Some(channel) = s.channel_mut(id) {
-                channel.inbox.push_back(InboundMessage { text, data });
+                channel.closed = true;
+            }
+        }
+        PeerEvent::Message { id, text, data } => {
+            let overflow = match s.channel_mut(id) {
+                Some(channel) if channel.overflowed || channel.closed => false,
+                Some(channel) if channel.inbox_bytes + data.len() > max_inbound_buffer_bytes() => {
+                    // The bounded inbound buffer overflowed: close the channel
+                    // and discard this and any later messages. The `inbox`
+                    // backlog stays deliverable.
+                    channel.overflowed = true;
+                    channel.closed = true;
+                    true
+                }
+                Some(channel) => {
+                    channel.inbox_bytes += data.len();
+                    channel.inbox.push_back(InboundMessage { text, data });
+                    false
+                }
+                None => false,
+            };
+            if overflow {
+                s.peer.close_data_channel(id);
             }
         }
     }

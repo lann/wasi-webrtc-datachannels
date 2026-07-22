@@ -42,22 +42,27 @@ the plan: NAT on the router so `stun-srflx` is meaningful (Phase 6).
 
 ## B. Correctness bugs (both hosts unless noted)
 
-### B1. Inbound message path is unbounded — no guest→SCTP backpressure
+### B1. Inbound message path is unbounded — no guest→SCTP backpressure — Fixed
 
-Every received message is pushed into an unbounded queue with no reader-driven
-backpressure, so a slow guest reader grows host memory without limit:
-
-- Wasmtime host: `wasmtime-impl/src/data_channel.rs:121`
-  (`mpsc::unbounded::<InboundMessage>()`), fed from the channel pump; the demo
-  and manual hosts inherit it.
-- jco host: `jco-impl/webrtc.js:177` (`incomingQueue`'s `messages[]` array
-  grows unbounded on `"message"`).
-
-Outbound backpressure exists (Wasmtime relies on the async ABI; jco gates on
-`bufferedAmount`, `webrtc.js:74-85`), but the inbound side does not. Given the
-memory-usage priority, switch to a bounded queue with a documented policy (pause
-via a `ready` gate, or an explicit "receive buffer full ⇒ close with error"),
-mirrored in both hosts.
+**Fixed** by bounding the inbound buffer uniformly instead of adding wire-level
+backpressure. Wire-level inbound flow control is impossible in the browser (the
+W3C `RTCDataChannel` API has no read-side flow control; a worker +
+SharedArrayBuffer only blocks the guest, not the browser's SCTP stack), so
+implementing pause-based backpressure on the capable hosts would create a
+compatibility trap: a guest written against Wasmtime's stronger behavior would
+OOM or stall in a browser. Instead the WIT now documents the contract — no
+inbound backpressure anywhere; every implementation buffers up to a bound
+(8 MiB by default in all three, overridable through the
+`WEBRTC_MAX_INBOUND_BUFFER_BYTES` knob), an overflow closes the channel, the
+pre-overflow backlog stays receivable, and then `receive` fails with the new
+`error.receive-buffer-overflow` variant. Implemented in the Wasmtime host
+(`wasmtime-impl/src/data_channel.rs` `InboundBudget`/`InboundQueue`), both jco
+hosts (`jco-impl/webrtc.js`, `conformance/adapters/jco/webrtc.js`
+`incomingQueue`), and the `wasip3-impl` provider (`runtime.rs` channel inbox
+accounting + per-channel close). The `receive-buffer-overflow` conformance
+probe (in-process, all four loopback targets) asserts the identical observable
+behavior. Guests needing flow control must implement it at the application
+layer, as on the web platform.
 
 ### B2. `open-echo` / handshake can hang forever — no timeout
 
@@ -307,7 +312,7 @@ flags from the WIT) so a drifted rename fails fast with a clear message.
 
 ## Suggested priority
 
-1. Correctness the demos can already hit: inbound backpressure (B1), open
+1. Correctness the demos can already hit: open
    timeout (B2), jco peer close + error trapping (B3, B4).
 2. Fix the wasip3 teardown flush (E3) so the `wasmtime`<->`wasip3-guest`
    interop pairs can be enabled in CI, and finish the error taxonomy in the

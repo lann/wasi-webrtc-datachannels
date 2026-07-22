@@ -170,6 +170,7 @@ pub const TESTS: &[&str] = &[
     "receive-via-stream",
     "receive-via-stream-once",
     "post-close-send",
+    "receive-buffer-overflow",
     "max-retransmits-accepted",
     "error-invalid-signaling",
     "error-closed",
@@ -225,7 +226,8 @@ pub fn plan_for(test_id: &str) -> Plan {
         | "peer-wait-connected"
         | "peer-close-releases"
         | "peer-invalid-sdp"
-        | "error-invalid-signaling" => Plan::InProcess,
+        | "error-invalid-signaling"
+        | "receive-buffer-overflow" => Plan::InProcess,
         "send-via-stream"
         | "receive-via-stream"
         | "receive-via-stream-once"
@@ -240,6 +242,9 @@ pub fn plan_for(test_id: &str) -> Plan {
 pub fn params_for(test_id: &str) -> (u32, u32) {
     match test_id {
         "large-message" => (1, 16384),
+        // A 1 MiB flood: twice the [`CONFORMANCE_MAX_INBOUND_BUFFER_BYTES`]
+        // bound the adapters configure, so the receiving side must overflow.
+        "receive-buffer-overflow" => (64, 16384),
         "message-boundaries"
         | "ordering"
         | "payload-integrity"
@@ -248,6 +253,17 @@ pub fn params_for(test_id: &str) -> (u32, u32) {
         _ => (4, 256),
     }
 }
+
+/// The inbound-buffer bound (in bytes) the conformance adapters configure
+/// through the implementations' `WEBRTC_MAX_INBOUND_BUFFER_BYTES` knob
+/// ([`MAX_INBOUND_BUFFER_ENV`]): small enough that the
+/// `receive-buffer-overflow` probe overflows it with a ~1 MiB flood instead of
+/// flooding the default 8 MiB bound (which starves concurrently running tests
+/// of the corpus).
+pub const CONFORMANCE_MAX_INBOUND_BUFFER_BYTES: u32 = 512 * 1024;
+
+/// The environment variable naming the implementations' inbound-buffer bound.
+pub const MAX_INBOUND_BUFFER_ENV: &str = "WEBRTC_MAX_INBOUND_BUFFER_BYTES";
 
 // ----- peer subprocess invocation --------------------------------------------
 

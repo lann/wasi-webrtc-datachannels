@@ -87,6 +87,11 @@ tags = ["data-channel", "errors"]
 description = "Send after close yields error.closed."
 
 [[test]]
+id = "receive-buffer-overflow"
+tags = ["data-channel", "errors", "flow-control"]
+description = "Flooding a non-receiving peer closes the channel; after the buffered backlog, receive yields error.receive-buffer-overflow."
+
+[[test]]
 id = "max-retransmits-accepted"
 tags = ["data-channel", "unreliable-channels"]
 description = "max-retransmits option accepted; channel still functions."
