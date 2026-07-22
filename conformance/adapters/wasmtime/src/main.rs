@@ -150,6 +150,14 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     conformance_adapter_common::init_tracing();
 
+    // Shrink the host's inbound-buffer bound so the `receive-buffer-overflow`
+    // probe overflows it with a small flood (the host pumps run in this
+    // process, so the process environment is the knob).
+    std::env::set_var(
+        conformance_adapter_common::MAX_INBOUND_BUFFER_ENV,
+        conformance_adapter_common::CONFORMANCE_MAX_INBOUND_BUFFER_BYTES.to_string(),
+    );
+
     let engine = build_engine()?;
     let component = Component::from_file(&engine, &cli.guest)
         .map_err(anyhow::Error::from)

@@ -132,7 +132,7 @@ async fn run(test_id: &str, config: &TestConfig) -> Outcome {
         | "peer-close-releases"
         | "peer-invalid-sdp"
         | "error-invalid-signaling"
-        | "receive-buffer-overflow" => run_inproc(test_id).await,
+        | "receive-buffer-overflow" => run_inproc(test_id, config).await,
 
         // Streaming forms and the remaining error-taxonomy tests are not yet
         // exercised by this guest; report them as skipped rather than asserting
@@ -486,10 +486,10 @@ fn verify_ordered(received: &[Vec<u8>], count: u32) -> Result<(), String> {
 
 /// Run a single-instance peer-connection test: stand up two peers in-process
 /// (no external signaling) and exercise the targeted API surface.
-async fn run_inproc(test_id: &str) -> Outcome {
+async fn run_inproc(test_id: &str, config: &TestConfig) -> Outcome {
     match test_id {
         "error-invalid-signaling" | "peer-invalid-sdp" => Outcome::from_result(invalid_sdp().await),
-        "receive-buffer-overflow" => Outcome::from_result(receive_overflow().await),
+        "receive-buffer-overflow" => Outcome::from_result(receive_overflow(config).await),
         _ => Outcome::from_result(inproc_round_trip(test_id).await),
     }
 }
@@ -599,24 +599,24 @@ async fn inproc_connect(
     Ok((offerer, answerer, offer_dc, answer_dc))
 }
 
-/// Payload size of each flood message in `receive-buffer-overflow`.
-const FLOOD_MESSAGE_BYTES: usize = 16 * 1024;
-/// How many flood messages `receive-buffer-overflow` sends: 12 MiB total,
-/// comfortably past the implementations' 8 MiB inbound buffer bound.
-const FLOOD_MESSAGE_COUNT: usize = 768;
-
 /// Assert the bounded-inbound-buffer contract: flood one side of a channel
 /// while the other side never receives, and require that the receiving side's
 /// buffer overflow closes the channel and surfaces
 /// `error.receive-buffer-overflow` (not `closed`, and not unbounded buffering).
-async fn receive_overflow() -> Result<(), String> {
+///
+/// The flood volume is `message-count` messages of `message-size` bytes; the
+/// runner configures it to exceed the target's inbound buffer bound (which the
+/// adapters shrink through the `WEBRTC_MAX_INBOUND_BUFFER_BYTES` knob so the
+/// probe needs only a small flood). If the flood never overflows the buffer,
+/// the flood-side receive below never resolves and the attempt times out.
+async fn receive_overflow(config: &TestConfig) -> Result<(), String> {
     let (offerer, answerer, offer_dc, answer_dc) =
         inproc_connect("receive-buffer-overflow").await?;
 
     // Flood without the answerer receiving. Sends may start failing once the
     // receiving side overflows and closes the channel; that ends the flood.
-    let payload = vec![0xABu8; FLOOD_MESSAGE_BYTES];
-    for _ in 0..FLOOD_MESSAGE_COUNT {
+    let payload = vec![0xABu8; config.message_size.max(1) as usize];
+    for _ in 0..config.message_count.max(1) {
         if offer_dc
             .send(Message::Binary(payload.clone()))
             .await

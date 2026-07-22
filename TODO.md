@@ -52,8 +52,9 @@ implementing pause-based backpressure on the capable hosts would create a
 compatibility trap: a guest written against Wasmtime's stronger behavior would
 OOM or stall in a browser. Instead the WIT now documents the contract — no
 inbound backpressure anywhere; every implementation buffers up to a bound
-(8 MiB in all three), an overflow closes the channel, the pre-overflow backlog
-stays receivable, and then `receive` fails with the new
+(8 MiB by default in all three, overridable through the
+`WEBRTC_MAX_INBOUND_BUFFER_BYTES` knob), an overflow closes the channel, the
+pre-overflow backlog stays receivable, and then `receive` fails with the new
 `error.receive-buffer-overflow` variant. Implemented in the Wasmtime host
 (`wasmtime-impl/src/data_channel.rs` `InboundBudget`/`InboundQueue`), both jco
 hosts (`jco-impl/webrtc.js`, `conformance/adapters/jco/webrtc.js`

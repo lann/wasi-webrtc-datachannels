@@ -52,7 +52,7 @@ pub struct InboundMessage {
     pub data: Vec<u8>,
 }
 
-/// The maximum number of inbound payload bytes buffered per channel while
+/// The default bound on inbound payload bytes buffered per channel while
 /// waiting for the guest to `receive` them.
 ///
 /// There is no wire-level inbound backpressure (the WIT contract deliberately
@@ -60,7 +60,25 @@ pub struct InboundMessage {
 /// bound is what protects memory from a slow reader: when it would be exceeded
 /// the channel is closed and, once the buffered backlog drains, `receive`
 /// fails with `error.receive-buffer-overflow`. Matches the other hosts' bound.
-pub const MAX_INBOUND_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+pub const DEFAULT_MAX_INBOUND_BUFFER_BYTES: usize = 8 * 1024 * 1024;
+
+/// The environment variable overriding [`DEFAULT_MAX_INBOUND_BUFFER_BYTES`]
+/// (a byte count). Primarily a test knob: the conformance suite shrinks the
+/// bound so its overflow probe needs only a small flood.
+pub const MAX_INBOUND_BUFFER_ENV: &str = "WEBRTC_MAX_INBOUND_BUFFER_BYTES";
+
+/// The configured inbound buffer bound: [`MAX_INBOUND_BUFFER_ENV`] when set to
+/// a positive integer, else [`DEFAULT_MAX_INBOUND_BUFFER_BYTES`].
+fn max_inbound_buffer_bytes() -> usize {
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        std::env::var(MAX_INBOUND_BUFFER_ENV)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .filter(|&bytes| bytes > 0)
+            .unwrap_or(DEFAULT_MAX_INBOUND_BUFFER_BYTES)
+    })
+}
 
 /// A data channel observed by the peer connection: its id plus the label and an
 /// inbound-message queue that the exported `data-channel` drains.
@@ -71,8 +89,8 @@ pub struct Channel {
     pub label: String,
     /// Messages received on this channel, oldest first.
     pub inbox: VecDeque<InboundMessage>,
-    /// Payload bytes currently held in `inbox`, bounded by
-    /// [`MAX_INBOUND_BUFFER_BYTES`].
+    /// Payload bytes currently held in `inbox`, bounded by the configured
+    /// [`max_inbound_buffer_bytes`].
     pub inbox_bytes: usize,
     /// True once an inbound message overflowed the buffer bound. The channel is
     /// closed; the `inbox` backlog stays deliverable, after which `receive`
@@ -347,7 +365,7 @@ fn apply_event(s: &mut Shared, event: PeerEvent) {
         PeerEvent::Message { id, text, data } => {
             let overflow = match s.channel_mut(id) {
                 Some(channel) if channel.overflowed || channel.closed => false,
-                Some(channel) if channel.inbox_bytes + data.len() > MAX_INBOUND_BUFFER_BYTES => {
+                Some(channel) if channel.inbox_bytes + data.len() > max_inbound_buffer_bytes() => {
                     // The bounded inbound buffer overflowed: close the channel
                     // and discard this and any later messages. The `inbox`
                     // backlog stays deliverable.

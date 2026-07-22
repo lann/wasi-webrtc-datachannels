@@ -27,12 +27,24 @@ const RTCPeerConnection =
 // Keep the SCTP send buffer bounded; pause the producer when it fills.
 const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;
 
-// The bound on buffered inbound payload bytes awaiting `receive`. There is no
-// wire-level inbound backpressure (the W3C API has no read-side flow control),
-// so this bound is what protects memory from a slow guest reader: exceeding it
-// closes the channel and, once the buffered backlog drains, `receive` fails
-// with `error.receive-buffer-overflow`.
-const MAX_INBOUND_BUFFERED = 8 * 1024 * 1024;
+// The default bound on buffered inbound payload bytes awaiting `receive`.
+// There is no wire-level inbound backpressure (the W3C API has no read-side
+// flow control), so this bound is what protects memory from a slow guest
+// reader: exceeding it closes the channel and, once the buffered backlog
+// drains, `receive` fails with `error.receive-buffer-overflow`. Overridable —
+// primarily as a test knob, so the conformance overflow probe needs only a
+// small flood — through the `WEBRTC_MAX_INBOUND_BUFFER_BYTES` environment
+// variable (Node) or a global of the same name (browsers).
+const DEFAULT_MAX_INBOUND_BUFFERED = 8 * 1024 * 1024;
+
+/** The configured inbound buffer bound, resolved lazily per channel. */
+function maxInboundBuffered() {
+  const configured = Number(
+    globalThis.WEBRTC_MAX_INBOUND_BUFFER_BYTES ??
+      globalThis.process?.env?.WEBRTC_MAX_INBOUND_BUFFER_BYTES,
+  );
+  return configured > 0 ? configured : DEFAULT_MAX_INBOUND_BUFFERED;
+}
 
 /**
  * The `data-channel` resource, implemented over an `RTCDataChannel`.
@@ -181,12 +193,13 @@ export async function openEcho(options) {
  * with the next message, or rejects with `{ tag: 'closed' }` once the channel
  * closes with no more messages pending.
  *
- * Buffering is bounded by `MAX_INBOUND_BUFFERED` payload bytes: a message that
+ * Buffering is bounded by `maxInboundBuffered()` payload bytes: a message that
  * would exceed it closes the channel and discards that and any later messages;
  * the pre-overflow backlog stays deliverable, after which `next()` rejects with
  * `{ tag: 'receive-buffer-overflow' }`.
  */
 function incomingQueue(channel) {
+  const limit = maxInboundBuffered();
   const messages = [];
   const waiters = [];
   let buffered = 0;
@@ -206,7 +219,7 @@ function incomingQueue(channel) {
   channel.addEventListener("message", ({ data }) => {
     if (overflowed) return;
     const size = typeof data === "string" ? data.length : data.byteLength;
-    if (buffered + size > MAX_INBOUND_BUFFERED && !waiters.length) {
+    if (buffered + size > limit && !waiters.length) {
       // The bounded inbound buffer overflowed: close the channel and discard
       // this and any later messages. Already-buffered messages stay deliverable.
       overflowed = true;

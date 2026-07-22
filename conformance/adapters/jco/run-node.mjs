@@ -18,9 +18,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
-import { runCorpus } from "./driver.js";
+import { runCorpus, MAX_INBOUND_BUFFER_BYTES } from "./driver.js";
 import * as connections from "./webrtc.js";
 import { Session } from "./signaling.js";
+
+// Shrink the host's inbound-buffer bound so the `receive-buffer-overflow`
+// probe overflows it with a small flood (webrtc.js resolves the bound lazily
+// per channel, so setting the global here covers every instance).
+globalThis.WEBRTC_MAX_INBOUND_BUFFER_BYTES = MAX_INBOUND_BUFFER_BYTES;
 
 const ADAPTER_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(ADAPTER_DIR, "..", "..", "..");

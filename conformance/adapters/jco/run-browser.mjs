@@ -196,12 +196,18 @@ async function runInPage({ base, only, jobs }) {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   stream.getTracks().forEach((t) => t.stop());
 
-  const [{ runCorpus }, connections, { Session }, { instantiate }] = await Promise.all([
+  const [{ runCorpus, MAX_INBOUND_BUFFER_BYTES }, connections, { Session }, { instantiate }] =
+    await Promise.all([
     import(`${base}/driver.js`),
     import(`${base}/webrtc.js`),
     import(`${base}/signaling.js`),
     import(`${base}/generated/conformance-guest.js`),
   ]);
+
+  // Shrink the host's inbound-buffer bound so the `receive-buffer-overflow`
+  // probe overflows it with a small flood (webrtc.js resolves the bound lazily
+  // per channel).
+  globalThis.WEBRTC_MAX_INBOUND_BUFFER_BYTES = MAX_INBOUND_BUFFER_BYTES;
 
   const names = [
     "conformance-guest.core.wasm",
