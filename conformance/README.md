@@ -3,29 +3,34 @@
 A conformance suite for the `lann:webrtc-datachannels` implementations. It runs
 the **same wasm conformance guest component** against each target and asserts
 **WIT-observable interoperable behavior only** — never SDP contents, candidate
-ordering, timing, or exact error strings.
+ordering, timing, or exact error strings. The suite makes the project's promise
+testable in two ways:
 
-See [`PLAN.md`](PLAN.md) for the full design and the phased implementation plan.
-This suite is being built one phase at a time; the sections below describe what
-exists today.
+- **Behavioral conformance:** the shared conformance guest runs against each
+  implementation and must observe the semantics the WIT documents.
+- **Interop conformance:** pairs of implementations connect to each other over
+  real signaling and must establish connections and exchange data.
 
-## Status
+The suite owns its own signaling mechanism (the mailbox server below) —
+deliberately separate from the demo `rendezvous` proposal and from any future
+standardized signaling interface, so it can evolve with the tests and be
+discarded without API cost.
 
-Phases in place so far:
+## What exists today
 
-- **Phase 0 (scaffolding & registry):** the test registry, the manifest schema,
+- **Registry + runner:** the test registry (`tests.toml`), the manifest schema,
   and the `conformance-runner` that aggregates adapter results, applies
   expected-fail policy, and renders the matrix.
-- **Phase 1 (signaling server):** `conformance-signalingd`, the suite-owned HTTP
+- **Signaling server:** `conformance-signalingd`, the suite-owned HTTP
   mailbox that relays opaque SDP/ICE blobs between two peers. The runner starts
   it (ephemeral localhost port, gated on `/healthz`) and tears it down.
-- **Phase 2 (conformance guest + wasmtime adapter):** the shared conformance
+- **Conformance guest + wasmtime adapter:** the shared conformance
   guest component (`guest/`, exporting `conformance:suite/runner`) and the
   `wasmtime` adapter (`adapters/wasmtime/`), which runs that guest against the
   native Wasmtime host (loopback ICE, in-process signaling) and emits the
   adapter result document the runner classifies against
   `manifests/wasmtime.toml`.
-- **Phase 3 (jco adapters + first interop pair):** the browser-first host
+- **jco adapters + first interop pair:** the browser-first host
   transpiled by jco (`adapters/jco/`), run two ways — under Node with
   `@roamhq/wrtc` (`jco-node`, `run-node.mjs`) and inside headless Chromium via
   playwright-core (`jco-browser`, `run-browser.mjs`) — plus the cross-runtime
@@ -42,7 +47,7 @@ Phases in place so far:
   targets (`jco-node` and the jco-node half of the interop pair) require **Node
   24+** run with `--experimental-wasm-jspi`; the `jco-browser` target runs the
   guest in headless Chrome, which has JSPI natively.
-- **Phase 4 (wasip3-guest adapter + second interop pair):** the whole WebRTC
+- **wasip3-guest adapter + second interop pair:** the whole WebRTC
   stack in wasm (`adapters/wasip3/`): the shared conformance guest is composed
   (`wac plug`) with the `wasip3-impl` provider component (the sans-I/O `rtc`
   stack driven over WASIp3 `wasi:sockets` UDP), an in-guest `wasi:http` mailbox
@@ -109,7 +114,7 @@ server down, and writes the markdown matrix to `conformance/matrix.md`. It exits
 nonzero on any `fail` or `unexpected-pass`.
 
 The jco targets and their interop pair invoke `node --experimental-wasm-jspi`, so
-a JSPI-capable **Node 24+** must be on `PATH` (see the Phase 3 note above). The
+a JSPI-capable **Node 24+** must be on `PATH` (see the jco note above). The
 `conformance-interop` binary honours the `CONFORMANCE_NODE` environment variable
 if a specific node binary is needed. The `wasip3-guest` target and its interop
 pair invoke `wasmtime run` (v46+, installed by `scripts/setup.sh`; overridable
@@ -152,7 +157,7 @@ cargo run -p conformance-signalingd -- --host 0.0.0.0 --port 8080
 ## netns lab (`just conformance-netns`)
 
 The default adapters connect their peers over the loopback interface. The **ICE
-lab** (Phase 5) instead runs the two peers of each test over a real routed
+lab** instead runs the two peers of each test over a real routed
 network path, so the ICE handshake exercises non-loopback candidates — and, for
 the server-mediated scenarios, is forced through a STUN/TURN server. It is a
 small routed network of Linux **network namespaces** provisioned entirely with
@@ -181,7 +186,7 @@ Scenarios:
 | `lan` | Direct host-candidate connectivity over the router (no server). |
 | `stun-srflx` | coturn as a STUN server behind a port-restricted (cone) NAT; the router blocks the direct peer↔peer path so a server-reflexive path must be used, and the cone NAT lets it connect. |
 | `turn-relay` | coturn as a TURN server; the direct path is blocked and the peers are relay-only, so data is relayed by coturn. |
-| `nat-symmetric` | coturn as a STUN/TURN server behind a symmetric NAT; the direct path is blocked and the symmetric NAT makes srflx unusable, so ICE falls back to a TURN relay (Phase 6). |
+| `nat-symmetric` | coturn as a STUN/TURN server behind a symmetric NAT; the direct path is blocked and the symmetric NAT makes srflx unusable, so ICE falls back to a TURN relay. |
 
 Run a scenario from the repository root (requires **root**, for `ip netns
 exec`, and `turnserver` on `PATH` for the non-`lan` scenarios — both provided by
@@ -192,7 +197,7 @@ just conformance-netns lan
 just conformance-netns stun-srflx
 just conformance-netns turn-relay
 just conformance-netns nat-symmetric
-# or run both NAT scenarios (the Phase 6 matrix) at once:
+# or run both NAT scenarios (the NAT matrix) at once:
 just conformance-nat
 # or run the lan scenario with the wasip3-guest peer:
 just conformance-netns lan wasip3-guest
@@ -202,7 +207,7 @@ For interactive debugging, a provisioned lab can be kept up across runs: run the
 executor once, then re-run it with `--no-provision` (it neither provisions nor
 tears down) while inspecting the namespaces with `ip netns exec` by hand.
 
-### NAT matrix (Phase 6)
+### NAT matrix
 
 Server-reflexive candidates are only meaningful when a peer's mapped address
 differs from its host address, which requires NAT between the peers and the
@@ -282,7 +287,6 @@ rather than rebuilding from source.
 
 ```
 conformance/
-  PLAN.md                  # design + phased plan
   README.md                # this file
   tests.toml               # test registry: id, tags, description
   manifests/               # per-target capability manifests (<target>.toml)
@@ -291,8 +295,8 @@ conformance/
   signaling/
     PROTOCOL.md            # mailbox wire protocol spec
     server/                # conformance-signalingd (Rust workspace member)
-  wit/                     # conformance WIT (Phase 2); deps symlink to root wit/
-  guest/                   # conformance guest component(s) (Phase 2)
+  wit/                     # conformance WIT; deps symlink to root wit/
+  guest/                   # the shared conformance guest component
   adapters/                # per-target adapters (wasmtime / jco / wasip3);
                            #   common/ holds the shared native building blocks
                            #   (registry/plans, peer subprocess invocation,
@@ -306,7 +310,7 @@ conformance/
 
 Every conformance test is declared once in [`tests.toml`](tests.toml) with a
 stable `id`, a set of `tags`, and a one-line `description`. The conformance
-guest mirrors these ids/tags via its `list-tests` export (Phase 2). See the
+guest mirrors these ids/tags via its `list-tests` export. See the
 comments at the top of the file for the schema. Grow the corpus by adding
 `[[test]]` entries; keep tags stable across growth so manifests remain valid.
 
@@ -369,3 +373,22 @@ the registry is required. Result document shape:
 
 Adapters report raw `pass` / `fail` / `skip`; the runner applies manifest policy
 and reclassifies.
+
+## Rules for evolving the suite
+
+- Never assert implementation-identical behavior (SDP text, candidate order,
+  error strings, timing) in tests — WIT-observable outcomes only.
+- When a target genuinely cannot support a feature, add a manifest
+  `unsupported` entry with a reason instead of weakening the test.
+- When a test fails due to a known divergence, add an `expected-fail` entry
+  with a tracking reference (e.g. a `TODO.md` item) instead of skipping or
+  deleting the test. An expected-fail that starts passing fails the run until
+  the manifest is cleaned up, so manifests stay honest.
+- Grow the corpus by adding `[[test]]` entries to `tests.toml`; keep tags
+  stable across growth so manifests remain valid. The conformance guest's
+  corpus, `tests.toml`, and the adapters' registries must stay in sync.
+- Never copy the root `wit/` package into `conformance/wit`; always use the
+  `deps` symlink, per the repo-wide convention.
+- Conformance work must not change production host behavior except where a
+  test deliberately drives a fix; keep the hosts' behavior in sync — this
+  suite is what asserts it.

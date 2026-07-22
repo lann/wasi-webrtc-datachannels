@@ -267,7 +267,7 @@ pub fn new_store(engine: &Engine) -> Store<Ctx> {
 
 /// A fresh store whose WebRTC host uses an explicit [`WebrtcIceConfig`] — the ICE
 /// lab's per-scenario network configuration (bind address, STUN/TURN servers,
-/// relay-only policy; see `conformance/PLAN.md` Phase 5). Unlike [`new_store`],
+/// relay-only policy; see the netns lab in `conformance/README.md`). Unlike [`new_store`],
 /// loopback candidates are *not* forced: lab peers connect over real interface
 /// addresses, so gathering the loopback host candidate would only add a
 /// never-connectable pair.

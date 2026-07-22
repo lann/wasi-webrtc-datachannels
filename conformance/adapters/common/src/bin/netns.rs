@@ -2,7 +2,7 @@
 //!
 //! It runs the two-peer behavioral corpus for one target in one ICE scenario
 //! (`lan`, `stun-srflx`, `turn-relay`, `nat-symmetric`; see
-//! `conformance/PLAN.md` Phases 5 and 6) over a provisioned network-namespace
+//! `conformance/README.md`) over a provisioned network-namespace
 //! topology. Each test's two peers run as separate processes, one placed in
 //! the offerer namespace and one in the answerer namespace (`ip netns exec`),
 //! so their handshake traverses a real routed path — and, for the

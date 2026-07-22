@@ -46,7 +46,7 @@ test:
     cargo test --doc --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest --exclude conformance-wasip3-mailbox --exclude conformance-wasip3-driver
 
 # Run the conformance suite over the currently enabled targets (see
-# conformance/PLAN.md). Builds the shared conformance guest component, runs each
+# conformance/README.md). Builds the shared conformance guest component, runs each
 # adapter to produce conformance/results/<target>.json, then runs the runner
 # over conformance/tests.toml + conformance/manifests/ + those results — also
 # spawning the standalone conformance-signalingd binary (ephemeral localhost
@@ -150,7 +150,7 @@ conformance-interop: transpile-conformance-guest build-conformance-wasip3 build-
         --pair wasmtime-x-jco-node --pair jco-node-x-wasmtime
 
 # Run the conformance netns lab for one scenario (lan | stun-srflx | turn-relay |
-# nat-symmetric; see conformance/PLAN.md Phases 5 and 6). The target-neutral
+# nat-symmetric; see conformance/README.md). The target-neutral
 # environment executor (conformance-netns, in conformance/adapters/common)
 # provisions a routed network-namespace topology in Rust (netns + nftables +
 # coturn; the `lab` module), places the two peers of each two-peer test in
@@ -183,7 +183,7 @@ conformance-netns scenario="lan" peer_kind="wasmtime": build-conformance-guest b
         --peer-bin target/release/conformance-peer \
         --out conformance/results
 
-# Run the NAT matrix (conformance/PLAN.md Phase 6): the srflx scenario behind a
+# Run the NAT matrix (see conformance/README.md): the srflx scenario behind a
 # port-restricted (cone) NAT, where the server-reflexive candidates connect, and
 # the symmetric-NAT scenario, where srflx fails and ICE must fall back to a TURN
 # relay. Both write conformance/results/wasmtime-<scenario>.json. Like the rest

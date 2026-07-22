@@ -149,7 +149,7 @@ pub enum Scenario {
     Lan,
     /// Server-reflexive candidates via a STUN server behind a port-restricted
     /// (cone) NAT; the direct path is blocked, and the cone NAT lets the srflx
-    /// candidates connect (see `conformance/PLAN.md` Phase 6).
+    /// candidates connect (see the NAT matrix in `conformance/README.md`).
     StunSrflx,
     /// Relayed candidates via a TURN server; the direct path is blocked and the
     /// peers are relay-only.
