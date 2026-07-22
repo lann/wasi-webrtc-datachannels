@@ -59,8 +59,7 @@ discarded without API cost.
   `wasi:sockets` UDP loopback across processes and signaling through the suite
   mailbox — and writes `results/wasip3-guest.json`. The `conformance-interop`
   binary drives the `wasmtime`<->`wasip3-guest` pair in both orders the same
-  way it drives the jco-node pair (currently disabled by default in the
-  `conformance-interop` recipe — see TODO.md item E3). Classified against
+  way it drives the jco-node pair. Classified against
   `manifests/wasip3-guest.toml`, `manifests/wasmtime-x-wasip3-guest.toml`, and
   `manifests/wasip3-guest-x-wasmtime.toml`.
 
@@ -104,9 +103,9 @@ This builds the conformance guest component and `conformance-signalingd`, runs
 the `wasmtime` adapter (which starts its own in-process signaling server and
 writes `conformance/results/wasmtime.json`), transpiles the guest for the jco
 adapters and runs the `jco-node` and `jco-browser` targets, composes and runs
-the `wasip3-guest` target under `wasmtime run`, runs the enabled interop pairs
-(`wasmtime`<->`jco-node`, both orders; the `wasmtime`<->`wasip3-guest` pairs
-are wired but disabled by default — see TODO.md item E3), then invokes
+the `wasip3-guest` target under `wasmtime run`, runs the interop pairs
+(`wasmtime`<->`jco-node` and `wasmtime`<->`wasip3-guest`, each in both
+orders), then invokes
 `conformance-runner`, which reads the test registry, the per-target manifests,
 and those adapter result documents, starts and health-checks a standalone
 signaling server, applies the expected-fail / unexpected-pass policy, tears the

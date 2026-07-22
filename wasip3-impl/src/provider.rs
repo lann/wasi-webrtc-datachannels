@@ -653,6 +653,7 @@ fn dead_shared() -> Shared {
         connected: false,
         failed: true,
         closed: true,
+        close_requested: false,
         shutdown_complete: true,
         drain_deadline: None,
     }

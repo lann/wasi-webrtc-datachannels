@@ -8,12 +8,6 @@
 # cross-runtime WebRTC data channel, so a green row proves the two runtimes
 # interoperate rather than merely each passing against itself.
 
-# NOTE: this pair is wired into `conformance-interop` but disabled by default
-# (the `just conformance-interop` recipe passes --pair for the jco pairs only):
-# the wasip3 peer exits before its final sentinel / SCTP close flushes, which
-# stalls the wasmtime peer indefinitely. See TODO.md item E3; its row renders
-# as no-result until the pair is re-enabled.
-
 [target]
 id = "wasmtime-x-wasip3-guest"
 

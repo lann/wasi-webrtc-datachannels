@@ -137,17 +137,13 @@ conformance-jco-node: transpile-conformance-guest build-signalingd
 conformance-jco-browser: transpile-conformance-guest build-signalingd
     cd conformance/adapters/jco && timeout {{conformance-timeout}} npm run run:browser
 
-# Run the enabled interop pairs (each in both orders): wasmtime<->jco-node —
-# one peer per runtime shares a signaling room and a real WebRTC data channel.
-# Writes conformance/results/wasmtime-x-jco-node.json and
-# jco-node-x-wasmtime.json. The wasmtime<->wasip3-guest pairs are wired into
-# the same binary (drop the --pair flags to run them) but disabled by default:
-# the wasip3 peer exits before its final sentinel / SCTP close flushes, which
-# stalls the wasmtime peer indefinitely (see TODO.md item E3).
+# Run the interop pairs (each in both orders): wasmtime<->jco-node and
+# wasmtime<->wasip3-guest — one peer per runtime shares a signaling room and a
+# real WebRTC data channel. Writes conformance/results/<pair>.json for each of
+# the four pair directions.
 conformance-interop: transpile-conformance-guest build-conformance-wasip3 build-signalingd
     cargo build --release -p conformance-adapter-wasmtime --bin conformance-interop
-    timeout {{conformance-timeout}} target/release/conformance-interop \
-        --pair wasmtime-x-jco-node --pair jco-node-x-wasmtime
+    timeout {{conformance-timeout}} target/release/conformance-interop
 
 # Run the conformance netns lab for one scenario (lan | stun-srflx | turn-relay |
 # nat-symmetric; see conformance/README.md). The target-neutral
