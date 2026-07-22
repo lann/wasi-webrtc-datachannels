@@ -211,12 +211,15 @@ impl GuestDataChannel for DataChannel {
                 let dead = s.closed || s.failed;
                 match s.channel_mut(self.id) {
                     Some(channel) => {
-                        if let Some(msg) = channel.inbox.pop_front() {
+                        if let Some(msg) = channel.pop() {
                             return Ok(if msg.text {
                                 Message::String(String::from_utf8_lossy(&msg.data).into_owned())
                             } else {
                                 Message::Binary(msg.data)
                             });
+                        }
+                        if channel.overflowed {
+                            return Err(Error::ReceiveBufferOverflow);
                         }
                         if channel.closed {
                             return Err(Error::Closed);
@@ -601,7 +604,7 @@ async fn pump_receive(
             let mut s = shared.borrow_mut();
             let dead = s.closed || s.failed;
             match s.channel_mut(id) {
-                Some(channel) => match channel.inbox.pop_front() {
+                Some(channel) => match channel.pop() {
                     Some(msg) => Next::Message(msg),
                     None if channel.closed => Next::Done,
                     None => Next::Wait,

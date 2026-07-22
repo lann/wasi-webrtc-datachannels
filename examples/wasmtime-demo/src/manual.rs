@@ -16,7 +16,6 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
-use futures::channel::mpsc::UnboundedReceiver;
 use futures::channel::oneshot;
 use wasmtime::component::{Accessor, HasData, Linker, Resource};
 use webrtc::data_channel::{DataChannel as WebrtcDataChannel, RTCDataChannelInit};
@@ -24,7 +23,7 @@ use webrtc::peer_connection::{PeerConnection, RTCSessionDescription};
 
 use wasmtime_webrtc_datachannels::{
     close_peer_connections, new_peer_connection, spawn_channel_pump, CallbackHandler, DataChannel,
-    InboundMessage, SettingEngineHook, WasiWebrtcCtxView, WasiWebrtcView,
+    InboundQueue, SettingEngineHook, WasiWebrtcCtxView, WasiWebrtcView,
 };
 
 mod bindings {
@@ -86,7 +85,7 @@ struct Negotiated {
     /// resolves it from the arriving channel, whose accessor is async).
     label: String,
     channel: Option<Arc<dyn WebrtcDataChannel>>,
-    incoming: Option<UnboundedReceiver<InboundMessage>>,
+    incoming: Option<InboundQueue>,
     /// Resolves once the channel reports `open`. A oneshot (rather than a bare
     /// notify) so an early open is not missed if `connect` awaits later.
     open: Option<oneshot::Receiver<()>>,

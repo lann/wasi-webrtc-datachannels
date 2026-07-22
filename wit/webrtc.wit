@@ -23,6 +23,12 @@ interface types {
         /// been called on a data channel, any further call to it or to `receive`
         /// fails with this error.
         receiving-via-stream,
+        /// The channel's bounded inbound buffer overflowed because messages
+        /// arrived faster than the guest received them. The channel is closed;
+        /// messages buffered before the overflow remain receivable, after which
+        /// `receive` fails with this error. See the `data-channel` resource
+        /// docs for the buffering contract.
+        receive-buffer-overflow,
         /// An implementation-specific failure. The string is human-readable.
         other(string),
     }
@@ -155,6 +161,22 @@ interface connections {
     /// message may be carried as a whole `message` value or, to bound in-memory
     /// buffering, as a `stream-message` whose payload flows through a byte
     /// `stream`.
+    ///
+    /// # Inbound buffering
+    ///
+    /// There is **no wire-level inbound backpressure**: a guest that receives
+    /// slowly does not slow the remote sender down. (The W3C `RTCDataChannel`
+    /// API offers no read-side flow control, so a browser-backed implementation
+    /// cannot provide it; other implementations deliberately match that floor
+    /// so the same guest behaves compatibly everywhere.) Instead, every
+    /// implementation buffers inbound messages up to an implementation-defined
+    /// bound (8 MiB of payload bytes in the provided implementations). If the
+    /// buffer overflows, the channel is closed: messages buffered before the
+    /// overflow remain receivable, later messages are discarded, and once the
+    /// buffered backlog is drained `receive` fails with
+    /// `error.receive-buffer-overflow` (and a `receive-via-stream` stream
+    /// ends). Guests that need flow control must implement it at the
+    /// application layer (for example acknowledgment or credit messages).
     resource data-channel {
         /// The negotiated channel label.
         label: func() -> string;
@@ -170,7 +192,8 @@ interface connections {
 
         /// Receive a single message from the channel. The returned future
         /// resolves with the next inbound message, or with an `error` (such as
-        /// `closed`) when the channel closes.
+        /// `closed`, or `receive-buffer-overflow` if the bounded inbound buffer
+        /// overflowed — see the resource docs) when the channel closes.
         ///
         /// Concurrent calls to `receive` must be supported; concurrently
         /// pending receivers are each handed a message in an
@@ -194,7 +217,8 @@ interface connections {
         /// Take over the channel's inbound messages, delivering each as a
         /// `stream-message` whose payload is a byte `stream`. One `stream-message`
         /// is produced per received data-channel message; the returned stream
-        /// ends (its reader is dropped) when the channel closes.
+        /// ends (its reader is dropped) when the channel closes (including a
+        /// close caused by an inbound buffer overflow — see the resource docs).
         ///
         /// This method may only be called once per channel. Once it has been
         /// called, any further call to it or to `receive` returns

@@ -36,6 +36,13 @@ const RTCPeerConnection = await resolveRTCPeerConnection();
 // Keep the SCTP send buffer bounded; pause the producer when it fills.
 const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;
 
+// The bound on buffered inbound payload bytes awaiting `receive`. There is no
+// wire-level inbound backpressure (the W3C API has no read-side flow control),
+// so this bound is what protects memory from a slow guest reader: exceeding it
+// closes the channel and, once the buffered backlog drains, `receive` fails
+// with `error.receive-buffer-overflow`.
+const MAX_INBOUND_BUFFERED = 8 * 1024 * 1024;
+
 /**
  * The `data-channel-options` resource: a configuration builder for a data
  * channel, mirroring `wasi:http`'s `request-options`. The guest constructs a
@@ -341,34 +348,52 @@ function eventStream(setup) {
  * frames, `{ tag: 'string', val: string }` for text frames). `next()` resolves
  * with the next message, or rejects with `{ tag: 'closed' }` once the channel
  * closes with no more messages pending.
+ *
+ * Buffering is bounded by `MAX_INBOUND_BUFFERED` payload bytes: a message that
+ * would exceed it closes the channel and discards that and any later messages;
+ * the pre-overflow backlog stays deliverable, after which `next()` rejects with
+ * `{ tag: 'receive-buffer-overflow' }`.
  */
 function incomingQueue(channel) {
   const messages = [];
   const waiters = [];
+  let buffered = 0;
+  let overflowed = false;
   let closed = false;
 
-  const push = (message) => {
+  const push = (message, size) => {
     const waiter = waiters.shift();
     if (waiter) {
       waiter.resolve(message);
     } else {
-      messages.push(message);
+      buffered += size;
+      messages.push({ message, size });
     }
   };
 
   channel.addEventListener("message", ({ data }) => {
+    if (overflowed) return;
+    const size = typeof data === "string" ? data.length : data.byteLength;
+    if (buffered + size > MAX_INBOUND_BUFFERED && !waiters.length) {
+      // The bounded inbound buffer overflowed: close the channel and discard
+      // this and any later messages. Already-buffered messages stay deliverable.
+      overflowed = true;
+      channel.close();
+      return;
+    }
     const message =
       typeof data === "string"
         ? { tag: "string", val: data }
         : { tag: "binary", val: new Uint8Array(data) };
-    push(message);
+    push(message, size);
   });
 
+  const endError = () => (overflowed ? { tag: "receive-buffer-overflow" } : { tag: "closed" });
   const end = () => {
     if (closed) return;
     closed = true;
     while (waiters.length) {
-      waiters.shift().reject({ tag: "closed" });
+      waiters.shift().reject(endError());
     }
   };
   channel.addEventListener("close", end);
@@ -376,7 +401,12 @@ function incomingQueue(channel) {
 
   return {
     next() {
-      if (messages.length) return Promise.resolve(messages.shift());
+      if (messages.length) {
+        const { message, size } = messages.shift();
+        buffered -= size;
+        return Promise.resolve(message);
+      }
+      if (overflowed) return Promise.reject({ tag: "receive-buffer-overflow" });
       if (closed) return Promise.reject({ tag: "closed" });
       return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
     },

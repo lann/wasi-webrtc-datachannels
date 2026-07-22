@@ -170,6 +170,7 @@ pub const TESTS: &[&str] = &[
     "receive-via-stream",
     "receive-via-stream-once",
     "post-close-send",
+    "receive-buffer-overflow",
     "max-retransmits-accepted",
     "error-invalid-signaling",
     "error-closed",
@@ -225,7 +226,8 @@ pub fn plan_for(test_id: &str) -> Plan {
         | "peer-wait-connected"
         | "peer-close-releases"
         | "peer-invalid-sdp"
-        | "error-invalid-signaling" => Plan::InProcess,
+        | "error-invalid-signaling"
+        | "receive-buffer-overflow" => Plan::InProcess,
         "send-via-stream"
         | "receive-via-stream"
         | "receive-via-stream-once"

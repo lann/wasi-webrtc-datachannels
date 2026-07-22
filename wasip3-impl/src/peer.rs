@@ -56,6 +56,11 @@ pub enum PeerEvent {
         /// The negotiated channel label.
         label: String,
     },
+    /// A data channel closed (locally or by the remote peer).
+    ChannelClosed {
+        /// The channel's id.
+        id: RTCDataChannelId,
+    },
     /// An inbound data-channel message.
     Message {
         /// The channel the message arrived on.
@@ -250,6 +255,9 @@ impl SansIoPeer {
                         .unwrap_or_default();
                     events.push(PeerEvent::ChannelOpen { id, label });
                 }
+                RTCPeerConnectionEvent::OnDataChannel(RTCDataChannelEvent::OnClose(id)) => {
+                    events.push(PeerEvent::ChannelClosed { id });
+                }
                 _ => {}
             }
         }
@@ -283,6 +291,13 @@ impl SansIoPeer {
             .ok_or_else(|| anyhow!("no data channel with id {id:?}"))?;
         dc.send(BytesMut::from(data))?;
         Ok(())
+    }
+
+    /// Close a single data channel, sending its SCTP stream reset to the peer.
+    pub fn close_data_channel(&mut self, id: RTCDataChannelId) {
+        if let Some(mut dc) = self.pc.data_channel(id) {
+            let _ = dc.close();
+        }
     }
 
     /// Close the peer connection.

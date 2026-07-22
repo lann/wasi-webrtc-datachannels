@@ -21,7 +21,8 @@ mod peer_connection;
 pub use data_channel::{
     close_peer_connections, new_peer_connection, new_peer_connection_with, spawn_channel_pump,
     spawn_channel_wiring, wire_open_channel, wiring_channel, CallbackHandler, ChannelError,
-    ChannelPump, DataChannel, InboundMessage, Wired, WiredFuture,
+    ChannelPump, DataChannel, InboundBudget, InboundMessage, InboundQueue, Wired, WiredFuture,
+    MAX_INBOUND_BUFFER_BYTES,
 };
 pub use peer_connection::{LocalCandidate, PeerConnection, SdpError, SdpKind, WaitError};
 

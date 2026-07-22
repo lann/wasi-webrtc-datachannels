@@ -28,6 +28,7 @@ export const TESTS = [
   "receive-via-stream",
   "receive-via-stream-once",
   "post-close-send",
+  "receive-buffer-overflow",
   "max-retransmits-accepted",
   "error-invalid-signaling",
   "error-closed",
@@ -52,6 +53,7 @@ const IN_PROCESS = new Set([
   "peer-close-releases",
   "peer-invalid-sdp",
   "error-invalid-signaling",
+  "receive-buffer-overflow",
 ]);
 const SKIP = new Set([
   "send-via-stream",

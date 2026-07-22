@@ -30,8 +30,8 @@ use crate::bindings::webrtc_datachannels::types::{
     SessionDescription, StreamMessage,
 };
 use crate::{
-    ChannelError, DataChannel, DataChannelOptions, InboundMessage, PeerConnection, SdpError,
-    SdpKind, WaitError, WasiWebrtc, WasiWebrtcCtxView, WasiWebrtcView, WiredFuture,
+    ChannelError, DataChannel, DataChannelOptions, InboundMessage, InboundQueue, PeerConnection,
+    SdpError, SdpKind, WaitError, WasiWebrtc, WasiWebrtcCtxView, WasiWebrtcView, WiredFuture,
 };
 
 use webrtc::data_channel::DataChannel as WebrtcDataChannel;
@@ -112,13 +112,19 @@ async fn send_channel_message(
     result.map(|_| ()).map_err(|e| Error::Other(e.to_string()))
 }
 
-/// Await the next inbound message from a channel's shared receiver, reporting
-/// `Error::Closed` once the channel has closed and no more messages will arrive.
+/// Await the next inbound message from a channel's shared queue, reporting
+/// `Error::Closed` once the channel has closed and no more messages will
+/// arrive — or `Error::ReceiveBufferOverflow` when the queue ended because the
+/// channel's bounded inbound buffer overflowed.
 async fn next_inbound(
-    incoming: Arc<AsyncMutex<UnboundedReceiver<InboundMessage>>>,
+    incoming: Arc<AsyncMutex<InboundQueue>>,
 ) -> std::result::Result<InboundMessage, Error> {
-    let mut receiver = incoming.lock().await;
-    receiver.next().await.ok_or(Error::Closed)
+    let mut queue = incoming.lock().await;
+    match queue.next().await {
+        Some(message) => Ok(message),
+        None if queue.overflowed() => Err(Error::ReceiveBufferOverflow),
+        None => Err(Error::Closed),
+    }
 }
 
 /// Convert a host-side inbound message into the WIT `message` variant.
@@ -223,8 +229,8 @@ impl<D: Send + 'static> StreamProducer<D> for InboundStreamMessages {
                 // Wait for the channel to be wired; if wiring failed the channel
                 // never opened, so treat it as end-of-stream.
                 let wired = wired.await.ok()?;
-                let mut receiver = wired.incoming.lock().await;
-                receiver.next().await
+                let mut queue = wired.incoming.lock().await;
+                queue.next().await
             })
         });
 
