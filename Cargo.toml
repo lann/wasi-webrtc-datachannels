@@ -24,10 +24,11 @@ rtc = "0.20.0-rc.3"
 
 # Redirect every `rtc` resolution — the direct dependency of `wasip3-impl` and,
 # crucially, the *transitive* dependency of the async `webrtc` 0.20 crate the
-# Wasmtime host is built on — to the `lann/rtc` fork's `master`. That fork
-# carries the empty-message receive fix (upstream PR webrtc-rs/rtc#131) on top of
-# the published 0.20.0-rc.3 release candidate, so the Wasmtime host can receive
-# zero-length messages (TODO.md item B6). Using `[patch]` rather than a direct
-# git dependency is what lets the fix reach `webrtc`'s own copy of `rtc`.
+# Wasmtime host is built on — to upstream `rtc` master. The pinned commit
+# includes the empty-message receive fix (webrtc-rs/rtc#131, merged upstream)
+# that is not yet in any published release, so the hosts can receive
+# zero-length messages. Using `[patch]` rather than a direct git dependency is
+# what lets the fix reach `webrtc`'s own copy of `rtc`. Drop the patch and
+# return to a plain crates.io version once a release including the fix ships.
 [patch.crates-io]
-rtc = { git = "https://github.com/lann/rtc.git", rev = "e3046a97c9f32965e2ae85d70a7104727f7d226b" }
+rtc = { git = "https://github.com/webrtc-rs/rtc.git", rev = "28167db55b2e1373d3ac41e2af3851f654bb4c67" }

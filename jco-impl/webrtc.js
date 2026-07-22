@@ -73,13 +73,21 @@ export class DataChannel {
   /**
    * Send a single message on the channel. jco delivers the `message` variant as
    * `{ tag: 'binary', val: Uint8Array }` or `{ tag: 'string', val: string }`.
+   * Rejects with the WIT `error` variant `{ tag: 'closed' }` if the channel is
+   * not open (a thrown JS error would trap the component instead of surfacing
+   * `result::err`).
    * @param {{ tag: 'binary', val: Uint8Array } | { tag: 'string', val: string }} message
    */
   async send(message) {
+    if (this.#channel.readyState !== "open") throw { tag: "closed" };
     await this.#waitForDrain();
     // A string is sent as a WebRTC text message; a Uint8Array as binary. Both
     // preserve the message kind end to end.
-    this.#channel.send(message.val);
+    try {
+      this.#channel.send(message.val);
+    } catch {
+      throw { tag: "closed" };
+    }
   }
 
   /**
@@ -88,6 +96,27 @@ export class DataChannel {
    */
   async receive() {
     return this.#incoming.next();
+  }
+
+  /**
+   * Dispose hook jco invokes when the guest drops the resource: close the
+   * channel and both backing peer connections so `@roamhq/wrtc` tears down its
+   * native ICE/DTLS/SCTP threads and sockets instead of leaking them for the
+   * process lifetime.
+   */
+  [Symbol.dispose]() {
+    try {
+      this.#channel.close();
+    } catch {
+      // Already closed.
+    }
+    for (const pc of Object.values(this.#keepAlive)) {
+      try {
+        pc.close();
+      } catch {
+        // Already closed.
+      }
+    }
   }
 
   /** Apply backpressure so a fast producer cannot overrun the SCTP buffer. */
@@ -157,10 +186,19 @@ export async function openEcho(options) {
   near.onicecandidate = ({ candidate }) => candidate && far.addIceCandidate(candidate);
   far.onicecandidate = ({ candidate }) => candidate && near.addIceCandidate(candidate);
 
-  // Far side: echo every message straight back on the same channel.
+  // Far side: echo every message straight back on the same channel. The send is
+  // guarded: if the channel is closing, a thrown error here would otherwise
+  // surface as an unhandled event-handler exception (and the near side's
+  // pending receive resolves through the close path instead).
   far.ondatachannel = ({ channel }) => {
     channel.binaryType = "arraybuffer";
-    channel.onmessage = ({ data }) => channel.send(data);
+    channel.onmessage = ({ data }) => {
+      try {
+        channel.send(data);
+      } catch {
+        // Channel closed mid-echo; the message is dropped with the connection.
+      }
+    };
   };
 
   const init = { ordered: options.ordered() };
