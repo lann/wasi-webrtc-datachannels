@@ -65,8 +65,8 @@ component that imports `wasi:sockets`/`wasi:clocks` and exports
 
 ## Dependency pin
 
-`rtc` is pinned once, at the workspace level in the root `Cargo.toml`, to the
-[`lann/rtc`](https://github.com/lann/rtc) fork's `master` (the empty-message
-receive fix, upstream PR
-[`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131), on top of the
-published `0.20.0-rc.3` release candidate), so it compiles for `wasm32-wasip2`.
+`rtc` is pinned once, at the workspace level in the root `Cargo.toml`, to an
+upstream [`webrtc-rs/rtc`](https://github.com/webrtc-rs/rtc) `master` commit:
+the empty-message receive fix
+([`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)) is merged
+upstream but not yet in any published release.

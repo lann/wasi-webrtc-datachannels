@@ -437,17 +437,30 @@ impl Drop for DataChannel {
 /// background tasks.
 ///
 /// [`PeerConnection::close`] is async, so the closes are spawned onto the
-/// current Tokio runtime; dropping the `Arc`s alone would leak those tasks for
-/// the process lifetime. Called from `Drop` impls, where awaiting is not
-/// possible; if no runtime is running the connections are simply dropped.
+/// current Tokio runtime when one is running; dropping the `Arc`s alone would
+/// leak those tasks for the process lifetime. Called from `Drop` impls, where
+/// awaiting is not possible. When no runtime is running (a resource dropped
+/// after the host's runtime has shut down), the closes run to completion on a
+/// dedicated thread with its own small runtime, so cleanup does not silently
+/// depend on the caller's runtime still being alive.
 pub fn close_peer_connections(connections: Vec<Arc<dyn PeerConnection>>) {
     if connections.is_empty() {
         return;
     }
+    let close_all = async move {
+        for connection in connections {
+            let _ = connection.close().await;
+        }
+    };
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.spawn(async move {
-            for connection in connections {
-                let _ = connection.close().await;
+        handle.spawn(close_all);
+    } else {
+        std::thread::spawn(move || {
+            if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                runtime.block_on(close_all);
             }
         });
     }

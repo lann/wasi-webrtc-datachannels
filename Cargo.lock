@@ -1204,7 +1204,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2025,7 +2025,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2570,7 +2570,7 @@ dependencies = [
 [[package]]
 name = "rtc"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "bytes",
  "hex",
@@ -2604,7 +2604,7 @@ dependencies = [
 [[package]]
 name = "rtc-datachannel"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "bytes",
  "log",
@@ -2616,7 +2616,7 @@ dependencies = [
 [[package]]
 name = "rtc-dtls"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "aes",
  "bytecheck",
@@ -2648,7 +2648,7 @@ dependencies = [
 [[package]]
 name = "rtc-ice"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "bytes",
  "crc",
@@ -2666,7 +2666,7 @@ dependencies = [
 [[package]]
 name = "rtc-interceptor"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "log",
  "rand",
@@ -2680,7 +2680,7 @@ dependencies = [
 [[package]]
 name = "rtc-interceptor-derive"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2690,7 +2690,7 @@ dependencies = [
 [[package]]
 name = "rtc-mdns"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "bytes",
  "log",
@@ -2702,7 +2702,7 @@ dependencies = [
 [[package]]
 name = "rtc-media"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2715,7 +2715,7 @@ dependencies = [
 [[package]]
 name = "rtc-rtcp"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "bytes",
  "rtc-shared",
@@ -2724,7 +2724,7 @@ dependencies = [
 [[package]]
 name = "rtc-rtp"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "bytes",
  "memchr",
@@ -2736,7 +2736,7 @@ dependencies = [
 [[package]]
 name = "rtc-sctp"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "bytes",
  "crc32c",
@@ -2751,7 +2751,7 @@ dependencies = [
 [[package]]
 name = "rtc-sdp"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "rand",
  "rtc-shared",
@@ -2761,7 +2761,7 @@ dependencies = [
 [[package]]
 name = "rtc-shared"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2782,7 +2782,7 @@ dependencies = [
 [[package]]
 name = "rtc-srtp"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "aes",
  "byteorder",
@@ -2800,7 +2800,7 @@ dependencies = [
 [[package]]
 name = "rtc-stun"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "base64",
  "bytes",
@@ -2818,7 +2818,7 @@ dependencies = [
 [[package]]
 name = "rtc-turn"
 version = "0.20.0-rc.3"
-source = "git+https://github.com/lann/rtc.git?rev=e3046a97c9f32965e2ae85d70a7104727f7d226b#e3046a97c9f32965e2ae85d70a7104727f7d226b"
+source = "git+https://github.com/webrtc-rs/rtc.git?rev=28167db55b2e1373d3ac41e2af3851f654bb4c67#28167db55b2e1373d3ac41e2af3851f654bb4c67"
 dependencies = [
  "bytes",
  "log",
@@ -2867,7 +2867,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3212,7 +3212,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4291,7 +4291,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
