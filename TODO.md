@@ -25,10 +25,8 @@ deterministic) and the workstation-only netns lab (`just conformance-netns` /
 cone NAT), `turn-relay`, and `nat-symmetric`. No manifest expected-fails
 remain. Still open:
 
-- **Full interop matrix.** The `wasmtime`<->`wasip3-guest` pairs are wired
-  into `conformance-interop` but disabled by default pending the
-  teardown-flush fix (item E3); no jco-browser interop pairs exist; interop
-  pairs run over loopback only.
+- **Full interop matrix.** No jco-browser interop pairs exist, and the
+  interop pairs run over loopback only.
 - **NAT-matrix confirmation.** The NAT scenarios are built and verified
   statically, but a clean `just conformance-nat` run on a workstation (real
   kernel, root) has not been confirmed; they briefly ran as a nightly
@@ -138,21 +136,6 @@ streaming tests. Implement them to close the gap.
   sans-I/O timing issue; `examples/webrtc-consumer` retries a bounded number of
   fresh attempts to keep the integration test reliable. Root-cause and fix
   upstream (or in its driving contract) to make a single attempt deterministic.
-- The `wasmtime`<->`wasip3-guest` interop pair stalls deterministically (every
-  test, every attempt): packet capture shows the full ICE/DTLS/SCTP handshake
-  and both 16-message payload bursts complete within ~120 ms, but the wasip3
-  peer's barrier sentinel never reaches the wire and no SCTP/DTLS close is
-  sent — the guest's `peer.close()` returns after queueing, the driver exits,
-  and the process death cuts the detached runtime pump before the sentinel or
-  the close handshake flushes. Meanwhile the wasip3 peer itself reports
-  **pass** (its `receive` surfaced `closed` early), so the failure is
-  one-sided: the wasmtime (webrtc-rs) peer retransmits its own unacked
-  sentinel forever (no receive timeout, item B2) and the whole attempt hits the
-  orchestrator's timeout. Fix direction: make the wasip3 provider's
-  close/drop path flush the pending SCTP send queue and complete (or at least
-  emit) the SCTP/DTLS close before the driver exits — e.g. drain
-  `poll_transmit` to quiescence after `close()` and only then return from
-  `wasi:cli/run`. Until then the pair cannot be enabled in CI.
 - The `rtc` dependency is pinned to an upstream `master` commit (`Cargo.toml`
   `[patch.crates-io]`, `rtc = { git = "https://github.com/webrtc-rs/rtc.git",
   rev = … }`) because the empty-message receive fix
@@ -211,9 +194,8 @@ flags from the WIT) so a drifted rename fails fast with a clear message.
 ## Suggested priority
 
 1. Correctness the demos can already hit: the open/handshake timeout (B2).
-2. Fix the wasip3 teardown flush (E3) so the `wasmtime`<->`wasip3-guest`
-   interop pairs can be enabled in CI, and finish the error taxonomy in the
-   jco host (D1) with the crate-level error type (D2).
+2. Finish the error taxonomy in the jco host (D1) with the crate-level error
+   type (D2).
 3. Interface-stabilizing decisions (C1, C2).
 4. Strategic build-out: port the conformance adapter's `peer-connection`
    implementation to the demo jco host (`jco-impl/webrtc.js`, which still

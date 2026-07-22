@@ -134,6 +134,13 @@ pub struct Shared {
     pub failed: bool,
     /// Whether the connection closed.
     pub closed: bool,
+    /// Set by [`begin_close`](Self::begin_close) and consumed by the pump: the
+    /// rtc-level close is deferred to the pump so it can flush the core's
+    /// pending transmits **first**. Closing the core immediately would discard
+    /// any queued-but-untransmitted application data (for example a message
+    /// sent just before `close()` from a guest task that never yielded to the
+    /// pump in between).
+    pub close_requested: bool,
     /// Whether the core reported the close complete (its connection state
     /// reached `disconnected`/`closed`), as opposed to a local `close()` that
     /// is still draining.
@@ -150,14 +157,19 @@ impl Shared {
         self.channels.iter_mut().find(|c| c.id == id)
     }
 
-    /// Mark the connection locally closed and start the pump's bounded drain,
-    /// so the final queued sends and the close handshake still reach the wire.
+    /// Mark the connection locally closed and start the pump's bounded drain.
+    ///
+    /// The rtc-level close itself is **deferred to the pump** (via
+    /// [`close_requested`](Self::close_requested)): the pump first flushes the
+    /// core's pending transmits — so a message queued immediately before the
+    /// close still reaches the wire — then closes the core and keeps draining
+    /// until the close completes or the bounded window lapses.
     pub fn begin_close(&mut self) {
         if self.closed || self.failed {
             return;
         }
-        self.peer.close();
         self.closed = true;
+        self.close_requested = true;
         for c in &mut self.channels {
             c.closed = true;
         }
@@ -207,6 +219,7 @@ impl Runtime {
             connected: false,
             failed: false,
             closed: false,
+            close_requested: false,
             shutdown_complete: false,
             drain_deadline: None,
         }));
@@ -255,10 +268,17 @@ impl Runtime {
         let mut timer = pin!(monotonic_clock::wait_for(MAX_WAIT_NANOS).fuse());
 
         loop {
-            // Flush + drain while holding the borrow only between awaits.
+            // Flush + drain while holding the borrow only between awaits. The
+            // flush runs *before* a requested close is performed, so pending
+            // application data reaches the wire before the core discards its
+            // queues.
             flush(&shared, &socket).await;
             let done = {
                 let mut s = shared.borrow_mut();
+                if s.close_requested {
+                    s.close_requested = false;
+                    s.peer.close();
+                }
                 for event in s.peer.drain_events() {
                     apply_event(&mut s, event);
                 }

@@ -19,10 +19,9 @@ name: Conformance
 # JSPI natively), wasip3-guest (the conformance guest composed via `wac plug`
 # with the wasip3-impl provider — the sans-I/O rtc stack over WASIp3
 # wasi:sockets — plus an in-guest wasi:http mailbox client and a CLI driver,
-# run under `wasmtime run`), and the cross-runtime interop pair
-# `wasmtime`<->`jco-node` in both orders. The `wasmtime`<->`wasip3-guest`
-# pairs are wired but disabled by default pending a wasip3 teardown-flush fix
-# (see TODO.md item E3).
+# run under `wasmtime run`), and the cross-runtime interop pairs
+# `wasmtime`<->`jco-node` and `wasmtime`<->`wasip3-guest`, each in both
+# orders.
 
 on:
   push:
