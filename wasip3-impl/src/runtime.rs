@@ -10,11 +10,13 @@
 //! datagram. The exported `data-channel` / `peer-connection` methods observe
 //! that shared state and wake the pump through [`futures`] channels.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::pin::pin;
+use std::pin::{pin, Pin};
 use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -51,6 +53,67 @@ pub struct InboundMessage {
     pub text: bool,
     /// The message payload.
     pub data: Vec<u8>,
+}
+
+/// A single-threaded change-notification primitive over the shared state.
+///
+/// Waiters capture the current [`version`](Self::version) while holding the
+/// state borrow, re-check the state, and — when it is not yet what they need —
+/// await [`changed`](StateWatch::changed) with the captured version: the
+/// future resolves as soon as the version has advanced past it, so a
+/// notification between the check and the await is never lost. The pump
+/// notifies after applying core events; `begin_close` and the
+/// `receive-via-stream` claim notify directly. This replaces fixed-interval
+/// polling, so idle waiters wake only on actual state changes.
+#[derive(Default)]
+pub struct StateWatch {
+    version: Cell<u64>,
+    wakers: RefCell<Vec<Waker>>,
+}
+
+impl StateWatch {
+    /// The current change version. Capture it while holding the state borrow,
+    /// before deciding to wait.
+    pub fn version(&self) -> u64 {
+        self.version.get()
+    }
+
+    /// Record a state change and wake every waiter.
+    pub fn notify(&self) {
+        self.version.set(self.version.get() + 1);
+        for waker in self.wakers.borrow_mut().drain(..) {
+            waker.wake();
+        }
+    }
+
+    /// Resolve once the version has advanced past `seen`.
+    pub fn changed(self: &Rc<Self>, seen: u64) -> Changed {
+        Changed {
+            watch: self.clone(),
+            seen,
+        }
+    }
+}
+
+/// Future returned by [`StateWatch::changed`].
+pub struct Changed {
+    watch: Rc<StateWatch>,
+    seen: u64,
+}
+
+impl Future for Changed {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.watch.version.get() != self.seen {
+            return Poll::Ready(());
+        }
+        let mut wakers = self.watch.wakers.borrow_mut();
+        if !wakers.iter().any(|w| w.will_wake(cx.waker())) {
+            wakers.push(cx.waker().clone());
+        }
+        Poll::Pending
+    }
 }
 
 /// The default bound on inbound payload bytes buffered per channel while
@@ -154,6 +217,8 @@ pub struct Shared {
     /// final sends and completing the close handshake) before giving up on a
     /// peer that never acknowledges.
     pub drain_deadline: Option<Instant>,
+    /// Wakes the exported resources' waiters when the state changes.
+    pub watch: Rc<StateWatch>,
 }
 
 impl Shared {
@@ -179,6 +244,7 @@ impl Shared {
             c.closed = true;
         }
         self.drain_deadline = Some(Instant::now() + CLOSE_DRAIN);
+        self.watch.notify();
     }
 }
 
@@ -227,6 +293,7 @@ impl Runtime {
             close_requested: false,
             shutdown_complete: false,
             drain_deadline: None,
+            watch: Rc::new(StateWatch::default()),
         }));
 
         Ok((
@@ -258,6 +325,7 @@ impl Runtime {
         let shared = self.shared;
         let socket = self.socket;
         let local = self.local;
+        let watch = shared.borrow().watch.clone();
 
         // The in-flight `receive()` and `wait-for` import futures live across
         // loop iterations: each is a component-model subtask, and dropping one
@@ -278,24 +346,30 @@ impl Runtime {
             // application data reaches the wire before the core discards its
             // queues.
             flush(&shared, &socket).await;
-            let done = {
+            let (done, had_events) = {
                 let mut s = shared.borrow_mut();
                 if s.close_requested {
                     s.close_requested = false;
                     s.peer.close();
                 }
-                for event in s.peer.drain_events() {
+                let events = s.peer.drain_events();
+                let had_events = !events.is_empty();
+                for event in events {
                     apply_event(&mut s, event);
                 }
                 // Run until the connection fails or closes. A local `close()`
                 // keeps the pump draining — flushing final sends and completing
                 // the close handshake — until the core reports the close
                 // complete or the bounded drain window lapses.
-                s.failed
+                let done = s.failed
                     || (s.closed
                         && (s.shutdown_complete
-                            || s.drain_deadline.is_none_or(|d| Instant::now() >= d)))
+                            || s.drain_deadline.is_none_or(|d| Instant::now() >= d)));
+                (done, had_events)
             };
+            if had_events {
+                watch.notify();
+            }
             flush(&shared, &socket).await;
             if done {
                 return;

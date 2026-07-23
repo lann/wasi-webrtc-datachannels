@@ -113,9 +113,6 @@ the ad-hoc `map_err`s.
   (which is what the composed integration test needs); a routable address
   gives the peer a host candidate reachable across a real (non-loopback)
   network path, exercised by the conformance Shadow lab.
-- `receive` / `wait-connected` / `incoming-data-channels` poll the shared state
-  on a fixed `POLL_NANOS` interval rather than waking on a condition. Adequate,
-  but a condition/notify primitive would remove the idle wakeups.
 - The in-guest handshake occasionally stalls: both peers reach a state where the
   sans-I/O core reports no pending timer (`poll_timeout` returns `None`) and no
   transmit, each waiting on the other, so `wait-connected` surfaces

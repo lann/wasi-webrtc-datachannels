@@ -53,10 +53,6 @@ fn bind_ip() -> anyhow::Result<IpAddr> {
     }
 }
 
-/// How long a `receive` on an open-but-idle channel yields before re-checking
-/// the inbox, so a pending receiver observes a message the pump enqueues.
-const POLL_NANOS: u64 = 5_000_000;
-
 /// The maximum time `wait-connected` waits for the connection to establish
 /// before failing with `error::timed-out`. Without a bound, a connection that
 /// never completes (for example, when the sandbox denies loopback UDP) hangs
@@ -172,16 +168,19 @@ impl DataChannel {
         &self,
         mut op: impl FnMut(&mut Shared) -> Result<T, Error>,
     ) -> Result<T, Error> {
+        let watch = self.shared.borrow().watch.clone();
         loop {
+            let seen;
             {
                 let mut s = self.shared.borrow_mut();
+                seen = s.watch.version();
                 match channel_state(&mut s, self.id) {
                     ChannelState::Open => return op(&mut s),
                     ChannelState::Closed => return Err(Error::Closed),
                     ChannelState::Opening => {}
                 }
             }
-            crate::wasi::clocks::monotonic_clock::wait_for(POLL_NANOS).await;
+            watch.changed(seen).await;
         }
     }
 }
@@ -205,9 +204,12 @@ impl GuestDataChannel for DataChannel {
     }
 
     async fn receive(&self) -> Result<Message, Error> {
+        let watch = self.shared.borrow().watch.clone();
         loop {
+            let seen;
             {
                 let mut s = self.shared.borrow_mut();
+                seen = s.watch.version();
                 let dead = s.closed || s.failed;
                 match s.channel_mut(self.id) {
                     Some(channel) => {
@@ -236,7 +238,7 @@ impl GuestDataChannel for DataChannel {
                     None => {}
                 }
             }
-            crate::wasi::clocks::monotonic_clock::wait_for(POLL_NANOS).await;
+            watch.changed(seen).await;
         }
     }
 
@@ -291,6 +293,9 @@ impl GuestDataChannel for DataChannel {
             }
             if let Some(channel) = s.channel_mut(self.id) {
                 channel.stream_claimed = true;
+                // Wake pending `receive`s so they resolve with
+                // `receiving-via-stream`.
+                s.watch.notify();
             }
         }
         let shared = self.shared.clone();
@@ -502,10 +507,13 @@ impl GuestPeerConnection for PeerConnection {
     async fn wait_connected(&self) -> Result<(), Error> {
         PeerConnection::ensure_pump(&mut self.inner.borrow_mut());
         let shared = self.inner.borrow().shared.clone();
+        let watch = shared.borrow().watch.clone();
         let deadline = Instant::now() + CONNECT_TIMEOUT;
         loop {
+            let seen;
             {
                 let s = shared.borrow();
+                seen = s.watch.version();
                 if s.connected {
                     return Ok(());
                 }
@@ -513,10 +521,16 @@ impl GuestPeerConnection for PeerConnection {
                     return Err(Error::Closed);
                 }
             }
-            if Instant::now() >= deadline {
+            let now = Instant::now();
+            if now >= deadline {
                 return Err(Error::TimedOut);
             }
-            crate::wasi::clocks::monotonic_clock::wait_for(POLL_NANOS).await;
+            // Wake on the next state change, or at the deadline.
+            let remaining = deadline.saturating_duration_since(now).as_nanos() as u64;
+            let changed = watch.changed(seen);
+            let timer = crate::wasi::clocks::monotonic_clock::wait_for(remaining);
+            futures::pin_mut!(changed, timer);
+            let _ = futures::future::select(changed, timer).await;
         }
     }
 
@@ -537,10 +551,12 @@ async fn pump_incoming(
         crate::exports::lann::webrtc_datachannels::connections::DataChannel,
     >,
 ) {
+    let watch = shared.borrow().watch.clone();
     let mut cursor = 0usize;
     loop {
-        let next = {
+        let (next, seen) = {
             let s = shared.borrow_mut();
+            let seen = s.watch.version();
             let mut found = None;
             while cursor < s.channels.len() {
                 let id = s.channels[cursor].id;
@@ -555,7 +571,7 @@ async fn pump_incoming(
                 drop(s);
                 break;
             }
-            found
+            (found, seen)
         };
 
         if let Some((id, label)) = next {
@@ -571,7 +587,7 @@ async fn pump_incoming(
                 break;
             }
         } else {
-            crate::wasi::clocks::monotonic_clock::wait_for(POLL_NANOS).await;
+            watch.changed(seen).await;
         }
     }
     drop(tx);
@@ -607,6 +623,7 @@ async fn pump_receive(
     id: rtc::data_channel::RTCDataChannelId,
     mut tx: wit_bindgen::StreamWriter<StreamMessage>,
 ) {
+    let watch = shared.borrow().watch.clone();
     loop {
         // Pull the next message (or learn the channel is gone/closed) without
         // holding the borrow across the await below.
@@ -615,10 +632,11 @@ async fn pump_receive(
             Wait,
             Done,
         }
-        let next = {
+        let (next, seen) = {
             let mut s = shared.borrow_mut();
+            let seen = s.watch.version();
             let dead = s.closed || s.failed;
-            match s.channel_mut(id) {
+            let next = match s.channel_mut(id) {
                 Some(channel) => match channel.pop() {
                     Some(msg) => Next::Message(msg),
                     None if channel.closed => Next::Done,
@@ -627,13 +645,14 @@ async fn pump_receive(
                 // Not yet tracked: still opening unless the connection died.
                 None if dead => Next::Done,
                 None => Next::Wait,
-            }
+            };
+            (next, seen)
         };
 
         let msg = match next {
             Next::Message(msg) => msg,
             Next::Wait => {
-                crate::wasi::clocks::monotonic_clock::wait_for(POLL_NANOS).await;
+                watch.changed(seen).await;
                 continue;
             }
             Next::Done => break,
@@ -671,5 +690,6 @@ fn dead_shared() -> Shared {
         close_requested: false,
         shutdown_complete: true,
         drain_deadline: None,
+        watch: Rc::new(crate::runtime::StateWatch::default()),
     }
 }
