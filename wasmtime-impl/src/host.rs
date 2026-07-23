@@ -29,8 +29,9 @@ use crate::bindings::webrtc_datachannels::types::{
     self, Error, IceCandidate, Message, MessageKind, SdpType, SendViaStreamError,
     SessionDescription, StreamMessage,
 };
-use crate::data_channel::{ChannelError, CloseSignal, InboundMessage, InboundQueue, WiredFuture};
-use crate::peer_connection::{LocalCandidate, SdpError, SdpKind, WaitError};
+use crate::data_channel::{CloseSignal, InboundMessage, InboundQueue, WiredFuture};
+use crate::error::{WebrtcError, WebrtcResult};
+use crate::peer_connection::{LocalCandidate, SdpKind};
 use crate::{
     DataChannel, DataChannelOptions, PeerConnection, WasiWebrtc, WasiWebrtcCtxView, WasiWebrtcView,
 };
@@ -94,22 +95,16 @@ impl<T: Send> connections::HostDataChannelOptionsWithStore<T> for WasiWebrtc {
 /// Send one message over a data channel, honoring its `binary`/`string` kind.
 ///
 /// A failed send on a channel that is no longer open is classified as
-/// `error.closed` (the WIT taxonomy's mid-send-close case); any other failure
-/// stays `error.other`.
+/// [`WebrtcError::Closed`] (the WIT taxonomy's mid-send-close case); any other
+/// failure stays `other`, retaining the `webrtc-rs` source.
 async fn send_channel_message(
     channel: &Arc<dyn WebrtcDataChannel>,
     is_string: bool,
     data: Vec<u8>,
-) -> std::result::Result<(), Error> {
+) -> WebrtcResult<()> {
     let result = if is_string {
-        let text = match String::from_utf8(data) {
-            Ok(text) => text,
-            Err(err) => {
-                return Err(Error::Other(format!(
-                    "string message is not valid UTF-8: {err}"
-                )))
-            }
-        };
+        let text = String::from_utf8(data)
+            .map_err(|err| WebrtcError::msg(format!("string message is not valid UTF-8: {err}")))?;
         channel.send_text(&text).await
     } else {
         channel.send(BytesMut::from(&data[..])).await
@@ -122,9 +117,9 @@ async fn send_channel_message(
                 Ok(webrtc::data_channel::RTCDataChannelState::Open)
             );
             if open {
-                Err(Error::Other(err.to_string()))
+                Err(WebrtcError::other(err))
             } else {
-                Err(Error::Closed)
+                Err(WebrtcError::Closed)
             }
         }
     }
@@ -134,23 +129,21 @@ async fn send_channel_message(
 /// `Error::Closed` once the channel has closed and no more messages will
 /// arrive — or `Error::ReceiveBufferOverflow` when the queue ended because the
 /// channel's bounded inbound buffer overflowed.
-async fn next_inbound(
-    incoming: Arc<AsyncMutex<InboundQueue>>,
-) -> std::result::Result<InboundMessage, Error> {
+async fn next_inbound(incoming: Arc<AsyncMutex<InboundQueue>>) -> WebrtcResult<InboundMessage> {
     let mut queue = incoming.lock().await;
     match queue.next().await {
         Some(message) => Ok(message),
-        None if queue.overflowed() => Err(Error::ReceiveBufferOverflow),
-        None => Err(Error::Closed),
+        None if queue.overflowed() => Err(WebrtcError::ReceiveBufferOverflow),
+        None => Err(WebrtcError::Closed),
     }
 }
 
 /// Convert a host-side inbound message into the WIT `message` variant.
-fn to_message(inbound: InboundMessage) -> std::result::Result<Message, Error> {
+fn to_message(inbound: InboundMessage) -> WebrtcResult<Message> {
     if inbound.is_string {
         String::from_utf8(inbound.data)
             .map(Message::String)
-            .map_err(|err| Error::Other(format!("string message is not valid UTF-8: {err}")))
+            .map_err(|err| WebrtcError::msg(format!("string message is not valid UTF-8: {err}")))
     } else {
         Ok(Message::Binary(inbound.data))
     }
@@ -205,14 +198,6 @@ impl<D: Send + 'static> StreamConsumer<D> for ByteCollector {
 impl Drop for ByteCollector {
     fn drop(&mut self) {
         self.finish();
-    }
-}
-
-/// Convert a channel-wiring error into the WIT `error` variant.
-fn channel_error_to_error(err: ChannelError) -> Error {
-    match err {
-        ChannelError::Closed => Error::Closed,
-        ChannelError::Other(reason) => Error::Other(reason),
     }
 }
 
@@ -391,9 +376,11 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
 
         let wired = match wired.await {
             Ok(wired) => wired,
-            Err(err) => return Ok(Err(channel_error_to_error(err))),
+            Err(err) => return Ok(Err(err.into())),
         };
-        Ok(send_channel_message(&wired.channel, is_string, data).await)
+        Ok(send_channel_message(&wired.channel, is_string, data)
+            .await
+            .map_err(Error::from))
     }
 
     async fn receive(
@@ -424,7 +411,7 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
         // no channel close of its own). Biased order: an already-available
         // message wins over both signals.
         let mut receive = std::pin::pin!(async move {
-            let wired = wired.await.map_err(channel_error_to_error)?;
+            let wired = wired.await?;
             next_inbound(wired.incoming).await
         }
         .fuse());
@@ -432,8 +419,8 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
         let mut closed = std::pin::pin!(conn_closed.fired().fuse());
         Ok(futures::select_biased! {
             result = receive => match result {
-                Ok(inbound) => to_message(inbound),
-                Err(err) => Err(err),
+                Ok(inbound) => to_message(inbound).map_err(Error::from),
+                Err(err) => Err(err.into()),
             },
             // The stream-started signal fired; when it was actually sent
             // (rather than cancelled by the channel being dropped) report the
@@ -460,7 +447,7 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
             Ok(wired) => wired.channel,
             Err(err) => {
                 return Ok(Err(SendViaStreamError {
-                    error: channel_error_to_error(err),
+                    error: err.into(),
                     sent: 0,
                 }))
             }
@@ -486,16 +473,20 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
             let data = pending.done_rx.await.unwrap_or_default();
             if data.len() != pending.length {
                 return Ok(Err(SendViaStreamError {
-                    error: Error::Other(format!(
+                    error: WebrtcError::msg(format!(
                         "stream-message payload was {} bytes but length declared {}",
                         data.len(),
                         pending.length
-                    )),
+                    ))
+                    .into(),
                     sent,
                 }));
             }
             if let Err(error) = send_channel_message(&channel, pending.is_string, data).await {
-                return Ok(Err(SendViaStreamError { error, sent }));
+                return Ok(Err(SendViaStreamError {
+                    error: error.into(),
+                    sent,
+                }));
             }
             sent += 1;
         }
@@ -542,22 +533,14 @@ impl<T: Send> HostDataChannelWithStore<T> for WasiWebrtc {
 
 /// Map a WIT `session-description` `kind` onto the host [`SdpKind`], rejecting
 /// `rollback` (which `webrtc-rs`'s `set-*-description` cannot express here).
-fn to_sdp_kind(kind: SdpType) -> std::result::Result<SdpKind, Error> {
+fn to_sdp_kind(kind: SdpType) -> WebrtcResult<SdpKind> {
     match kind {
         SdpType::Offer => Ok(SdpKind::Offer),
         SdpType::Answer => Ok(SdpKind::Answer),
         SdpType::Pranswer => Ok(SdpKind::Pranswer),
-        SdpType::Rollback => Err(Error::InvalidSignaling(
-            "rollback descriptions are not supported".to_string(),
-        )),
-    }
-}
-
-/// Map a host [`SdpError`] onto the WIT `error` variant.
-fn from_sdp_error(err: SdpError) -> Error {
-    match err {
-        SdpError::InvalidSignaling(detail) => Error::InvalidSignaling(detail),
-        SdpError::Other(detail) => Error::Other(detail),
+        SdpType::Rollback => Err(WebrtcError::invalid_signaling(anyhow::anyhow!(
+            "rollback descriptions are not supported"
+        ))),
     }
 }
 
@@ -710,7 +693,7 @@ impl<T: WasiWebrtcView + 'static> HostPeerConnectionWithStore<T> for WasiWebrtc 
                 kind: SdpType::Offer,
                 sdp,
             }),
-            Err(reason) => Err(Error::Other(reason)),
+            Err(err) => Err(err.into()),
         })
     }
 
@@ -725,7 +708,7 @@ impl<T: WasiWebrtcView + 'static> HostPeerConnectionWithStore<T> for WasiWebrtc 
                 kind: SdpType::Answer,
                 sdp,
             }),
-            Err(reason) => Err(Error::Other(reason)),
+            Err(err) => Err(err.into()),
         })
     }
 
@@ -736,14 +719,14 @@ impl<T: WasiWebrtcView + 'static> HostPeerConnectionWithStore<T> for WasiWebrtc 
     ) -> Result<std::result::Result<(), Error>> {
         let kind = match to_sdp_kind(description.kind) {
             Ok(kind) => kind,
-            Err(err) => return Ok(Err(err)),
+            Err(err) => return Ok(Err(err.into())),
         };
         let peer = accessor
             .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.clone()))?;
         Ok(peer
             .set_local_description(kind, description.sdp)
             .await
-            .map_err(from_sdp_error))
+            .map_err(Error::from))
     }
 
     async fn set_remote_description(
@@ -753,14 +736,14 @@ impl<T: WasiWebrtcView + 'static> HostPeerConnectionWithStore<T> for WasiWebrtc 
     ) -> Result<std::result::Result<(), Error>> {
         let kind = match to_sdp_kind(description.kind) {
             Ok(kind) => kind,
-            Err(err) => return Ok(Err(err)),
+            Err(err) => return Ok(Err(err.into())),
         };
         let peer = accessor
             .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.clone()))?;
         Ok(peer
             .set_remote_description(kind, description.sdp)
             .await
-            .map_err(from_sdp_error))
+            .map_err(Error::from))
     }
 
     async fn add_ice_candidate(
@@ -777,7 +760,7 @@ impl<T: WasiWebrtcView + 'static> HostPeerConnectionWithStore<T> for WasiWebrtc 
                 candidate.sdp_mline_index,
             )
             .await
-            .map_err(Error::Other))
+            .map_err(Error::from))
     }
 
     async fn wait_connected(
@@ -786,12 +769,7 @@ impl<T: WasiWebrtcView + 'static> HostPeerConnectionWithStore<T> for WasiWebrtc 
     ) -> Result<std::result::Result<(), Error>> {
         let peer = accessor
             .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.clone()))?;
-        Ok(match peer.wait_connected().await {
-            Ok(()) => Ok(()),
-            Err(WaitError::TimedOut) => Err(Error::TimedOut),
-            Err(WaitError::Closed) => Err(Error::Closed),
-            Err(WaitError::Other(reason)) => Err(Error::Other(reason)),
-        })
+        Ok(peer.wait_connected().await.map_err(Error::from))
     }
 
     async fn drop(accessor: &Accessor<T, Self>, rep: Resource<PeerConnection>) -> Result<()> {

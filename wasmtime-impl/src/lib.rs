@@ -15,10 +15,12 @@
 
 pub mod bindings;
 mod data_channel;
+mod error;
 mod host;
 mod peer_connection;
 
 pub use data_channel::{DataChannel, DEFAULT_MAX_INBOUND_BUFFER_BYTES, MAX_INBOUND_BUFFER_ENV};
+pub use error::{WebrtcError, WebrtcResult};
 pub use peer_connection::PeerConnection;
 
 use std::sync::Arc;

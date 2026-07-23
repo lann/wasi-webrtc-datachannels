@@ -72,17 +72,6 @@ should align with (or be replaced by) WASI 0.3's `error-context` mechanism,
 which is the component-model-native way to attach contextual failure
 information to async operations.
 
-## D. Error handling
-
-### D2. Host errors are flattened to strings at many call sites
-
-Every fallible host path does `Error::Other(e.to_string())`
-(`wasmtime-impl/src/host.rs`),
-discarding the `anyhow`/`webrtc-rs` source chain and giving error
-classification no single home. Follow the `wasmtime-wasi-http` pattern: a
-crate-level error type with `From` conversions into the WIT variant, replacing
-the ad-hoc `map_err`s.
-
 ## E. Implementations
 
 ### E3. Unwind the `rtc` git pin once upstream ships a release
@@ -144,9 +133,8 @@ flags from the WIT) so a drifted rename fails fast with a clear message.
 
 ## Suggested priority
 
-1. Give host errors a crate-level type instead of flattened strings (D2).
-2. Interface-stabilizing decisions (C1, C2).
-3. Strategic build-out: wire `rendezvous` (F3) and take `wasip3`'s
+1. Interface-stabilizing decisions (C1, C2, C4).
+2. Strategic build-out: wire `rendezvous` (F3) and take `wasip3`'s
    WIT-speaking component to a real network (F4).
-4. Cheap hygiene: the transpile-flag CI check (G1), the remaining
+3. Cheap hygiene: the transpile-flag CI check (G1), the remaining
    conformance-matrix gaps (A3), demo payload verification (F1).
