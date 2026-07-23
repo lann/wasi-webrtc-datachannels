@@ -12,7 +12,7 @@ description = "Wasmtime host implementation of the lann:webrtc-datachannels inte
 wasmtime = { version = "47", features = ["component-model", "component-model-async", "async", "runtime"] }
 # `webrtc-rs`: a pure-Rust WebRTC stack. Provides the RTCPeerConnection /
 # RTCDataChannel implementation that backs the host's data channels.
-webrtc = "0.20.0-rc.3"
+webrtc = "0.20.0-rc.4"
 futures = "0.3"
 anyhow = "1"
 bytes = "1"

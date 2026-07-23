@@ -71,15 +71,6 @@ information to async operations.
 
 ## E. Implementations
 
-### E3. Unwind the `rtc` git pin once upstream ships a release
-
-The `rtc` dependency is pinned to an upstream `master` commit (`Cargo.toml`
-`[patch.crates-io]`, `rtc = { git = "https://github.com/webrtc-rs/rtc.git",
-rev = … }`) because the empty-message receive fix
-([`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131), merged
-upstream) is not yet in any published release. Drop the patch and return to a
-published, stable `0.20` once a release including it ships.
-
 ### E4. Upstream `rtc-ice` tags srflx transmits with the mapped address
 
 `rtc-ice`'s `send_stun` (and the peer-connection ICE write path) tag outbound
@@ -95,8 +86,9 @@ host-sourced checks toward the peer's srflx candidate carry the connection, so
 transmits per corpus run). A fix exists on
 [`lann/rtc#fix-srflx-check-source-addr`](https://github.com/lann/rtc/tree/fix-srflx-check-source-addr)
 (adds `Candidate::base_addr()` and uses it when tagging transmits; verified in
-the lab — same 11/11 pass with zero drops); upstream it and it rides the next
-pin bump (item E3).
+the lab — same 11/11 pass with zero drops); upstream it and pick it up by
+bumping the workspace `rtc` pin to the release that includes it (the fix is
+not in `0.20.0-rc.4`).
 
 ## F. Examples
 

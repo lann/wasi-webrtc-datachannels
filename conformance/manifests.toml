@@ -68,7 +68,7 @@
 # `zero-length-message` used to be an expected-fail here (the `rtc` receive path
 # kept the one-zero-byte SCTP placeholder payload for the BinaryEmpty/StringEmpty
 # PPIDs), but upstream `rtc` now maps those PPIDs back to an empty message
-# (webrtc-rs/rtc#131, merged; the workspace pins an upstream commit carrying it),
+# (webrtc-rs/rtc#131, released in `rtc` 0.20.0-rc.4, which the workspace pins),
 # so this target passes it and it is deliberately NOT an expected-fail.
 [target.wasip3-guest]
 

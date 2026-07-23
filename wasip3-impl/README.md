@@ -65,8 +65,7 @@ component that imports `wasi:sockets`/`wasi:clocks` and exports
 
 ## Dependency pin
 
-`rtc` is pinned once, at the workspace level in the root `Cargo.toml`, to an
-upstream [`webrtc-rs/rtc`](https://github.com/webrtc-rs/rtc) `master` commit:
-the empty-message receive fix
-([`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)) is merged
-upstream but not yet in any published release.
+`rtc` is pinned once, at the workspace level in the root `Cargo.toml`, to
+crates.io `0.20.0-rc.4` — the first published release carrying the
+empty-message receive fix
+([`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131)).
