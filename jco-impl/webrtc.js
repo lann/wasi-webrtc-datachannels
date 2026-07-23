@@ -1,31 +1,45 @@
-// Host implementation of the `lann:webrtc-datachannels` imports for Node.
+// Host implementation of the `lann:webrtc-datachannels/connections` imports
+// for the demo component.
 //
 // This is the "browser-first" host: it is written against the standard W3C
 // WebRTC API (`RTCPeerConnection` / `RTCDataChannel`), so the same logic runs
 // in a browser. Under Node it is backed by `@roamhq/wrtc`, the maintained fork
-// of `node-webrtc`, which provides those globals-compatible classes.
+// of `node-webrtc`, which provides those globals-compatible classes. It
+// implements the full `connections` surface — `data-channel-options`,
+// `data-channel`, and `peer-connection` (offer/answer, trickle ICE, incoming
+// channels) — and is kept in behavioral sync with its conformance twin,
+// `conformance/adapters/jco/webrtc.js`, which the conformance suite asserts.
 //
-// `jco --map` wires this module in: the transpiled component does
-//   import { openEcho } from '.../connect'      -> openEcho here
-//   import { DataChannel, DataChannelOptions } from '.../connections'
-//                                               -> those classes here
-//
-// The guest builds a `DataChannelOptions` (a configuration builder) and passes
-// it to `openEcho`. The component sees a channel already connected to an echo endpoint. Under the
-// hood `openEcho` performs a genuine SDP offer/answer + ICE handshake between
-// two peer connections and echoes every message on the far side, so a real
-// WebRTC/SCTP data channel carries the traffic.
+// `jco --map` wires this module in as the component's `connections` import.
+// Errors are surfaced to the guest by throwing the WIT `error` variant value
+// (for example `{ tag: 'closed' }` or `{ tag: 'invalid-signaling', val }`), which
+// jco lifts into the `result<_, error>` the WIT declares.
 
-// Resolve `RTCPeerConnection` isomorphically so this exact module runs both in a
-// real browser and under Node. In a browser (including headless Chromium in CI)
-// the W3C class is a global; under Node it is provided by `@roamhq/wrtc`, which
-// is imported lazily so the bare specifier never has to resolve in the browser.
-const RTCPeerConnection =
-  globalThis.RTCPeerConnection ??
-  (await import("@roamhq/wrtc")).default.RTCPeerConnection;
+// Resolve `RTCPeerConnection` isomorphically: a browser (including headless
+// Chromium) exposes the W3C class as a global; under Node it is provided by
+// `@roamhq/wrtc`, imported lazily so the bare specifier never has to resolve in
+// the browser. A missing Node dependency is surfaced with an actionable message
+// rather than a bare module-resolution error.
+async function resolveRTCPeerConnection() {
+  if (globalThis.RTCPeerConnection) return globalThis.RTCPeerConnection;
+  try {
+    return (await import("@roamhq/wrtc")).default.RTCPeerConnection;
+  } catch (cause) {
+    throw new Error(
+      "no RTCPeerConnection available: not running in a browser and @roamhq/wrtc " +
+        "could not be loaded (run `npm install` in jco-impl)",
+      { cause },
+    );
+  }
+}
+
+const RTCPeerConnection = await resolveRTCPeerConnection();
 
 // Keep the SCTP send buffer bounded; pause the producer when it fills.
 const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;
+
+// How long `wait-connected` waits before failing with `error.timed-out`.
+const CONNECT_TIMEOUT_MS = 20_000;
 
 // The default bound on buffered inbound payload bytes awaiting `receive`.
 // There is no wire-level inbound backpressure (the W3C API has no read-side
@@ -47,6 +61,54 @@ function maxInboundBuffered() {
 }
 
 /**
+ * The `data-channel-options` resource: a configuration builder for a data
+ * channel, mirroring `wasi:http`'s `request-options`. The guest constructs a
+ * default value, adjusts fields through the setters, and hands it to
+ * `peer-connection.create-data-channel`.
+ */
+export class DataChannelOptions {
+  #label = "";
+  #ordered = true;
+  #maxRetransmits = undefined;
+
+  /** The channel label. */
+  label() {
+    return this.#label;
+  }
+  /** @param {string} label */
+  setLabel(label) {
+    this.#label = label;
+  }
+
+  /** Whether messages are delivered in order. */
+  ordered() {
+    return this.#ordered;
+  }
+  /** @param {boolean} ordered */
+  setOrdered(ordered) {
+    this.#ordered = ordered;
+  }
+
+  /** The maximum number of retransmissions, or `undefined` for reliable delivery. */
+  maxRetransmits() {
+    return this.#maxRetransmits;
+  }
+  /** @param {number | undefined} maxRetransmits */
+  setMaxRetransmits(maxRetransmits) {
+    this.#maxRetransmits = maxRetransmits;
+  }
+
+  /** The `RTCDataChannelInit` these options describe. */
+  toInit() {
+    const init = { ordered: this.#ordered };
+    if (this.#maxRetransmits != null) {
+      init.maxRetransmits = this.#maxRetransmits;
+    }
+    return init;
+  }
+}
+
+/**
  * The `data-channel` resource, implemented over an `RTCDataChannel`.
  *
  * `send`/`receive` each carry exactly one data-channel message, preserving
@@ -59,13 +121,11 @@ export class DataChannel {
   // Set once `receive-via-stream` has claimed the inbound messages; further
   // `receive`/`receive-via-stream` calls fail with `receiving-via-stream`.
   #streamClaimed = false;
-  // Retain the peer connections so they are not garbage-collected while in use.
-  #keepAlive;
 
-  constructor(channel, incoming, keepAlive) {
+  constructor(channel) {
     this.#channel = channel;
-    this.#incoming = incoming;
-    this.#keepAlive = keepAlive;
+    channel.binaryType = "arraybuffer";
+    this.#incoming = incomingQueue(channel);
   }
 
   /** The negotiated channel label. */
@@ -74,18 +134,13 @@ export class DataChannel {
   }
 
   /**
-   * Send a single message on the channel. jco delivers the `message` variant as
-   * `{ tag: 'binary', val: Uint8Array }` or `{ tag: 'string', val: string }`.
-   * Rejects with the WIT `error` variant `{ tag: 'closed' }` if the channel is
-   * not open (a thrown JS error would trap the component instead of surfacing
-   * `result::err`).
+   * Send a single message on the channel, resolving once it has been handed to
+   * the transport or rejecting with `{ tag: 'closed' }` if the channel closed.
    * @param {{ tag: 'binary', val: Uint8Array } | { tag: 'string', val: string }} message
    */
   async send(message) {
-    if (this.#channel.readyState !== "open") throw { tag: "closed" };
+    await this.#waitOpen();
     await this.#waitForDrain();
-    // A string is sent as a WebRTC text message; a Uint8Array as binary. Both
-    // preserve the message kind end to end.
     try {
       this.#channel.send(message.val);
     } catch {
@@ -94,10 +149,10 @@ export class DataChannel {
   }
 
   /**
-   * Receive a single message from the channel, resolving with the next inbound
-   * `message` variant or throwing `{ tag: 'closed' }` once the channel closes
-   * (or `{ tag: 'receiving-via-stream' }` once `receiveViaStream` has claimed
-   * the inbound messages).
+   * Receive a single message, resolving with the next inbound `message` variant
+   * or rejecting with `{ tag: 'closed' }` once the channel closes (or with
+   * `{ tag: 'receiving-via-stream' }` once `receiveViaStream` has claimed the
+   * inbound messages).
    */
   async receive() {
     if (this.#streamClaimed) throw { tag: "receiving-via-stream" };
@@ -106,10 +161,11 @@ export class DataChannel {
 
   /**
    * Send a stream of messages whose payloads are each streamed as bytes.
-   * `messages` is a stream of `stream-message` records whose `data` is a byte
-   * stream. Rejects with the WIT `send-via-stream-error` record
-   * `{ error, sent }` if the channel closes early or a message's payload does
-   * not match its declared `length`.
+   * `messages` is a `ReadableStream` of `stream-message` records whose `data`
+   * is a byte `ReadableStream`. Rejects with the WIT `send-via-stream-error`
+   * record `{ error, sent }` if the channel closes early or a message's
+   * payload does not match its declared `length`.
+   * @param {ReadableStream<{ kind: 'binary'|'string', length: number, data: ReadableStream }>} messages
    */
   async sendViaStream(messages) {
     let sent = 0n;
@@ -152,8 +208,8 @@ export class DataChannel {
         try {
           message = await incoming.next();
         } catch {
-          // The channel closed (or its inbound buffer overflowed): the stream
-          // simply ends, per the WIT contract.
+          // The channel closed (or its inbound buffer overflowed): the
+          // stream simply ends, per the WIT contract.
           controller.close();
           return;
         }
@@ -168,24 +224,30 @@ export class DataChannel {
     });
   }
 
+  /** Resolve once the channel is open, or reject `{ tag: 'closed' }` if it closes. */
+  #waitOpen() {
+    const channel = this.#channel;
+    if (channel.readyState === "open") return Promise.resolve();
+    if (channel.readyState === "closing" || channel.readyState === "closed") {
+      return Promise.reject({ tag: "closed" });
+    }
+    return new Promise((resolve, reject) => {
+      channel.addEventListener("open", () => resolve(), { once: true });
+      channel.addEventListener("close", () => reject({ tag: "closed" }), { once: true });
+      channel.addEventListener("error", () => reject({ tag: "closed" }), { once: true });
+    });
+  }
+
   /**
    * Dispose hook jco invokes when the guest drops the resource: close the
-   * channel and both backing peer connections so `@roamhq/wrtc` tears down its
-   * native ICE/DTLS/SCTP threads and sockets instead of leaking them for the
-   * process lifetime.
+   * channel so its native resources are released even if the guest never
+   * closed the owning peer connection.
    */
   [Symbol.dispose]() {
     try {
       this.#channel.close();
     } catch {
       // Already closed.
-    }
-    for (const pc of Object.values(this.#keepAlive)) {
-      try {
-        pc.close();
-      } catch {
-        // Already closed.
-      }
     }
   }
 
@@ -205,95 +267,204 @@ export class DataChannel {
 }
 
 /**
- * The `data-channel-options` resource: a configuration builder for a data
- * channel, following the shape of `wasi:http`'s `request-options`. The guest
- * constructs a default value, adjusts fields through the setters, and hands it
- * to `openEcho`. Each field has a getter/setter accessor pair.
+ * A single WebRTC peer connection driving the full `RTCPeerConnection`-style
+ * signaling surface: offer/answer, trickle ICE, and in-band data channels.
  */
-export class DataChannelOptions {
-  #label = "";
-  #ordered = true;
-  #maxRetransmits = undefined;
+export class PeerConnection {
+  #pc;
+  #candidates;
+  #channels;
 
-  /** The channel label. */
-  label() {
-    return this.#label;
-  }
-  /** @param {string} label */
-  setLabel(label) {
-    this.#label = label;
+  constructor() {
+    this.#pc = new RTCPeerConnection();
+
+    // Local ICE candidates: a `null` (or empty) candidate ends the stream.
+    this.#candidates = eventStream((push, end) => {
+      this.#pc.addEventListener("icecandidate", ({ candidate }) => {
+        if (candidate == null || candidate.candidate === "") {
+          end();
+          return;
+        }
+        push({
+          candidate: candidate.candidate,
+          sdpMid: candidate.sdpMid ?? undefined,
+          sdpMlineIndex: candidate.sdpMLineIndex ?? undefined,
+        });
+      });
+    });
+
+    // Data channels opened by the remote peer.
+    this.#channels = eventStream((push) => {
+      this.#pc.addEventListener("datachannel", ({ channel }) => {
+        push(new DataChannel(channel));
+      });
+    });
   }
 
-  /** Whether messages are delivered in order. */
-  ordered() {
-    return this.#ordered;
-  }
-  /** @param {boolean} ordered */
-  setOrdered(ordered) {
-    this.#ordered = ordered;
+  /**
+   * Create a data channel negotiated in-band with the peer.
+   * @param {DataChannelOptions} options
+   */
+  createDataChannel(options) {
+    const channel = this.#pc.createDataChannel(options.label(), options.toInit());
+    return new DataChannel(channel);
   }
 
-  /** The maximum number of retransmissions, or `undefined` for reliable delivery. */
-  maxRetransmits() {
-    return this.#maxRetransmits;
+  /** A stream of data channels opened by the remote peer. */
+  incomingDataChannels() {
+    return this.#channels.stream;
   }
-  /** @param {number | undefined} maxRetransmits */
-  setMaxRetransmits(maxRetransmits) {
-    this.#maxRetransmits = maxRetransmits;
+
+  /** Produce an SDP offer describing the local peer. */
+  async createOffer() {
+    const offer = await this.#pc.createOffer();
+    return { kind: "offer", sdp: offer.sdp };
+  }
+
+  /** Produce an SDP answer in response to a previously set remote offer. */
+  async createAnswer() {
+    const answer = await this.#pc.createAnswer();
+    return { kind: "answer", sdp: answer.sdp };
+  }
+
+  /**
+   * Apply a local description produced by `createOffer`/`createAnswer`.
+   * @param {{ kind: string, sdp: string }} description
+   */
+  async setLocalDescription(description) {
+    try {
+      await this.#pc.setLocalDescription({ type: description.kind, sdp: description.sdp });
+    } catch (err) {
+      throw { tag: "invalid-signaling", val: String(err) };
+    }
+  }
+
+  /**
+   * Apply the remote peer's description.
+   * @param {{ kind: string, sdp: string }} description
+   */
+  async setRemoteDescription(description) {
+    try {
+      await this.#pc.setRemoteDescription({ type: description.kind, sdp: description.sdp });
+    } catch (err) {
+      throw { tag: "invalid-signaling", val: String(err) };
+    }
+  }
+
+  /** A stream of locally gathered ICE candidates to trickle to the peer. */
+  localIceCandidates() {
+    return this.#candidates.stream;
+  }
+
+  /**
+   * Add an ICE candidate received from the remote peer.
+   * @param {{ candidate: string, sdpMid?: string, sdpMlineIndex?: number }} candidate
+   */
+  async addIceCandidate(candidate) {
+    try {
+      await this.#pc.addIceCandidate({
+        candidate: candidate.candidate,
+        sdpMid: candidate.sdpMid ?? null,
+        sdpMLineIndex: candidate.sdpMlineIndex ?? null,
+      });
+    } catch (err) {
+      throw { tag: "invalid-signaling", val: String(err) };
+    }
+  }
+
+  /**
+   * Resolve once the connection reaches `connected`, or reject
+   * `{ tag: 'timed-out' }` when it fails or when `CONNECT_TIMEOUT_MS` elapses
+   * first (a handshake that can never complete — for example with no remote
+   * peer — must not hang forever).
+   */
+  async waitConnected() {
+    const pc = this.#pc;
+    const isConnected = () =>
+      pc.connectionState === "connected" ||
+      pc.iceConnectionState === "connected" ||
+      pc.iceConnectionState === "completed";
+    const isFailed = () => pc.connectionState === "failed" || pc.iceConnectionState === "failed";
+
+    if (isConnected()) return;
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject({ tag: "timed-out" });
+      }, CONNECT_TIMEOUT_MS);
+      const check = () => {
+        if (isConnected()) {
+          cleanup();
+          resolve();
+        } else if (isFailed()) {
+          cleanup();
+          reject({ tag: "timed-out" });
+        }
+      };
+      const cleanup = () => {
+        clearTimeout(timer);
+        pc.removeEventListener("connectionstatechange", check);
+        pc.removeEventListener("iceconnectionstatechange", check);
+      };
+      pc.addEventListener("connectionstatechange", check);
+      pc.addEventListener("iceconnectionstatechange", check);
+    });
+  }
+
+  /** Close the peer connection and any of its data channels. */
+  close() {
+    this.#pc.close();
+  }
+
+  /**
+   * Dispose hook jco invokes when the guest drops the resource: close the
+   * connection so `@roamhq/wrtc` tears down its native ICE/DTLS/SCTP threads
+   * and sockets even if the guest never called `close`.
+   */
+  [Symbol.dispose]() {
+    try {
+      this.#pc.close();
+    } catch {
+      // Already closed.
+    }
   }
 }
 
 /**
- * Open a data channel connected to an internal echo endpoint.
- * @param {DataChannelOptions} options
- * @returns {Promise<DataChannel>}
+ * A `ReadableStream` fed by an event source. `setup(push, end)` wires the source
+ * to `push` each value and `end` to close the stream; values pushed before the
+ * stream starts pulling are buffered.
  */
-export async function openEcho(options) {
-  const near = new RTCPeerConnection();
-  const far = new RTCPeerConnection();
-
-  // Trickle ICE candidates directly between the two local peers.
-  near.onicecandidate = ({ candidate }) => candidate && far.addIceCandidate(candidate);
-  far.onicecandidate = ({ candidate }) => candidate && near.addIceCandidate(candidate);
-
-  // Far side: echo every message straight back on the same channel. The send is
-  // guarded: if the channel is closing, a thrown error here would otherwise
-  // surface as an unhandled event-handler exception (and the near side's
-  // pending receive resolves through the close path instead).
-  far.ondatachannel = ({ channel }) => {
-    channel.binaryType = "arraybuffer";
-    channel.onmessage = ({ data }) => {
-      try {
-        channel.send(data);
-      } catch {
-        // Channel closed mid-echo; the message is dropped with the connection.
-      }
-    };
+function eventStream(setup) {
+  let controller;
+  let ended = false;
+  const buffer = [];
+  const stream = new ReadableStream({
+    start(c) {
+      controller = c;
+      for (const item of buffer) c.enqueue(item);
+      buffer.length = 0;
+      if (ended) c.close();
+    },
+  });
+  const push = (item) => {
+    if (controller) controller.enqueue(item);
+    else buffer.push(item);
   };
-
-  const init = { ordered: options.ordered() };
-  const maxRetransmits = options.maxRetransmits();
-  if (maxRetransmits != null) {
-    init.maxRetransmits = maxRetransmits;
-  }
-  const channel = near.createDataChannel(options.label(), init);
-  channel.binaryType = "arraybuffer";
-
-  const incoming = incomingQueue(channel);
-  const opened = waitOpen(channel);
-
-  // Standard offer/answer exchange.
-  const offer = await near.createOffer();
-  await near.setLocalDescription(offer);
-  await far.setRemoteDescription(offer);
-  const answer = await far.createAnswer();
-  await far.setLocalDescription(answer);
-  await near.setRemoteDescription(answer);
-
-  await opened;
-  return new DataChannel(channel, incoming, { near, far });
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    if (controller) {
+      try {
+        controller.close();
+      } catch {
+        // Already closed.
+      }
+    }
+  };
+  setup(push, end);
+  return { stream };
 }
-
 
 /**
  * Iterate a guest-provided WIT stream: jco hands the host its own async-iterable
@@ -470,13 +641,4 @@ function incomingQueue(channel) {
       }
     },
   };
-}
-
-/** Resolve once the channel is open (or reject if it errors first). */
-function waitOpen(channel) {
-  if (channel.readyState === "open") return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    channel.onopen = () => resolve();
-    channel.onerror = (event) => reject(event.error ?? new Error("data channel error"));
-  });
 }

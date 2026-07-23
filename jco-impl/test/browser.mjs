@@ -19,7 +19,7 @@
 //    to a page once that page has been granted a WebRTC-relevant permission
 //    (camera/microphone). Without it, candidates are gathered internally and
 //    then *discarded* ("Discarding candidate because it doesn't match filter"),
-//    so the loopback handshake in `openEcho` never completes and the data
+//    so the component's in-component loopback handshake never completes and the data
 //    channel never opens. mDNS is a red herring here — the candidates are
 //    dropped regardless of the mDNS setting.
 //

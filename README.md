@@ -86,10 +86,6 @@ components that use them ([`examples/echo-demo/wit`](examples/echo-demo/wit)
 for the echo demo, [`examples/cli-signaling/wit`](examples/cli-signaling/wit)
 for the manual-signaling demos):
 
-- **`connect`** — a convenience used by the demo: `open-echo` returns a channel
-  wired to a host-provided echo endpoint, so the example can focus on the
-  message round-trip hot path while still exercising a real WebRTC stack in the
-  host.
 - **`rendezvous`** — a proposed, deliberately *unstandardized* HTTP signaling
   mailbox for carrying SDP/ICE between two *separate* peers via an existing
   server over `wasi:http@0.3`, so remote connections can be developed locally.
@@ -101,7 +97,7 @@ The demo world is intentionally tiny:
 
 ```wit
 world webrtc-echo-demo {
-    import connect;
+    import lann:webrtc-datachannels/connections@0.1.0;
     export demo;
 }
 ```
@@ -112,10 +108,13 @@ world webrtc-echo-demo {
 (`wit-bindgen`, `wasm32-unknown-unknown` + `wasm-tools component new`). Its
 `run`:
 
-1. calls `connect::open-echo` to get a channel,
-2. sends `message-count` messages one at a time through `data-channel.send`, and
-   **concurrently** reads them back one at a time from `data-channel.receive`
-   (both loops under `futures::join!`),
+1. stands up **two** peer connections in-component through the standard
+   `connections` interface (a real SDP offer/answer exchange plus trickled
+   ICE) and adopts the negotiated channel on both ends,
+2. sends `message-count` messages one at a time through `data-channel.send`
+   on one end, echoes each back from the other, and **concurrently** reads
+   them back one at a time from `data-channel.receive` (all loops under
+   `futures::join!`),
 3. returns counts so the host can assert a complete round trip.
 
 ## Running it

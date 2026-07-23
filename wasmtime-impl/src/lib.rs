@@ -193,7 +193,7 @@ impl HasData for WasiWebrtc {
 /// the guest constructs a default value through the imported constructor,
 /// adjusts the fields through the setters, then hands the resource to a
 /// data-channel-creating function such as `peer-connection.create-data-channel`
-/// or a demo `open-echo`/`create-offer`. The host that receives the resource
+/// or the demo `manual-signaling` `create-offer`. The host that receives the resource
 /// reads these fields back to configure the `webrtc-rs` channel.
 #[derive(Clone, Debug)]
 pub struct DataChannelOptions {
