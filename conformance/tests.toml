@@ -1,10 +1,10 @@
 # Conformance test registry
 #
 # The single source of truth for which conformance tests exist. The conformance
-# guest component (added in Phase 2) mirrors these ids and tags via its
-# `list-tests` export; per-target manifests (`manifests/<target>.toml`) reference
-# the `tags` here to declare whole groups unsupported and the `id`s to declare
-# expected failures. The runner plans each target's test list from this file.
+# guest component mirrors these ids and tags via its `list-tests` export; the
+# target manifests (`manifests.toml`) reference the `tags` here to declare
+# whole groups unsupported and the `id`s to declare expected failures. The
+# runner plans each target's test list from this file.
 #
 # Schema — each test is a `[[test]]` array-of-tables entry with:
 #   id          (string, required, unique) — stable identifier; matches the
@@ -16,9 +16,6 @@
 # Assertions target WIT-observable interoperable behavior only — never SDP
 # contents, candidate ordering, timing, or exact error strings.
 #
-# No tests are enabled against any target until a later phase wires an adapter
-# and a manifest; Phase 0 only requires this registry to parse.
-
 # --- Data-channel semantics ---------------------------------------------------
 
 [[test]]

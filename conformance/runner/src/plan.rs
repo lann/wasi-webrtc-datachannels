@@ -75,7 +75,7 @@ impl Matrix {
         let mut cells = BTreeMap::new();
 
         for manifest in manifests {
-            let target = &manifest.target.id;
+            let target = &manifest.id;
             // Group this target's raw results by the environment they ran in.
             let mut by_env: BTreeMap<String, BTreeMap<&str, (RawStatus, Option<String>)>> =
                 BTreeMap::new();

@@ -28,8 +28,8 @@ discarded without API cost.
   guest component (`guest/`, exporting `conformance:suite/runner`) and the
   `wasmtime` adapter (`adapters/wasmtime/`), which runs that guest against the
   native Wasmtime host (loopback ICE, in-process signaling) and emits the
-  adapter result document the runner classifies against
-  `manifests/wasmtime.toml`.
+  adapter result document the runner classifies against its `manifests.toml`
+  entry.
 - **jco adapters + first interop pair:** the browser-first host
   transpiled by jco (`adapters/jco/`), run two ways — under Node with
   `@roamhq/wrtc` (`jco-node`, `run-node.mjs`) and inside headless Chromium via
@@ -39,9 +39,9 @@ discarded without API cost.
   library and the jco-node peer via `run-node.mjs --interop`). The jco host
   drives real signaling over the suite mailbox with `fetch` (`signaling.js`) and
   implements the full `connections` surface (`webrtc.js`); the shared corpus
-  orchestration lives in `driver.js`. Classified against `manifests/jco-node.toml`,
-  `manifests/jco-browser.toml`, `manifests/wasmtime-x-jco-node.toml`, and
-  `manifests/jco-node-x-wasmtime.toml`.
+  orchestration lives in `driver.js`. Classified against the `jco-node`,
+  `jco-browser`, `wasmtime-x-jco-node`, and `jco-node-x-wasmtime` entries in
+  `manifests.toml`.
 
   jco's async ABI always uses JSPI (`WebAssembly.Suspending`), so the Node-driven
   targets (`jco-node` and the jco-node half of the interop pair) require **Node
@@ -59,9 +59,9 @@ discarded without API cost.
   `wasi:sockets` UDP loopback across processes and signaling through the suite
   mailbox — and writes `results/wasip3-guest.json`. The `conformance-interop`
   binary drives the `wasmtime`<->`wasip3-guest` pair in both orders the same
-  way it drives the jco-node pair. Classified against
-  `manifests/wasip3-guest.toml`, `manifests/wasmtime-x-wasip3-guest.toml`, and
-  `manifests/wasip3-guest-x-wasmtime.toml`.
+  way it drives the jco-node pair. Classified against the `wasip3-guest`,
+  `wasmtime-x-wasip3-guest`, and `wasip3-guest-x-wasmtime` entries in
+  `manifests.toml`.
 
 ## Layering: adapters vs. environment executors
 
@@ -106,7 +106,7 @@ adapters and runs the `jco-node` and `jco-browser` targets, composes and runs
 the `wasip3-guest` target under `wasmtime run`, runs the interop pairs
 (`wasmtime`<->`jco-node` and `wasmtime`<->`wasip3-guest`, each in both
 orders), then invokes
-`conformance-runner`, which reads the test registry, the per-target manifests,
+`conformance-runner`, which reads the test registry, the target manifests,
 and those adapter result documents, starts and health-checks a standalone
 signaling server, applies the expected-fail / unexpected-pass policy, tears the
 server down, and writes the markdown matrix to `conformance/matrix.md`. It exits
@@ -288,8 +288,7 @@ rather than rebuilding from source.
 conformance/
   README.md                # this file
   tests.toml               # test registry: id, tags, description
-  manifests/               # per-target capability manifests (<target>.toml)
-    example.toml.example   #   template (NOT loaded; see below)
+  manifests.toml           # target capability manifests ([target.<id>] tables)
   runner/                  # conformance-runner (Rust workspace member)
   signaling/
     PROTOCOL.md            # mailbox wire protocol spec
@@ -313,18 +312,22 @@ guest mirrors these ids/tags via its `list-tests` export. See the
 comments at the top of the file for the schema. Grow the corpus by adding
 `[[test]]` entries; keep tags stable across growth so manifests remain valid.
 
-## Capability manifests (`manifests/<target>.toml`)
+## Capability manifests (`manifests.toml`)
 
-Each target gets one manifest declaring:
+Every target is declared as a `[target.<id>]` table in the single
+[`manifests.toml`](manifests.toml). An entry-less table is still load-bearing:
+it registers the target, so the matrix gets a row (and a target that stops
+reporting shows up as a visible all-missing row instead of vanishing). Under
+its table a target may declare:
 
-- `[[unsupported]]` entries referencing **tags** — every matching test is
-  reported `skip-unsupported` (visible in the matrix, never a failure). A
-  mandatory `reason` explains why.
-- `[[expected-fail]]` entries referencing **test ids** — a known divergence that
-  keeps the run green while staying visible. A mandatory `tracking` reference
-  (e.g. a `TODO.md` item) records the follow-up. An expected-fail that
-  **passes** becomes `unexpected-pass` and **fails** the run, forcing the
-  manifest to be cleaned up.
+- `[[target.<id>.unsupported]]` entries referencing **tags** — every matching
+  test is reported `skip-unsupported` (visible in the matrix, never a failure).
+  A mandatory `reason` explains why.
+- `[[target.<id>.expected-fail]]` entries referencing **test ids** — a known
+  divergence that keeps the run green while staying visible. A mandatory
+  `tracking` reference (e.g. a `TODO.md` item) records the follow-up. An
+  expected-fail that **passes** becomes `unexpected-pass` and **fails** the
+  run, forcing the manifest to be cleaned up.
 
 Either kind of entry may carry an optional `environments = ["shadow", ...]`
 list scoping it to specific environments (the same strings adapters report,
@@ -335,9 +338,8 @@ when the report's environment is in the list, and takes precedence over an
 unscoped entry for the same tag/test in its environments. An empty
 `environments = []` list is a manifest error.
 
-See [`manifests/example.toml.example`](manifests/example.toml.example) for the
-full schema. That template has a `.toml.example` extension so the runner (which
-loads only `*.toml`) does not treat it as an enabled target.
+See the schema comment at the top of [`manifests.toml`](manifests.toml) for
+the full entry shapes.
 
 ## Reading the matrix
 
@@ -362,8 +364,8 @@ The runner exits nonzero if any cell is `FAIL` or `UNEXPECTED-PASS`.
 ## Adding a target
 
 A new target = a new adapter (under `adapters/`) that emits a JSON result
-document plus a new manifest (under `manifests/`). No change to the runner or
-the registry is required. Result document shape:
+document plus a new `[target.<id>]` table in `manifests.toml`. No change to
+the runner or the registry is required. Result document shape:
 
 ```json
 { "target": "wasmtime", "environment": "loopback",

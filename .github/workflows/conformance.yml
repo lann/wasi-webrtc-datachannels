@@ -158,7 +158,7 @@ jobs:
         run: |
           cargo run -p conformance-runner -- \
             --tests conformance/tests.toml \
-            --manifests conformance/manifests \
+            --manifests conformance/manifests.toml \
             --results conformance/results \
             --matrix-out conformance/shadow-matrix.md
 
