@@ -97,6 +97,10 @@ pub struct Channel {
     /// closed; the `inbox` backlog stays deliverable, after which `receive`
     /// surfaces `error.receive-buffer-overflow` rather than `closed`.
     pub overflowed: bool,
+    /// True once `receive-via-stream` has claimed this channel's inbound
+    /// messages. While set, `receive` and further `receive-via-stream` calls
+    /// fail with `error.receiving-via-stream`.
+    pub stream_claimed: bool,
     /// True once the channel (or its connection) has closed.
     pub closed: bool,
 }
@@ -109,6 +113,7 @@ impl Channel {
             inbox: VecDeque::new(),
             inbox_bytes: 0,
             overflowed: false,
+            stream_claimed: false,
             closed: false,
         }
     }

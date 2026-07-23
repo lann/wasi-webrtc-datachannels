@@ -211,6 +211,12 @@ impl GuestDataChannel for DataChannel {
                 let dead = s.closed || s.failed;
                 match s.channel_mut(self.id) {
                     Some(channel) => {
+                        // `receive-via-stream` has claimed the inbound
+                        // messages; this also resolves receives that were
+                        // pending when the claim was made.
+                        if channel.stream_claimed {
+                            return Err(Error::ReceivingViaStream);
+                        }
                         if let Some(msg) = channel.pop() {
                             return Ok(if msg.text {
                                 Message::String(String::from_utf8_lossy(&msg.data).into_owned())
@@ -274,8 +280,17 @@ impl GuestDataChannel for DataChannel {
     fn receive_via_stream(&self) -> Result<wit_bindgen::StreamReader<StreamMessage>, Error> {
         {
             let mut s = self.shared.borrow_mut();
+            // Once-only: the first call claims the channel's inbound messages.
+            if let Some(channel) = s.channel_mut(self.id) {
+                if channel.stream_claimed {
+                    return Err(Error::ReceivingViaStream);
+                }
+            }
             if matches!(channel_state(&mut s, self.id), ChannelState::Closed) {
                 return Err(Error::Closed);
+            }
+            if let Some(channel) = s.channel_mut(self.id) {
+                channel.stream_claimed = true;
             }
         }
         let shared = self.shared.clone();

@@ -31,7 +31,7 @@ use bindings::lann::webrtc_datachannels::connections::{
     DataChannel, DataChannelOptions, PeerConnection,
 };
 use bindings::lann::webrtc_datachannels::types::{
-    Error, IceCandidate, Message, SdpType, SessionDescription,
+    Error, IceCandidate, Message, MessageKind, SdpType, SessionDescription, StreamMessage,
 };
 
 /// The negotiated data-channel label used by every behavioral test. Both peers
@@ -55,7 +55,6 @@ impl Guest for Component {
         match run(&test_id, &config).await {
             Outcome::Pass => TestResult::Pass,
             Outcome::Fail(detail) => TestResult::Fail(detail),
-            Outcome::Skipped(reason) => TestResult::Skipped(reason),
         }
     }
 }
@@ -63,10 +62,11 @@ impl Guest for Component {
 bindings::export!(Component with_types_in bindings);
 
 /// The internal result of running one test, mapped onto the WIT `test-result`.
+/// (The WIT also has a `skipped` case for tests a target cannot run; every
+/// registered test currently runs everywhere, so the guest never produces it.)
 enum Outcome {
     Pass,
     Fail(String),
-    Skipped(String),
 }
 
 impl Outcome {
@@ -122,8 +122,10 @@ fn corpus() -> &'static [(&'static str, &'static [&'static str])] {
 /// Dispatch a test by id.
 async fn run(test_id: &str, config: &TestConfig) -> Outcome {
     match test_id {
-        // Peer-connection API tests and the invalid-signaling probes run as a
-        // single `both` instance with two in-process peer connections.
+        // Peer-connection API tests, the error-taxonomy probes, and the
+        // streaming forms run as a single `both` instance with two in-process
+        // peer connections (or, for `error-timed-out`, a single unconnected
+        // peer).
         "peer-offer-answer"
         | "peer-create-data-channel"
         | "peer-local-ice-candidates"
@@ -132,19 +134,13 @@ async fn run(test_id: &str, config: &TestConfig) -> Outcome {
         | "peer-close-releases"
         | "peer-invalid-sdp"
         | "error-invalid-signaling"
-        | "receive-buffer-overflow" => run_inproc(test_id, config).await,
-
-        // Streaming forms and the remaining error-taxonomy tests are not yet
-        // exercised by this guest; report them as skipped rather than asserting
-        // unverified behavior.
-        "send-via-stream"
-        | "receive-via-stream"
-        | "receive-via-stream-once"
-        | "post-close-send"
         | "error-closed"
-        | "error-timed-out" => {
-            Outcome::Skipped("not yet implemented in the conformance guest".to_string())
-        }
+        | "error-timed-out"
+        | "post-close-send"
+        | "receive-buffer-overflow"
+        | "send-via-stream"
+        | "receive-via-stream"
+        | "receive-via-stream-once" => run_inproc(test_id, config).await,
 
         // Everything else is a two-peer behavioral test driven over the mailbox.
         _ => run_two_peer(test_id, config).await,
@@ -490,6 +486,12 @@ async fn run_inproc(test_id: &str, config: &TestConfig) -> Outcome {
     match test_id {
         "error-invalid-signaling" | "peer-invalid-sdp" => Outcome::from_result(invalid_sdp().await),
         "receive-buffer-overflow" => Outcome::from_result(receive_overflow(config).await),
+        "error-closed" => Outcome::from_result(error_closed().await),
+        "error-timed-out" => Outcome::from_result(error_timed_out().await),
+        "post-close-send" => Outcome::from_result(post_close_send().await),
+        "send-via-stream" => Outcome::from_result(send_via_stream_round_trip(config).await),
+        "receive-via-stream" => Outcome::from_result(receive_via_stream_round_trip(config).await),
+        "receive-via-stream-once" => Outcome::from_result(receive_via_stream_once().await),
         _ => Outcome::from_result(inproc_round_trip(test_id).await),
     }
 }
@@ -650,6 +652,263 @@ async fn receive_overflow(config: &TestConfig) -> Result<(), String> {
                     describe(&other)
                 ))
             }
+        }
+    }
+
+    offerer.close();
+    answerer.close();
+    Ok(())
+}
+
+// --- error-taxonomy probes ---------------------------------------------------
+
+/// Assert that a `receive` on a locally closed channel yields `error.closed`.
+async fn error_closed() -> Result<(), String> {
+    let (offerer, answerer, offer_dc, _answer_dc) = inproc_connect("error-closed").await?;
+    offerer.close();
+    // Drain anything already in flight; the close must then surface as
+    // `closed`, not any other variant.
+    loop {
+        match offer_dc.receive().await {
+            Ok(_) => continue,
+            Err(Error::Closed) => break,
+            Err(other) => return Err(format!("expected closed, got {}", describe(&other))),
+        }
+    }
+    answerer.close();
+    Ok(())
+}
+
+/// Assert that a handshake that can never complete (no remote peer) surfaces
+/// `error.timed-out` from `wait-connected` rather than hanging or failing with
+/// another variant.
+async fn error_timed_out() -> Result<(), String> {
+    let peer = PeerConnection::new();
+    let options = DataChannelOptions::new();
+    options.set_label(CHANNEL_LABEL);
+    let _dc = peer
+        .create_data_channel(options)
+        .map_err(|e| format!("create-data-channel: {}", describe(&e)))?;
+    let offer = peer
+        .create_offer()
+        .await
+        .map_err(|e| format!("create-offer: {}", describe(&e)))?;
+    peer.set_local_description(offer)
+        .await
+        .map_err(|e| format!("set-local-description: {}", describe(&e)))?;
+
+    let result = match peer.wait_connected().await {
+        Ok(()) => Err("wait-connected resolved without a remote peer".to_string()),
+        Err(Error::TimedOut) => Ok(()),
+        Err(other) => Err(format!("expected timed-out, got {}", describe(&other))),
+    };
+    peer.close();
+    result
+}
+
+/// Assert that a `send` after the peer connection closes yields `error.closed`.
+async fn post_close_send() -> Result<(), String> {
+    let (offerer, answerer, offer_dc, _answer_dc) = inproc_connect("post-close-send").await?;
+    offerer.close();
+    // The close may propagate asynchronously on some hosts, so send until it
+    // surfaces (each awaited send is a yield point for the host to progress).
+    let mut sent = 0u32;
+    let result = loop {
+        match offer_dc.send(Message::Binary(vec![7u8; 8])).await {
+            Ok(()) => {
+                sent += 1;
+                if sent > 1000 {
+                    break Err("send never failed after close".to_string());
+                }
+            }
+            Err(Error::Closed) => break Ok(()),
+            Err(other) => break Err(format!("expected closed, got {}", describe(&other))),
+        }
+    };
+    answerer.close();
+    result
+}
+
+// --- streaming probes ----------------------------------------------------------
+
+/// Read every byte of a `stream-message` payload stream until it ends.
+async fn drain_byte_stream(reader: wit_bindgen::StreamReader<u8>) -> Vec<u8> {
+    let mut reader = reader;
+    let mut out = Vec::new();
+    loop {
+        let (status, chunk) = reader.read(Vec::with_capacity(8192)).await;
+        out.extend_from_slice(&chunk);
+        if matches!(
+            status,
+            wit_bindgen::StreamResult::Dropped | wit_bindgen::StreamResult::Cancelled
+        ) {
+            break;
+        }
+    }
+    out
+}
+
+/// Round-trip `count` indexed payloads through `send-via-stream` on one side
+/// and plain `receive` on the other, verifying payload integrity.
+async fn send_via_stream_round_trip(config: &TestConfig) -> Result<(), String> {
+    let (offerer, answerer, offer_dc, answer_dc) = inproc_connect("send-via-stream").await?;
+    let count = config.message_count.max(1);
+    let size = config.message_size.max(16);
+
+    let send_side = async {
+        let (mut tx, rx) = bindings::wit_stream::new();
+        let send = offer_dc.send_via_stream(rx);
+        let feed = async {
+            for index in 0..count {
+                let payload = make_payload(index, size);
+                let length = payload.len() as u32;
+                let (mut data_tx, data_rx) = bindings::wit_stream::new();
+                let message = StreamMessage {
+                    kind: MessageKind::Binary,
+                    length,
+                    data: data_rx,
+                };
+                if !tx.write_all(vec![message]).await.is_empty() {
+                    return Err("stream-message writer closed early".to_string());
+                }
+                if !data_tx.write_all(payload).await.is_empty() {
+                    return Err("payload writer closed early".to_string());
+                }
+                drop(data_tx);
+            }
+            drop(tx);
+            Ok(())
+        };
+        let (sent, fed) = futures::join!(send, feed);
+        fed?;
+        sent.map_err(|e| {
+            format!(
+                "send-via-stream: {} after {} message(s)",
+                describe(&e.error),
+                e.sent
+            )
+        })
+    };
+    // Drain the receiving side only after the send completes: the halves are
+    // deliberately not concurrent so the probe exercises the streaming send
+    // form itself rather than import concurrency (which
+    // `concurrent-send-receive` covers).
+    send_side.await?;
+    let received = recv_sequence(&answer_dc, count).await?;
+    verify_all(&received, count)?;
+
+    offerer.close();
+    answerer.close();
+    Ok(())
+}
+
+/// Round-trip `count` indexed payloads through plain `send` on one side and
+/// `receive-via-stream` on the other, verifying the `stream-message`
+/// kind/length invariants and payload integrity.
+async fn receive_via_stream_round_trip(config: &TestConfig) -> Result<(), String> {
+    let (offerer, answerer, offer_dc, answer_dc) = inproc_connect("receive-via-stream").await?;
+    let count = config.message_count.max(1);
+    let size = config.message_size.max(16);
+
+    // Send everything first, then claim and read the stream: the two halves
+    // are deliberately not concurrent so the probe exercises the streaming
+    // receive form itself rather than import concurrency (which
+    // `concurrent-send-receive` covers).
+    send_sequence(&offer_dc, count, size).await?;
+    let recv_side = async {
+        let mut stream = answer_dc
+            .receive_via_stream()
+            .map_err(|e| format!("receive-via-stream: {}", describe(&e)))?;
+        let mut received: Vec<Vec<u8>> = Vec::with_capacity(count as usize);
+        while received.len() < count as usize {
+            let (status, batch) = stream.read(Vec::with_capacity(1)).await;
+            for message in batch {
+                let is_text = matches!(message.kind, MessageKind::String);
+                let declared = message.length as usize;
+                let bytes = drain_byte_stream(message.data).await;
+                if bytes.len() != declared {
+                    return Err(format!(
+                        "stream-message declared {declared} bytes but carried {}",
+                        bytes.len()
+                    ));
+                }
+                if is_text && String::from_utf8(bytes.clone()).is_err() {
+                    return Err("text stream-message payload is not UTF-8".to_string());
+                }
+                received.push(bytes);
+            }
+            if matches!(
+                status,
+                wit_bindgen::StreamResult::Dropped | wit_bindgen::StreamResult::Cancelled
+            ) && received.len() < count as usize
+            {
+                return Err(format!(
+                    "stream ended after {} of {count} message(s)",
+                    received.len()
+                ));
+            }
+        }
+        Ok(received)
+    };
+    let received = recv_side.await?;
+    verify_all(&received, count)?;
+
+    offerer.close();
+    answerer.close();
+    Ok(())
+}
+
+/// Assert `receive-via-stream`'s once-only semantics: the first call claims the
+/// inbound messages (resolving any pending `receive` with
+/// `error.receiving-via-stream`), and every later `receive-via-stream` or
+/// `receive` fails with the same variant.
+async fn receive_via_stream_once() -> Result<(), String> {
+    let (offerer, answerer, _offer_dc, answer_dc) =
+        inproc_connect("receive-via-stream-once").await?;
+
+    // A receive pending when the stream claims the channel must resolve with
+    // `receiving-via-stream`. `join!` polls in order: the receive starts first,
+    // then the claim is made.
+    let pending = answer_dc.receive();
+    let claim = async {
+        answer_dc
+            .receive_via_stream()
+            .map_err(|e| format!("first receive-via-stream: {}", describe(&e)))
+    };
+    let (pending, stream) = futures::join!(pending, claim);
+    let _stream = stream?;
+    match pending {
+        Err(Error::ReceivingViaStream) => {}
+        Ok(_) => return Err("pending receive yielded a message".to_string()),
+        Err(other) => {
+            return Err(format!(
+                "pending receive: expected receiving-via-stream, got {}",
+                describe(&other)
+            ))
+        }
+    }
+
+    // A second claim fails.
+    match answer_dc.receive_via_stream() {
+        Err(Error::ReceivingViaStream) => {}
+        Ok(_) => return Err("second receive-via-stream succeeded".to_string()),
+        Err(other) => {
+            return Err(format!(
+                "second receive-via-stream: expected receiving-via-stream, got {}",
+                describe(&other)
+            ))
+        }
+    }
+
+    // And so does any later receive.
+    match answer_dc.receive().await {
+        Err(Error::ReceivingViaStream) => {}
+        Ok(_) => return Err("receive after claim yielded a message".to_string()),
+        Err(other) => {
+            return Err(format!(
+                "receive after claim: expected receiving-via-stream, got {}",
+                describe(&other)
+            ))
         }
     }
 

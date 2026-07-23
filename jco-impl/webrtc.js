@@ -56,6 +56,9 @@ function maxInboundBuffered() {
 export class DataChannel {
   #channel;
   #incoming;
+  // Set once `receive-via-stream` has claimed the inbound messages; further
+  // `receive`/`receive-via-stream` calls fail with `receiving-via-stream`.
+  #streamClaimed = false;
   // Retain the peer connections so they are not garbage-collected while in use.
   #keepAlive;
 
@@ -92,10 +95,77 @@ export class DataChannel {
 
   /**
    * Receive a single message from the channel, resolving with the next inbound
-   * `message` variant or throwing `{ tag: 'closed' }` once the channel closes.
+   * `message` variant or throwing `{ tag: 'closed' }` once the channel closes
+   * (or `{ tag: 'receiving-via-stream' }` once `receiveViaStream` has claimed
+   * the inbound messages).
    */
   async receive() {
+    if (this.#streamClaimed) throw { tag: "receiving-via-stream" };
     return this.#incoming.next();
+  }
+
+  /**
+   * Send a stream of messages whose payloads are each streamed as bytes.
+   * `messages` is a stream of `stream-message` records whose `data` is a byte
+   * stream. Rejects with the WIT `send-via-stream-error` record
+   * `{ error, sent }` if the channel closes early or a message's payload does
+   * not match its declared `length`.
+   */
+  async sendViaStream(messages) {
+    let sent = 0n;
+    try {
+      for await (const item of streamItems(messages)) {
+        const bytes = await collectByteStream(item.data);
+        if (bytes.length !== item.length) {
+          throw {
+            tag: "other",
+            val: `stream-message payload was ${bytes.length} bytes but length declared ${item.length}`,
+          };
+        }
+        const message =
+          item.kind === "string"
+            ? { tag: "string", val: new TextDecoder().decode(bytes) }
+            : { tag: "binary", val: bytes };
+        await this.send(message);
+        sent += 1n;
+      }
+    } catch (error) {
+      throw { error: typeof error?.tag === "string" ? error : { tag: "closed" }, sent };
+    }
+  }
+
+  /**
+   * Take over the channel's inbound messages, delivering each as a
+   * `stream-message` whose payload is a byte `ReadableStream`. Once-only: a
+   * second call (or any later `receive`) throws
+   * `{ tag: 'receiving-via-stream' }`, and any pending `receive` is resolved
+   * with it. The stream ends when the channel closes.
+   */
+  receiveViaStream() {
+    if (this.#streamClaimed) throw { tag: "receiving-via-stream" };
+    this.#streamClaimed = true;
+    const incoming = this.#incoming;
+    incoming.rejectWaiters({ tag: "receiving-via-stream" });
+    return new ReadableStream({
+      async pull(controller) {
+        let message;
+        try {
+          message = await incoming.next();
+        } catch {
+          // The channel closed (or its inbound buffer overflowed): the stream
+          // simply ends, per the WIT contract.
+          controller.close();
+          return;
+        }
+        const bytes =
+          message.tag === "string" ? new TextEncoder().encode(message.val) : message.val;
+        controller.enqueue({
+          kind: message.tag,
+          length: bytes.length,
+          data: bytesToStream(bytes),
+        });
+      },
+    });
   }
 
   /**
@@ -224,6 +294,106 @@ export async function openEcho(options) {
   return new DataChannel(channel, incoming, { near, far });
 }
 
+
+/**
+ * Iterate a guest-provided WIT stream: jco hands the host its own async-iterable
+ * `Stream` object (a web `ReadableStream` is also tolerated). Yields one stream
+ * element per iteration.
+ */
+async function* streamItems(stream) {
+  if (globalThis.ReadableStream && stream instanceof ReadableStream) {
+    const reader = stream.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        yield value;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return;
+  }
+  for await (const value of stream) {
+    // A batched read yields an array of elements.
+    if (Array.isArray(value)) {
+      yield* value;
+    } else {
+      yield value;
+    }
+  }
+}
+
+/**
+ * Coerce one chunk of a WIT byte stream (a number, an array of numbers, or a
+ * typed array, depending on how the runtime batched the read) to a
+ * `Uint8Array`.
+ */
+function toByteChunk(value) {
+  if (typeof value === "number") return Uint8Array.of(value);
+  if (value instanceof Uint8Array) return value;
+  return Uint8Array.from(value);
+}
+
+/** A single-chunk byte `ReadableStream` over `bytes`. */
+function bytesToStream(bytes) {
+  return new ReadableStream({
+    start(controller) {
+      if (bytes.length) controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
+/** Collect every byte of a WIT byte stream into one `Uint8Array`. */
+async function collectByteStream(stream) {
+  const chunks = [];
+  let total = 0;
+  const push = (value) => {
+    if (value === undefined || value === null) return;
+    const chunk = toByteChunk(value);
+    if (chunk.length) {
+      chunks.push(chunk);
+      total += chunk.length;
+    }
+  };
+  if (globalThis.ReadableStream && stream instanceof ReadableStream) {
+    const reader = stream.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  } else if (typeof stream.read === "function") {
+    // jco's own Stream object: read in batches rather than per element.
+    for (;;) {
+      const { value, done } = await stream.read({ count: 65536 });
+      push(value);
+      if (done) break;
+    }
+  } else {
+    for await (const value of stream) {
+      push(value);
+    }
+  }
+  return concatChunks(chunks, total);
+}
+
+/** Concatenate `chunks` (totalling `total` bytes) into one `Uint8Array`. */
+function concatChunks(chunks, total) {
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
 /**
  * Build a per-message inbound queue over `channel`. Each received message is
  * tagged as a `message` variant (`{ tag: 'binary', val: Uint8Array }` for binary
@@ -292,6 +462,12 @@ function incomingQueue(channel) {
       if (overflowed) return Promise.reject({ tag: "receive-buffer-overflow" });
       if (closed) return Promise.reject({ tag: "closed" });
       return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
+    },
+    /** Reject every pending waiter with `error` (a WIT `error` variant value). */
+    rejectWaiters(error) {
+      while (waiters.length) {
+        waiters.shift().reject(error);
+      }
     },
   };
 }
