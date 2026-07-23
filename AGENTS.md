@@ -54,24 +54,23 @@ wasip3-impl/                           # wasm COMPONENT on `rtc` 0.20: runs the
                                        #   and EXPORTS lann:webrtc-datachannels/
                                        #   connections; composable via `wac plug`;
                                        #   crate: wasip3-webrtc-datachannels
-examples/                              # guest components + the demo/manual-signaling driver
+examples/                              # guest components + the demo hosts
   echo-demo/                           # example guest component (Rust)
     wit/                               #   demo-only WIT for this component
       webrtc-echo-demo.wit             #     demo:webrtc-echo (rendezvous, demo)
       deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
-  cli-signaling/                       # manual-signaling CLI guest component (Rust)
-    wit/                               #   demo-only WIT for this component
-      webrtc-echo-demo.wit             #     demo:webrtc-echo (manual-signaling + world)
+  cli-signaling/                       # manual-signaling CLI guest component (Rust):
+    wit/                               #   drives connections.peer-connection with
+      world.wit                        #     guest-side vanilla (non-trickle) ICE
       deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
   webrtc-consumer/                     # minimal consumer that IMPORTS connections;
                                        #   composed (`wac plug`) with wasip3-impl for
                                        #   the in-guest round-trip integration test
     wit/deps/lann-webrtc-datachannels -> ../../../../wit  # symlink to the root package
-  wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): demo binaries
-                                       #   + the demo-only manual-signaling host
-                                       #   (src/manual.rs, also reused by the
-                                       #   wasmtime-impl integration test); the shared
-                                       #   types/connections host lives in wasmtime-impl
+  wasmtime-demo/                       # native host (Wasmtime + webrtc-rs): thin demo
+                                       #   binaries over wasmtime-impl's add_to_linker
+                                       #   + the end-to-end cli-signaling integration
+                                       #   test (tests/cli_signaling.rs)
 conformance/                           # cross-implementation conformance suite
   guest/                               #   the shared conformance guest component
   adapters/                            #   per-target drivers: wasmtime, jco (Node +
@@ -112,8 +111,9 @@ separate:
   components that use them:
   - `examples/echo-demo/wit/webrtc-echo-demo.wit` — `rendezvous`, `demo`, and
     the `webrtc-echo-demo` world.
-  - `examples/cli-signaling/wit/webrtc-echo-demo.wit` — the vanilla
-    `manual-signaling` surface and the `manual-signaling-host` world.
+  - `examples/cli-signaling/wit/world.wit` — the `cli-signaling` world
+    (`demo:cli-signaling`), which imports only the standard `connections`
+    interface; the vanilla (non-trickle) ICE handling is guest-side.
 
 Cross-package `use` must include the version, e.g.
 `use lann:webrtc-datachannels/types@0.1.0.{error}`.
@@ -128,9 +128,6 @@ updating the consumers that name them as strings:
   `wit/world.wit` also pulls in the root package through a
   `deps/lann-webrtc-datachannels` symlink),
 - the Wasmtime host bindings in `examples/wasmtime-demo/src/main.rs`,
-  `examples/wasmtime-demo/src/manual.rs` (the manual-signaling host, also
-  reused by `wasmtime-impl/tests/manual_signaling.rs`), and
-  `examples/wasmtime-demo/src/bin/cli-signaling.rs`,
 - the conformance guest, adapters, and jco transpile flags under
   `conformance/`, and
 - the `jco transpile` `--async-exports` / `--async-imports` / `--map` flags in
@@ -196,9 +193,8 @@ just demo-wasmtime          # or: just demo-wasmtime 1000 4096
 # (v46+) and `wac` on PATH; the recipe passes the async + WASIp3 flags:
 just test-webrtc-composed
 
-# Manual-signaling integration test (builds a guest, drives a real webrtc-rs
-# manual-signaling round trip through the demo manual-signaling host);
-# it is part of `just test`:
+# Rust tests, including the end-to-end cli-signaling integration test (two
+# host processes exchanging copy/paste SDP blobs over a real connection):
 just test
 
 # Cross-implementation conformance suite (loopback): builds the shared
@@ -240,7 +236,7 @@ in doubt about whether a recipe's scope is touched, run it.
 | `just fmt-check` | any Rust source (formatting). |
 | `just clippy` | any Rust source (lints all crates and every wasm target, including `wasip3-webrtc-datachannels` and `webrtc-consumer`). |
 | `just validate-wit` | any `.wit` file (root `wit/`, `wasip3-impl/wit/`, or a demo `examples/<name>/wit/`). |
-| `just test` | any Rust host/guest code, or the manual-signaling test host. |
+| `just test` | any Rust host/guest code, or the cli-signaling demo. |
 | `just build-component` | the `echo-demo` guest or its WIT. |
 | `just test-webrtc-composed` | the `wasip3-impl` provider component, the `webrtc-consumer`, or the `connections` WIT (composes them with `wac plug` and runs the round trip under `wasmtime`). |
 | `just transpile` | anything affecting the component's interfaces, or the `jco transpile` flags / `--map` targets in `jco-impl`. |

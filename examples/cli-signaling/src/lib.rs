@@ -1,10 +1,11 @@
 //! `cli-signaling`: a manual-signaling WebRTC demo driven entirely over
 //! `wasi:cli@0.3` stdio.
 //!
-//! The component drives the host-provided
-//! `demo:webrtc-echo/manual-signaling` `peer-connection` with *vanilla*
-//! (non-trickle) ICE, so a whole connection needs just two messages: the
-//! offerer prints one complete SDP offer (with all ICE candidates already
+//! The component drives the standard `lann:webrtc-datachannels/connections`
+//! `peer-connection` with guest-side *vanilla* (non-trickle) ICE: it drains
+//! `local-ice-candidates` to its end (the end-of-gathering signal) and embeds
+//! the candidates into the SDP, so a whole connection needs just two messages:
+//! the offerer prints one complete SDP offer (with all ICE candidates already
 //! embedded) and the answerer prints one complete SDP answer. Each blob is
 //! base64-encoded onto a single line so a user can copy/paste it into the other
 //! peer.
@@ -19,18 +20,12 @@ use wit_bindgen::StreamResult;
 
 wit_bindgen::generate!({
     path: "wit",
-    inline: "
-        package demo:cli-signaling-bindings;
-        world cli-signaling-bindings {
-            import demo:webrtc-echo/manual-signaling@0.1.0;
-        }
-    ",
+    world: "cli-signaling",
     generate_all,
 });
 
-use demo::webrtc_echo::manual_signaling::PeerConnection;
-use lann::webrtc_datachannels::connections::DataChannelOptions;
-use lann::webrtc_datachannels::types::{Error, Message};
+use lann::webrtc_datachannels::connections::{DataChannel, DataChannelOptions, PeerConnection};
+use lann::webrtc_datachannels::types::{Error, IceCandidate, Message, SdpType, SessionDescription};
 
 /// The label used for the negotiated data channel. Both peers observe it.
 const CHANNEL_LABEL: &str = "manual-signaling";
@@ -96,33 +91,85 @@ async fn drive(role: Role) -> Result<String, Error> {
             let options = DataChannelOptions::new();
             options.set_label(CHANNEL_LABEL);
             options.set_ordered(true);
-            let offer = pc.create_offer(options).await?;
-            present("offer", &offer).await;
+            let channel = pc.create_data_channel(options)?;
+
+            let offer = pc.create_offer().await?;
+            pc.set_local_description(offer.clone()).await?;
+            let offer_sdp = with_candidates(&pc, offer.sdp).await;
+            present("offer", &offer_sdp).await;
 
             let answer = request(&mut stdin, "answer").await;
-            pc.accept_answer(answer).await?;
+            pc.set_remote_description(SessionDescription {
+                kind: SdpType::Answer,
+                sdp: answer,
+            })
+            .await?;
 
             print("Applying answer and waiting for the connection to open…\n").await;
-            pc.connect().await?
+            pc.wait_connected().await?;
+            channel
         }
         Role::Answerer => {
             let offer = request(&mut stdin, "offer").await;
-            let answer = pc.create_answer(offer).await?;
-            present("answer", &answer).await;
+            pc.set_remote_description(SessionDescription {
+                kind: SdpType::Offer,
+                sdp: offer,
+            })
+            .await?;
+
+            let answer = pc.create_answer().await?;
+            pc.set_local_description(answer.clone()).await?;
+            let answer_sdp = with_candidates(&pc, answer.sdp).await;
+            present("answer", &answer_sdp).await;
 
             print("Waiting for the connection to open…\n").await;
-            pc.connect().await?
+            pc.wait_connected().await?;
+            first_incoming(&pc).await?
         }
     };
 
     exchange(&channel, role).await
 }
 
+/// Vanilla (non-trickle) ICE: drain `local-ice-candidates` to its end — the
+/// end-of-gathering signal — and embed every candidate into `sdp` as
+/// `a=candidate` attributes on its (single) media section, so the returned SDP
+/// is the one complete blob the peer needs.
+async fn with_candidates(pc: &PeerConnection, sdp: String) -> String {
+    let mut candidates = pc.local_ice_candidates();
+    let mut full = sdp;
+    if !full.ends_with('\n') {
+        full.push_str("\r\n");
+    }
+    loop {
+        let (status, batch) = candidates.read(Vec::with_capacity(4)).await;
+        for IceCandidate { candidate, .. } in batch {
+            if !candidate.is_empty() {
+                full.push_str("a=");
+                full.push_str(&candidate);
+                full.push_str("\r\n");
+            }
+        }
+        if matches!(status, StreamResult::Dropped | StreamResult::Cancelled) {
+            break;
+        }
+    }
+    full.push_str("a=end-of-candidates\r\n");
+    full
+}
+
+/// Adopt the data channel the offerer opened.
+async fn first_incoming(pc: &PeerConnection) -> Result<DataChannel, Error> {
+    let mut incoming = pc.incoming_data_channels();
+    let (_status, batch) = incoming.read(Vec::with_capacity(1)).await;
+    batch
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::Other("no incoming data channel".to_string()))
+}
+
 /// Send one greeting and receive the peer's greeting over the data channel.
-async fn exchange(
-    channel: &lann::webrtc_datachannels::connections::DataChannel,
-    role: Role,
-) -> Result<String, Error> {
+async fn exchange(channel: &DataChannel, role: Role) -> Result<String, Error> {
     let greeting = format!("hello from the {}", role.name());
 
     let send_fut = channel.send(Message::Binary(greeting.into_bytes()));

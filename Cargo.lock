@@ -4145,7 +4145,6 @@ dependencies = [
  "futures",
  "tokio",
  "wasmtime",
- "wasmtime-webrtc-host",
  "webrtc",
  "wit-component 0.247.0",
 ]
@@ -4155,13 +4154,13 @@ name = "wasmtime-webrtc-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "env_logger",
  "futures",
  "tokio",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-webrtc-datachannels",
- "webrtc",
 ]
 
 [[package]]

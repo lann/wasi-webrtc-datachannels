@@ -29,10 +29,10 @@ use crate::bindings::webrtc_datachannels::types::{
     self, Error, IceCandidate, Message, MessageKind, SdpType, SendViaStreamError,
     SessionDescription, StreamMessage,
 };
+use crate::data_channel::{ChannelError, CloseSignal, InboundMessage, InboundQueue, WiredFuture};
+use crate::peer_connection::{LocalCandidate, SdpError, SdpKind, WaitError};
 use crate::{
-    ChannelError, CloseSignal, DataChannel, DataChannelOptions, InboundMessage, InboundQueue,
-    PeerConnection, SdpError, SdpKind, WaitError, WasiWebrtc, WasiWebrtcCtxView, WasiWebrtcView,
-    WiredFuture,
+    DataChannel, DataChannelOptions, PeerConnection, WasiWebrtc, WasiWebrtcCtxView, WasiWebrtcView,
 };
 
 use webrtc::data_channel::DataChannel as WebrtcDataChannel;
@@ -595,7 +595,7 @@ impl HostPeerConnection for WasiWebrtcCtxView<'_> {
 struct LocalCandidateStream {
     /// The candidate receiver, or `None` if `local-ice-candidates` was already
     /// claimed (in which case the stream is empty).
-    rx: Option<UnboundedReceiver<crate::LocalCandidate>>,
+    rx: Option<UnboundedReceiver<LocalCandidate>>,
 }
 
 impl<D: Send + 'static> StreamProducer<D> for LocalCandidateStream {

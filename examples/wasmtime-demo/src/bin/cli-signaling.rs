@@ -7,11 +7,10 @@
 //!     can prompt the user over stdout and read pasted blobs from stdin,
 //!   * `wasi:*@0.2` via `wasmtime_wasi::p2`, which the guest's Rust `std` still
 //!     lowers to, and
-//!   * the demo-only `demo:webrtc-echo/manual-signaling` interface backed by
-//!     `webrtc-rs` (provided by this crate's [`manual`] module), plus the
-//!     `connections`/`types` imports (provided by
-//!     [`wasmtime_webrtc_datachannels`]), so the offer/answer exchange
-//!     drives a real connection.
+//!   * the `connections`/`types` imports (provided by
+//!     [`wasmtime_webrtc_datachannels`]), which the guest drives with
+//!     guest-side vanilla ICE, so the offer/answer exchange drives a real
+//!     connection.
 //!
 //! Usage: `cli-signaling <component.wasm> [offerer|answerer]`.
 
@@ -20,7 +19,6 @@ use wasmtime::{Config, Engine, Result, Store};
 use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_webrtc_datachannels::{WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView};
-use wasmtime_webrtc_host::manual;
 
 struct Ctx {
     wasi: WasiCtx,
@@ -89,10 +87,8 @@ async fn main() -> Result<()> {
     let mut linker: Linker<Ctx> = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
-    // Shared `connections`/`types` imports, then the demo-only
-    // `manual-signaling` interface layered on top.
+    // Shared `connections`/`types` imports — the component's only non-wasi ones.
     wasmtime_webrtc_datachannels::add_to_linker(&mut linker)?;
-    manual::add_to_linker(&mut linker)?;
 
     let mut wasi = WasiCtx::builder();
     wasi.inherit_stdio().inherit_env().args(&guest_args);
