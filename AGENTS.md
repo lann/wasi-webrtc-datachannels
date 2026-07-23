@@ -85,7 +85,7 @@ conformance/                           # cross-implementation conformance suite
   runner/                              #   classifies results against manifests and
                                        #     renders conformance/matrix.md
   signaling/                           #   conformance-signalingd HTTP mailbox server
-  manifests/, tests.toml               #   per-target expectations + the test corpus
+  manifests.toml, tests.toml           #   per-target expectations + the test corpus
 scripts/setup.sh                       # one-shot dependency setup (see below)
 ```
 

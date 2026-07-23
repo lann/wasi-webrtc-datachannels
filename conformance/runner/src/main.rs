@@ -1,12 +1,9 @@
 //! Conformance suite runner.
 //!
-//! Phase 0 scope: read the test registry (`tests.toml`) and any per-target
-//! manifests (`manifests/*.toml`), aggregate stub adapter JSON result documents,
-//! apply the expected-fail / unexpected-pass policy, render the markdown
-//! conformance matrix, and exit nonzero on any `fail` or `unexpected-pass`.
-//!
-//! Later phases add scenario provisioning, signaling-server lifecycle, and the
-//! adapter invocations that produce the result documents this runner consumes.
+//! Reads the test registry (`tests.toml`) and the target manifest file
+//! (`manifests.toml`), aggregates adapter JSON result documents, applies the
+//! expected-fail / unexpected-pass policy, renders the markdown conformance
+//! matrix, and exits nonzero on any `fail` or `unexpected-pass`.
 
 mod manifest;
 mod plan;
@@ -34,8 +31,8 @@ struct Cli {
     #[arg(long, default_value = "conformance/tests.toml")]
     tests: PathBuf,
 
-    /// Directory of per-target manifests (`<target>.toml`).
-    #[arg(long, default_value = "conformance/manifests")]
+    /// The manifest file declaring every target (`[target.<id>]` tables).
+    #[arg(long, default_value = "conformance/manifests.toml")]
     manifests: PathBuf,
 
     /// Directory of adapter JSON result documents (`*.json`). Optional; when
@@ -62,7 +59,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let registry = Registry::load(&cli.tests)?;
-    let manifests = load_manifests(&cli.manifests)?;
+    let manifests = Manifest::load_all(&cli.manifests)?;
 
     // Start the signaling server if requested, so it is up before adapters run.
     let signaling = match &cli.signaling_bin {
@@ -124,24 +121,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Load every `*.toml` manifest from a directory (missing dir => no targets).
-fn load_manifests(dir: &std::path::Path) -> Result<Vec<Manifest>> {
-    let mut manifests = Vec::new();
-    if !dir.exists() {
-        return Ok(manifests);
-    }
-    let mut paths: Vec<_> = std::fs::read_dir(dir)
-        .with_context(|| format!("reading manifests dir {}", dir.display()))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
-        .collect();
-    paths.sort();
-    for path in paths {
-        manifests.push(Manifest::load(&path)?);
-    }
-    Ok(manifests)
-}
-
 /// Load every `*.json` adapter report from a directory (missing dir => none).
 fn load_reports(dir: &std::path::Path) -> Result<Vec<AdapterReport>> {
     let mut reports = Vec::new();
@@ -192,22 +171,22 @@ mod tests {
     }
 
     fn manifest() -> Manifest {
-        toml::from_str(
+        Manifest::parse_all(
             r#"
-            [target]
-            id = "wasmtime"
+            [target.wasmtime]
 
-            [[unsupported]]
+            [[target.wasmtime.unsupported]]
             tag = "peer-connection"
             reason = "host does not implement peer-connection yet"
 
-            [[expected-fail]]
+            [[target.wasmtime.expected-fail]]
             test = "error-invalid-signaling"
             reason = "collapses to error.other"
             tracking = "TODO.md item 5"
             "#,
         )
         .unwrap()
+        .remove(0)
     }
 
     fn report(results: Vec<(&str, RawStatus)>) -> AdapterReport {
@@ -362,17 +341,16 @@ mod tests {
     }
 
     fn scoped_manifest() -> Manifest {
-        toml::from_str(
+        Manifest::parse_all(
             r#"
-            [target]
-            id = "wasmtime"
+            [target.wasmtime]
 
-            [[unsupported]]
+            [[target.wasmtime.unsupported]]
             tag = "peer-connection"
             reason = "no peer-connection under shadow"
             environments = ["shadow"]
 
-            [[expected-fail]]
+            [[target.wasmtime.expected-fail]]
             test = "error-invalid-signaling"
             reason = "relay path collapses the error"
             tracking = "TODO.md item 9"
@@ -380,6 +358,7 @@ mod tests {
             "#,
         )
         .unwrap()
+        .remove(0)
     }
 
     #[test]
@@ -472,48 +451,41 @@ mod tests {
 
     #[test]
     fn empty_environments_list_is_rejected() {
-        let m: Manifest = toml::from_str(
+        assert!(Manifest::parse_all(
             r#"
-            [target]
-            id = "wasmtime"
+            [target.wasmtime]
 
-            [[expected-fail]]
+            [[target.wasmtime.expected-fail]]
             test = "ordering"
             reason = "r"
             tracking = "t"
             environments = []
             "#,
         )
-        .unwrap();
-        assert!(m.validate().is_err());
+        .is_err());
 
-        let m: Manifest = toml::from_str(
+        assert!(Manifest::parse_all(
             r#"
-            [target]
-            id = "wasmtime"
+            [target.wasmtime]
 
-            [[unsupported]]
+            [[target.wasmtime.unsupported]]
             tag = "errors"
             reason = "r"
             environments = []
             "#,
         )
-        .unwrap();
-        assert!(m.validate().is_err());
+        .is_err());
     }
 
     #[test]
-    fn existing_manifest_files_still_load() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifests");
-        let mut loaded = 0;
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().and_then(|e| e.to_str()) == Some("toml") {
-                Manifest::load(&path)
-                    .unwrap_or_else(|e| panic!("loading {}: {e:#}", path.display()));
-                loaded += 1;
-            }
-        }
-        assert!(loaded > 0, "no manifests found in {}", dir.display());
+    fn checked_in_manifest_file_loads() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../manifests.toml");
+        let manifests = Manifest::load_all(&path)
+            .unwrap_or_else(|e| panic!("loading {}: {e:#}", path.display()));
+        assert!(
+            !manifests.is_empty(),
+            "no targets declared in {}",
+            path.display()
+        );
     }
 }

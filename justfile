@@ -48,7 +48,7 @@ test:
 # Run the conformance suite over the currently enabled targets (see
 # conformance/README.md). Builds the shared conformance guest component, runs each
 # adapter to produce conformance/results/<target>.json, then runs the runner
-# over conformance/tests.toml + conformance/manifests/ + those results — also
+# over conformance/tests.toml + conformance/manifests.toml + those results — also
 # spawning the standalone conformance-signalingd binary (ephemeral localhost
 # port, gated on /healthz) to exercise its lifecycle — and writes the matrix to
 # conformance/matrix.md, exiting nonzero on any fail or unexpected-pass.
@@ -63,7 +63,7 @@ test:
 conformance: conformance-wasmtime conformance-jco-node conformance-jco-browser conformance-wasip3 conformance-interop build-signalingd
     cargo run -p conformance-runner -- \
         --tests conformance/tests.toml \
-        --manifests conformance/manifests \
+        --manifests conformance/manifests.toml \
         --results conformance/results \
         --signaling-bin target/debug/conformance-signalingd \
         --matrix-out conformance/matrix.md
