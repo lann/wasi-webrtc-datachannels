@@ -113,13 +113,6 @@ the ad-hoc `map_err`s.
   (which is what the composed integration test needs); a routable address
   gives the peer a host candidate reachable across a real (non-loopback)
   network path, exercised by the conformance Shadow lab.
-- The in-guest handshake occasionally stalls: both peers reach a state where the
-  sans-I/O core reports no pending timer (`poll_timeout` returns `None`) and no
-  transmit, each waiting on the other, so `wait-connected` surfaces
-  `error::timed-out` (bounded by `CONNECT_TIMEOUT`). This is an upstream `rtc`
-  sans-I/O timing issue; `examples/webrtc-consumer` retries a bounded number of
-  fresh attempts to keep the integration test reliable. Root-cause and fix
-  upstream (or in its driving contract) to make a single attempt deterministic.
 - The `rtc` dependency is pinned to an upstream `master` commit (`Cargo.toml`
   `[patch.crates-io]`, `rtc = { git = "https://github.com/webrtc-rs/rtc.git",
   rev = … }`) because the empty-message receive fix
