@@ -56,7 +56,7 @@
 # `wasi:sockets` — an in-guest `wasi:http` mailbox client, and a CLI driver
 # (adapter: conformance/adapters/wasip3, run under `wasmtime run`).
 #
-# Partial-surface notes (see TODO.md item E3):
+# Partial-surface notes:
 # - The provider supplies its own host candidate from the socket it binds —
 #   `ifaces()` is `Unsupported` on wasm, so there is no OS interface
 #   enumeration or mDNS gathering.

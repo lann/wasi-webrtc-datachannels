@@ -105,20 +105,14 @@ the ad-hoc `map_err`s.
 
 ## E. Implementations
 
-### E3. `wasip3-impl` limitations to document or lift
+### E3. Unwind the `rtc` git pin once upstream ships a release
 
-- The exported `peer-connection` binds its socket on the IP address named by
-  the `WEBRTC_UDP_BIND_ADDR` environment variable, defaulting to IPv4 loopback
-  (`wasip3-impl/src/provider.rs`). Loopback connects peers on the **same host**
-  (which is what the composed integration test needs); a routable address
-  gives the peer a host candidate reachable across a real (non-loopback)
-  network path, exercised by the conformance Shadow lab.
-- The `rtc` dependency is pinned to an upstream `master` commit (`Cargo.toml`
-  `[patch.crates-io]`, `rtc = { git = "https://github.com/webrtc-rs/rtc.git",
-  rev = … }`) because the empty-message receive fix
-  ([`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131), merged
-  upstream) is not yet in any published release. Drop the patch and return to a
-  published, stable `0.20` once a release including it ships.
+The `rtc` dependency is pinned to an upstream `master` commit (`Cargo.toml`
+`[patch.crates-io]`, `rtc = { git = "https://github.com/webrtc-rs/rtc.git",
+rev = … }`) because the empty-message receive fix
+([`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131), merged
+upstream) is not yet in any published release. Drop the patch and return to a
+published, stable `0.20` once a release including it ships.
 
 ## F. Examples
 
