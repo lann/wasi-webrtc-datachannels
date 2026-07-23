@@ -30,9 +30,8 @@
 #                                 # environments; elsewhere a failure is a real
 #                                 # FAIL and a pass is a plain pass.
 #
-# Tests the conformance guest itself reports `skipped` (the streaming forms and
-# the remaining error-taxonomy probes) need no entries here: a raw `skip` is
-# classified `skip-unsupported` without manifest involvement.
+# A raw `skip` reported by an adapter is classified `skip-unsupported` without
+# manifest involvement (no registered test is currently skipped anywhere).
 
 # The native Wasmtime host over webrtc-rs (adapter: conformance/adapters/wasmtime).
 [target.wasmtime]

@@ -49,8 +49,11 @@ would catch it):
 - jco: `waitOpen` (`jco-impl/webrtc.js:219`) and the `openEcho` SDP/ICE
   sequence have no timeout.
 
-Add a bounded wait that surfaces `error::timed-out` (item D1) and also react to
+Add a bounded wait that surfaces `error::timed-out` and also react to
 `connectionstatechange`/`iceconnectionstatechange` = `failed` for fast failure.
+(The `peer-connection` path already has this — `wait-connected` times out on
+every implementation, asserted by the `error-timed-out` conformance probe —
+so what remains is the demo `open-echo`/manual-signaling surface.)
 
 ## C. WIT interface design
 
@@ -82,41 +85,25 @@ Keep future docs from reintroducing the name (it now only legitimately names
 the demo-only `manual-signaling` interface and the conformance signaling
 server).
 
+### C4. Consider aligning `error` with WASI 0.3 `error-context`
+
+Before stabilizing the interface, evaluate whether the `types.error` variant
+should align with (or be replaced by) WASI 0.3's `error-context` mechanism,
+which is the component-model-native way to attach contextual failure
+information to async operations.
+
 ## D. Error handling
-
-### D1. Typed `error` variants: wasmtime host now classifies; jco does not
-
-`error` declares `closed`, `timed-out`, `invalid-signaling`,
-`receiving-via-stream`, `other` (`wit/webrtc.wit:13-28`). The wasmtime host now
-produces all of them where they apply (`wasmtime-impl/src/host.rs`:
-`InvalidSignaling` on SDP parse/rollback, `TimedOut` on bounded waits,
-`Closed`, `ReceivingViaStream`), but many fallible paths still collapse to
-`other(string)` (item D2), and the jco host only ever rejects with
-`{ tag: 'closed' }` (`jco-impl/webrtc.js`). Wire real classification in the jco
-host too (SDP parse → `invalid-signaling`, open/gather timeout → `timed-out`
-per item B2, mid-send close → `closed`), with the conformance error-taxonomy
-probes asserting it. Consider aligning with WASI 0.3 `error-context` before
-stabilizing.
 
 ### D2. Host errors are flattened to strings at many call sites
 
 Every fallible host path does `Error::Other(e.to_string())`
 (`wasmtime-impl/src/host.rs`, `examples/wasmtime-demo/src/manual.rs`),
-discarding the `anyhow`/`webrtc-rs` source chain and giving classification
-(item D1) no single home. Follow the `wasmtime-wasi-http` pattern: a
+discarding the `anyhow`/`webrtc-rs` source chain and giving error
+classification no single home. Follow the `wasmtime-wasi-http` pattern: a
 crate-level error type with `From` conversions into the WIT variant, replacing
 the ad-hoc `map_err`s.
 
 ## E. Implementations
-
-### E1. jco host does not implement `send-via-stream` / `receive-via-stream`
-
-`connections.data-channel` declares four transport methods, but the jco
-`DataChannel` (`jco-impl/webrtc.js`, and the fuller
-`conformance/adapters/jco/webrtc.js`) implements only `label`, `send`,
-`receive`. The streaming methods are simply absent — a parity gap with the
-Wasmtime host, surfaced by the conformance suite as `skip-unsupported` on the
-streaming tests. Implement them to close the gap.
 
 ### E3. `wasip3-impl` limitations to document or lift
 
@@ -194,13 +181,11 @@ flags from the WIT) so a drifted rename fails fast with a clear message.
 ## Suggested priority
 
 1. Correctness the demos can already hit: the open/handshake timeout (B2).
-2. Finish the error taxonomy in the jco host (D1) with the crate-level error
-   type (D2).
+2. Give host errors a crate-level type instead of flattened strings (D2).
 3. Interface-stabilizing decisions (C1, C2).
 4. Strategic build-out: port the conformance adapter's `peer-connection`
    implementation to the demo jco host (`jco-impl/webrtc.js`, which still
    implements only the `openEcho` shortcut), wire `rendezvous` (F3), and take
    `wasip3`'s WIT-speaking component to a real network (F4).
-5. Cheap hygiene: streaming parity in the jco host (E1), the transpile-flag CI
-   check (G1), the remaining conformance-matrix gaps (A3), demo payload
-   verification (F1).
+5. Cheap hygiene: the transpile-flag CI check (G1), the remaining
+   conformance-matrix gaps (A3), demo payload verification (F1).

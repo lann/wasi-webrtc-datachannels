@@ -36,6 +36,9 @@ const RTCPeerConnection = await resolveRTCPeerConnection();
 // Keep the SCTP send buffer bounded; pause the producer when it fills.
 const MAX_BUFFERED_AMOUNT = 8 * 1024 * 1024;
 
+// How long `wait-connected` waits before failing with `error.timed-out`.
+const CONNECT_TIMEOUT_MS = 20_000;
+
 // The default bound on buffered inbound payload bytes awaiting `receive`.
 // There is no wire-level inbound backpressure (the W3C API has no read-side
 // flow control), so this bound is what protects memory from a slow guest
@@ -113,6 +116,9 @@ export class DataChannelOptions {
 export class DataChannel {
   #channel;
   #incoming;
+  // Set once `receive-via-stream` has claimed the inbound messages; further
+  // `receive`/`receive-via-stream` calls fail with `receiving-via-stream`.
+  #streamClaimed = false;
 
   constructor(channel) {
     this.#channel = channel;
@@ -142,10 +148,78 @@ export class DataChannel {
 
   /**
    * Receive a single message, resolving with the next inbound `message` variant
-   * or rejecting with `{ tag: 'closed' }` once the channel closes.
+   * or rejecting with `{ tag: 'closed' }` once the channel closes (or with
+   * `{ tag: 'receiving-via-stream' }` once `receiveViaStream` has claimed the
+   * inbound messages).
    */
   async receive() {
+    if (this.#streamClaimed) throw { tag: "receiving-via-stream" };
     return this.#incoming.next();
+  }
+
+  /**
+   * Send a stream of messages whose payloads are each streamed as bytes.
+   * `messages` is a `ReadableStream` of `stream-message` records whose `data`
+   * is a byte `ReadableStream`. Rejects with the WIT `send-via-stream-error`
+   * record `{ error, sent }` if the channel closes early or a message's
+   * payload does not match its declared `length`.
+   * @param {ReadableStream<{ kind: 'binary'|'string', length: number, data: ReadableStream }>} messages
+   */
+  async sendViaStream(messages) {
+    let sent = 0n;
+    try {
+      for await (const item of streamItems(messages)) {
+        const bytes = await collectByteStream(item.data);
+        if (bytes.length !== item.length) {
+          throw {
+            tag: "other",
+            val: `stream-message payload was ${bytes.length} bytes but length declared ${item.length}`,
+          };
+        }
+        const message =
+          item.kind === "string"
+            ? { tag: "string", val: new TextDecoder().decode(bytes) }
+            : { tag: "binary", val: bytes };
+        await this.send(message);
+        sent += 1n;
+      }
+    } catch (error) {
+      throw { error: typeof error?.tag === "string" ? error : { tag: "closed" }, sent };
+    }
+  }
+
+  /**
+   * Take over the channel's inbound messages, delivering each as a
+   * `stream-message` whose payload is a byte `ReadableStream`. Once-only: a
+   * second call (or any later `receive`) throws
+   * `{ tag: 'receiving-via-stream' }`, and any pending `receive` is resolved
+   * with it. The stream ends when the channel closes.
+   */
+  receiveViaStream() {
+    if (this.#streamClaimed) throw { tag: "receiving-via-stream" };
+    this.#streamClaimed = true;
+    const incoming = this.#incoming;
+    incoming.rejectWaiters({ tag: "receiving-via-stream" });
+    return new ReadableStream({
+      async pull(controller) {
+        let message;
+        try {
+          message = await incoming.next();
+        } catch {
+          // The channel closed (or its inbound buffer overflowed): the
+          // stream simply ends, per the WIT contract.
+          controller.close();
+          return;
+        }
+        const bytes =
+          message.tag === "string" ? new TextEncoder().encode(message.val) : message.val;
+        controller.enqueue({
+          kind: message.tag,
+          length: bytes.length,
+          data: bytesToStream(bytes),
+        });
+      },
+    });
   }
 
   /** Resolve once the channel is open, or reject `{ tag: 'closed' }` if it closes. */
@@ -283,7 +357,12 @@ export class PeerConnection {
     }
   }
 
-  /** Resolve once the connection reaches `connected`, or reject `{ tag: 'timed-out' }`. */
+  /**
+   * Resolve once the connection reaches `connected`, or reject
+   * `{ tag: 'timed-out' }` when it fails or when `CONNECT_TIMEOUT_MS` elapses
+   * first (a handshake that can never complete — for example with no remote
+   * peer — must not hang forever).
+   */
   async waitConnected() {
     const pc = this.#pc;
     const isConnected = () =>
@@ -294,6 +373,10 @@ export class PeerConnection {
 
     if (isConnected()) return;
     await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject({ tag: "timed-out" });
+      }, CONNECT_TIMEOUT_MS);
       const check = () => {
         if (isConnected()) {
           cleanup();
@@ -304,6 +387,7 @@ export class PeerConnection {
         }
       };
       const cleanup = () => {
+        clearTimeout(timer);
         pc.removeEventListener("connectionstatechange", check);
         pc.removeEventListener("iceconnectionstatechange", check);
       };
@@ -352,6 +436,105 @@ function eventStream(setup) {
   };
   setup(push, end);
   return { stream };
+}
+
+/**
+ * Iterate a guest-provided WIT stream: jco hands the host its own async-iterable
+ * `Stream` object (a web `ReadableStream` is also tolerated). Yields one stream
+ * element per iteration.
+ */
+async function* streamItems(stream) {
+  if (globalThis.ReadableStream && stream instanceof ReadableStream) {
+    const reader = stream.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        yield value;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return;
+  }
+  for await (const value of stream) {
+    // A batched read yields an array of elements.
+    if (Array.isArray(value)) {
+      yield* value;
+    } else {
+      yield value;
+    }
+  }
+}
+
+/**
+ * Coerce one chunk of a WIT byte stream (a number, an array of numbers, or a
+ * typed array, depending on how the runtime batched the read) to a
+ * `Uint8Array`.
+ */
+function toByteChunk(value) {
+  if (typeof value === "number") return Uint8Array.of(value);
+  if (value instanceof Uint8Array) return value;
+  return Uint8Array.from(value);
+}
+
+/** A single-chunk byte `ReadableStream` over `bytes`. */
+function bytesToStream(bytes) {
+  return new ReadableStream({
+    start(controller) {
+      if (bytes.length) controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
+/** Collect every byte of a WIT byte stream into one `Uint8Array`. */
+async function collectByteStream(stream) {
+  const chunks = [];
+  let total = 0;
+  const push = (value) => {
+    if (value === undefined || value === null) return;
+    const chunk = toByteChunk(value);
+    if (chunk.length) {
+      chunks.push(chunk);
+      total += chunk.length;
+    }
+  };
+  if (globalThis.ReadableStream && stream instanceof ReadableStream) {
+    const reader = stream.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  } else if (typeof stream.read === "function") {
+    // jco's own Stream object: read in batches rather than per element.
+    for (;;) {
+      const { value, done } = await stream.read({ count: 65536 });
+      push(value);
+      if (done) break;
+    }
+  } else {
+    for await (const value of stream) {
+      push(value);
+    }
+  }
+  return concatChunks(chunks, total);
+}
+
+/** Concatenate `chunks` (totalling `total` bytes) into one `Uint8Array`. */
+function concatChunks(chunks, total) {
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
 }
 
 /**
@@ -422,6 +605,12 @@ function incomingQueue(channel) {
       if (overflowed) return Promise.reject({ tag: "receive-buffer-overflow" });
       if (closed) return Promise.reject({ tag: "closed" });
       return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
+    },
+    /** Reject every pending waiter with `error` (a WIT `error` variant value). */
+    rejectWaiters(error) {
+      while (waiters.length) {
+        waiters.shift().reject(error);
+      }
     },
   };
 }

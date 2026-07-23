@@ -5,10 +5,10 @@
 //
 // It mirrors the wasmtime adapter's orchestration (`conformance/adapters/
 // wasmtime/src/main.rs`): a test is run either as a single in-process `both`
-// instance (peer-connection API + invalid-signaling probes), a single instance
-// the guest reports `skipped` regardless of role (streaming + remaining
-// error-taxonomy tests), or two instances — an offerer and an answerer sharing
-// one signaling room — for the behavioral/interop tests. Tests run in a single
+// instance (peer-connection API, error-taxonomy, and streaming probes), a
+// single instance the guest reports `skipped` regardless of role (currently
+// none), or two instances — an offerer and an answerer sharing one signaling
+// room — for the behavioral/interop tests. Tests run in a single
 // attempt (no retries): a nondeterministic failure is a real signal and must
 // surface, not be masked by a second attempt. The guest owns every assertion;
 // the driver only orchestrates and records.
@@ -53,16 +53,15 @@ const IN_PROCESS = new Set([
   "peer-close-releases",
   "peer-invalid-sdp",
   "error-invalid-signaling",
+  "error-closed",
+  "error-timed-out",
+  "post-close-send",
   "receive-buffer-overflow",
-]);
-const SKIP = new Set([
   "send-via-stream",
   "receive-via-stream",
   "receive-via-stream-once",
-  "post-close-send",
-  "error-closed",
-  "error-timed-out",
 ]);
+const SKIP = new Set([]);
 
 /** The orchestration plan for a test id: `in-process`, `skip`, or `two-peer`. */
 export function planFor(testId) {

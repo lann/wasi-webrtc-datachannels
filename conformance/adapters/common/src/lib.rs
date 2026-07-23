@@ -187,10 +187,9 @@ pub const TESTS: &[&str] = &[
 
 /// The two-peer behavioral subset of [`TESTS`]: the tests whose outcome depends
 /// on a working data channel between two independent peers. This is the corpus
-/// the interop pairs and the netns lab run — the peer-connection API tests are
-/// in-process (single-runtime) and the streaming / remaining error-taxonomy
-/// tests are guest-skipped, so neither exercises a runtime boundary or a
-/// candidate path.
+/// the interop pairs and the netns lab run — the peer-connection API,
+/// error-taxonomy, and streaming tests are in-process (single-runtime), so
+/// they exercise no runtime boundary or candidate path.
 pub const TWO_PEER_TESTS: &[&str] = &[
     "label-round-trip",
     "binary-message",
@@ -210,6 +209,8 @@ pub enum Plan {
     /// A single `both` instance stands up both peers in-process (no signaling).
     InProcess,
     /// A single instance that the guest reports `skipped` regardless of role.
+    /// (No registered test currently uses this plan; it remains for tests a
+    /// future corpus cannot run on any target.)
     Skip,
     /// Two instances — an offerer and an answerer — share one signaling room.
     TwoPeer,
@@ -227,13 +228,13 @@ pub fn plan_for(test_id: &str) -> Plan {
         | "peer-close-releases"
         | "peer-invalid-sdp"
         | "error-invalid-signaling"
-        | "receive-buffer-overflow" => Plan::InProcess,
-        "send-via-stream"
-        | "receive-via-stream"
-        | "receive-via-stream-once"
-        | "post-close-send"
         | "error-closed"
-        | "error-timed-out" => Plan::Skip,
+        | "error-timed-out"
+        | "post-close-send"
+        | "receive-buffer-overflow"
+        | "send-via-stream"
+        | "receive-via-stream"
+        | "receive-via-stream-once" => Plan::InProcess,
         _ => Plan::TwoPeer,
     }
 }

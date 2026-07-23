@@ -212,6 +212,82 @@ fn ready_wired(wired: Wired) -> WiredFuture {
     fut.shared()
 }
 
+/// The receiving half of a connection-close signal, shared by every data
+/// channel a `peer-connection` resource owns.
+///
+/// The `webrtc` 0.20 wrapper neither errors sends nor emits a channel
+/// `OnClose` after `PeerConnection::close`, so the host propagates the close
+/// itself: the peer connection fires its [`CloseTrigger`] (on a local `close`
+/// or on reaching the `failed`/`closed` state) and every channel operation
+/// observes it — pending `receive`s resolve with `error.closed` and later
+/// `send`s fail with it.
+#[derive(Clone)]
+pub struct CloseSignal {
+    flag: Arc<AtomicBool>,
+    fired: Shared<oneshot::Receiver<()>>,
+}
+
+impl CloseSignal {
+    /// A signal that never fires, for channels not owned by a
+    /// `peer-connection` resource (the echo/manual demo hosts close their
+    /// connections through `Drop` instead).
+    pub fn inert() -> Self {
+        let (tx, rx) = oneshot::channel();
+        // Leak the sender so the receiver stays pending forever rather than
+        // resolving to a cancellation error.
+        std::mem::forget(tx);
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+            fired: rx.shared(),
+        }
+    }
+
+    /// Whether the owning connection has closed.
+    pub fn is_closed(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+
+    /// A future resolving once the owning connection closes.
+    pub fn fired(&self) -> Shared<oneshot::Receiver<()>> {
+        self.fired.clone()
+    }
+}
+
+/// The firing half of a connection-close signal; held by the owning
+/// `peer-connection`. Cloneable so both the resource's `close` and the
+/// connection-state handler can fire it. Idempotent.
+#[derive(Clone)]
+pub struct CloseTrigger {
+    flag: Arc<AtomicBool>,
+    tx: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+}
+
+impl CloseTrigger {
+    /// Mark the connection closed and wake every waiter.
+    pub fn fire(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+        if let Some(tx) = self.tx.lock().unwrap().take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+/// Create a connected [`CloseTrigger`]/[`CloseSignal`] pair.
+pub fn close_signal() -> (CloseTrigger, CloseSignal) {
+    let (tx, rx) = oneshot::channel();
+    let flag = Arc::new(AtomicBool::new(false));
+    (
+        CloseTrigger {
+            flag: flag.clone(),
+            tx: Arc::new(Mutex::new(Some(tx))),
+        },
+        CloseSignal {
+            flag,
+            fired: rx.shared(),
+        },
+    )
+}
+
 /// The open signal and inbound-message stream produced by a channel's pump task.
 pub struct ChannelPump {
     /// Inbound messages drained from the channel, in arrival order, bounded by
@@ -323,6 +399,11 @@ pub struct DataChannel {
     /// Resolves once `receive-via-stream` is called, so pending `receive` calls
     /// can be woken and fail with `receiving-via-stream`.
     stream_started: Shared<oneshot::Receiver<()>>,
+    /// Fired once the owning `peer-connection` resource closes (inert for
+    /// channels the demo hosts construct directly). Send/receive observe it so
+    /// operations on a closed connection fail with `error.closed` even though
+    /// the `webrtc` 0.20 wrapper reports nothing itself.
+    conn_closed: CloseSignal,
     /// Keep the backing peer connection(s) alive for the channel's lifetime.
     /// Dropped in `Drop`, which also closes each connection so `webrtc-rs` tears
     /// down its ICE/DTLS/SCTP background tasks instead of leaking them. Empty on
@@ -347,21 +428,23 @@ impl DataChannel {
             channel,
             incoming: Arc::new(AsyncMutex::new(incoming)),
         });
-        Self::from_parts(label, wired, keep_alive)
+        Self::from_parts(label, wired, CloseSignal::inert(), keep_alive)
     }
 
     /// Create a channel whose transport is wired later (the synchronous
     /// `peer-connection` `create-data-channel` path). `label` is known up front;
     /// `wired` resolves once the peer connection has built and opened the
-    /// channel. The `peer-connection` resource owns the backing connection, so no
-    /// `keep_alive` is retained here.
-    pub fn deferred(label: String, wired: WiredFuture) -> Self {
-        Self::from_parts(label, wired, Vec::new())
+    /// channel. The `peer-connection` resource owns the backing connection (so
+    /// no `keep_alive` is retained here) and supplies `conn_closed`, its
+    /// connection-close signal.
+    pub fn deferred(label: String, wired: WiredFuture, conn_closed: CloseSignal) -> Self {
+        Self::from_parts(label, wired, conn_closed, Vec::new())
     }
 
     fn from_parts(
         label: String,
         wired: WiredFuture,
+        conn_closed: CloseSignal,
         keep_alive: Vec<Arc<dyn PeerConnection>>,
     ) -> Self {
         let (started_tx, started_rx) = oneshot::channel();
@@ -371,6 +454,7 @@ impl DataChannel {
             stream_receiving: Arc::new(AtomicBool::new(false)),
             stream_started_tx: Arc::new(Mutex::new(Some(started_tx))),
             stream_started: started_rx.shared(),
+            conn_closed,
             keep_alive,
         }
     }
@@ -413,6 +497,11 @@ impl DataChannel {
     /// pending `receive` calls.
     pub fn stream_started(&self) -> Shared<oneshot::Receiver<()>> {
         self.stream_started.clone()
+    }
+
+    /// The owning connection's close signal.
+    pub fn conn_closed(&self) -> CloseSignal {
+        self.conn_closed.clone()
     }
 }
 

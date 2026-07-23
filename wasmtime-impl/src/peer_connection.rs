@@ -36,8 +36,8 @@ use webrtc::peer_connection::{
 };
 
 use crate::data_channel::{
-    close_peer_connections, new_peer_connection_with, spawn_channel_wiring, wire_open_channel,
-    wiring_channel, CallbackHandler, ChannelError,
+    close_peer_connections, close_signal, new_peer_connection_with, spawn_channel_wiring,
+    wire_open_channel, wiring_channel, CallbackHandler, ChannelError, CloseSignal, CloseTrigger,
 };
 use crate::{DataChannel, SettingEngineHook};
 
@@ -122,6 +122,10 @@ struct Inner {
     /// The built peer connection, retained so `close` (and `Drop`) can tear down
     /// its `webrtc-rs` background tasks. Taken on the first close.
     pc: Arc<Mutex<Option<Arc<dyn WebrtcPeerConnection>>>>,
+    /// Fires the connection-close signal every owned data channel observes.
+    close_trigger: CloseTrigger,
+    /// The signal handed to each data channel this connection creates/adopts.
+    close_signal: CloseSignal,
 }
 
 /// A counter of in-flight spawned operations, awaitable at zero.
@@ -195,12 +199,15 @@ impl PeerConnection {
         let (inc_tx, inc_rx) = mpsc::unbounded::<DataChannel>();
         let state = Arc::new(ConnState::default());
         let pc_slot: Arc<Mutex<Option<Arc<dyn WebrtcPeerConnection>>>> = Arc::new(Mutex::new(None));
+        let (close_trigger, close_sig) = close_signal();
 
         if let Ok(handle) = Handle::try_current() {
             let state = state.clone();
             let pc_slot = pc_slot.clone();
+            let trigger = close_trigger.clone();
+            let signal = close_sig.clone();
             handle.spawn(async move {
-                let handler = connection_handler(cand_tx, inc_tx, state);
+                let handler = connection_handler(cand_tx, inc_tx, state, trigger, signal);
                 match new_peer_connection_with(
                     |engine| {
                         if let Some(hook) = &hook {
@@ -243,6 +250,8 @@ impl PeerConnection {
                 state,
                 pending_channels: Arc::new(PendingOps::default()),
                 pc: pc_slot,
+                close_trigger,
+                close_signal: close_sig,
             }),
         }
     }
@@ -299,7 +308,7 @@ impl PeerConnection {
                 "peer connection requires a running tokio runtime".to_string(),
             )));
         }
-        DataChannel::deferred(label, wired)
+        DataChannel::deferred(label, wired, self.inner.close_signal.clone())
     }
 
     /// Take the locally gathered ICE candidate stream. Returns `None` if it has
@@ -406,6 +415,10 @@ impl PeerConnection {
     /// Close the peer connection, tearing down its `webrtc-rs` background tasks.
     /// Idempotent.
     pub fn close(&self) {
+        // Fire the close signal first so pending channel operations resolve
+        // with `error.closed` (the `webrtc` 0.20 wrapper reports nothing to the
+        // channels itself), then tear down the connection.
+        self.inner.close_trigger.fire();
         let pc = self.inner.pc.lock().unwrap().take();
         close_peer_connections(pc.into_iter().collect());
     }
@@ -425,6 +438,8 @@ fn connection_handler(
     cand_tx: UnboundedSender<LocalCandidate>,
     inc_tx: UnboundedSender<DataChannel>,
     state: Arc<ConnState>,
+    close_trigger: CloseTrigger,
+    close_sig: CloseSignal,
 ) -> Arc<CallbackHandler> {
     let cand_tx = Arc::new(Mutex::new(Some(cand_tx)));
     let gather_cand_tx = cand_tx.clone();
@@ -446,10 +461,11 @@ fn connection_handler(
             })
             .on_data_channel(move |channel| {
                 let inc_tx = inc_tx.clone();
+                let signal = close_sig.clone();
                 tokio::spawn(async move {
                     let label = channel.label().await.unwrap_or_default();
                     let wired = wire_open_channel(channel);
-                    let _ = inc_tx.unbounded_send(DataChannel::deferred(label, wired));
+                    let _ = inc_tx.unbounded_send(DataChannel::deferred(label, wired, signal));
                 });
             })
             .on_connection_state(move |s| {
@@ -459,6 +475,8 @@ fn connection_handler(
                     }
                     RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
                         state.failed.store(true, Ordering::SeqCst);
+                        // A failed/closed connection closes its channels too.
+                        close_trigger.fire();
                     }
                     _ => {}
                 }
