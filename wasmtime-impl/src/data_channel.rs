@@ -30,6 +30,8 @@ use futures::future::Shared;
 use futures::lock::Mutex as AsyncMutex;
 use futures::{FutureExt, StreamExt, TryFutureExt};
 use webrtc::data_channel::{DataChannel as WebrtcDataChannel, DataChannelEvent};
+
+use crate::error::{WebrtcError, WebrtcResult};
 use webrtc::peer_connection::{
     PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCConfigurationBuilder,
     RTCIceServer, RTCIceTransportPolicy, SettingEngine,
@@ -158,17 +160,6 @@ impl InboundQueue {
     }
 }
 
-/// Why a channel's wiring failed. Cloneable so it can flow through the shared
-/// wiring future to every awaiting `send`/`receive`.
-#[derive(Clone, Debug)]
-pub enum ChannelError {
-    /// The channel closed (or its peer connection was torn down) before it
-    /// could be wired.
-    Closed,
-    /// Wiring the channel failed for an implementation-specific reason.
-    Other(String),
-}
-
 /// The transport-level parts of a wired channel: the open `webrtc-rs` channel
 /// and its shared inbound-message receiver. Cheaply cloneable so it can be the
 /// resolved value of the shared wiring future.
@@ -181,9 +172,10 @@ pub struct Wired {
     pub incoming: Arc<AsyncMutex<InboundQueue>>,
 }
 
-/// A future resolving to a channel's wired transport parts (or a wiring error),
-/// shared so every awaiting async method observes the same outcome.
-pub type WiredFuture = Shared<Pin<Box<dyn Future<Output = Result<Wired, ChannelError>> + Send>>>;
+/// A future resolving to a channel's wired transport parts (or a wiring
+/// [`WebrtcError`]), shared so every awaiting async method observes the same
+/// outcome.
+pub type WiredFuture = Shared<Pin<Box<dyn Future<Output = WebrtcResult<Wired>> + Send>>>;
 
 /// The receiving half of a connection-close signal, shared by every data
 /// channel a `peer-connection` resource owns.
@@ -321,10 +313,10 @@ pub fn spawn_channel_pump(channel: Arc<dyn WebrtcDataChannel>) -> ChannelPump {
 
 /// Drive an open (or soon-to-open) channel into an existing wiring `oneshot`,
 /// fulfilling it with the channel's transport parts once it opens, or
-/// [`ChannelError::Closed`] if it closes first.
+/// [`WebrtcError::Closed`] if it closes first.
 pub fn spawn_channel_wiring(
     channel: Arc<dyn WebrtcDataChannel>,
-    wire_tx: oneshot::Sender<Result<Wired, ChannelError>>,
+    wire_tx: oneshot::Sender<WebrtcResult<Wired>>,
 ) {
     let pump = spawn_channel_pump(channel.clone());
     let incoming = Arc::new(AsyncMutex::new(pump.incoming));
@@ -334,14 +326,14 @@ pub fn spawn_channel_wiring(
                 let _ = wire_tx.send(Ok(Wired { channel, incoming }));
             }
             Err(_) => {
-                let _ = wire_tx.send(Err(ChannelError::Closed));
+                let _ = wire_tx.send(Err(WebrtcError::Closed));
             }
         }
     });
 }
 
 /// Wire an open (or soon-to-open) channel into a [`WiredFuture`] that resolves
-/// with the channel's transport parts once it opens, or [`ChannelError::Closed`]
+/// with the channel's transport parts once it opens, or [`WebrtcError::Closed`]
 /// if it closes first. Used by the `peer-connection` resource's deferred and
 /// remote-opened channel paths.
 pub fn wire_open_channel(channel: Arc<dyn WebrtcDataChannel>) -> WiredFuture {
@@ -446,11 +438,11 @@ impl DataChannel {
 /// Build a [`WiredFuture`] from a `oneshot` receiver, returning the sender the
 /// wiring task fulfills. If the sender is dropped (the peer connection was torn
 /// down before the channel opened), the future resolves to
-/// [`ChannelError::Closed`].
-pub fn wiring_channel() -> (oneshot::Sender<Result<Wired, ChannelError>>, WiredFuture) {
-    let (tx, rx) = oneshot::channel::<Result<Wired, ChannelError>>();
-    let fut: Pin<Box<dyn Future<Output = Result<Wired, ChannelError>> + Send>> =
-        Box::pin(rx.unwrap_or_else(|_| Err(ChannelError::Closed)));
+/// [`WebrtcError::Closed`].
+pub fn wiring_channel() -> (oneshot::Sender<WebrtcResult<Wired>>, WiredFuture) {
+    let (tx, rx) = oneshot::channel::<WebrtcResult<Wired>>();
+    let fut: Pin<Box<dyn Future<Output = WebrtcResult<Wired>> + Send>> =
+        Box::pin(rx.unwrap_or_else(|_| Err(WebrtcError::Closed)));
     (tx, fut.shared())
 }
 

@@ -37,8 +37,9 @@ use webrtc::peer_connection::{
 
 use crate::data_channel::{
     close_peer_connections, close_signal, new_peer_connection_with, spawn_channel_wiring,
-    wire_open_channel, wiring_channel, CallbackHandler, ChannelError, CloseSignal, CloseTrigger,
+    wire_open_channel, wiring_channel, CallbackHandler, CloseSignal, CloseTrigger,
 };
+use crate::error::{WebrtcError, WebrtcResult};
 use crate::{DataChannel, SettingEngineHook};
 
 /// How long [`PeerConnection::wait_connected`] waits before reporting a timeout.
@@ -68,30 +69,10 @@ pub struct LocalCandidate {
     pub sdp_mline_index: Option<u16>,
 }
 
-/// Why applying a session description failed.
-#[derive(Clone, Debug)]
-pub enum SdpError {
-    /// The SDP could not be parsed or was otherwise not valid signaling.
-    InvalidSignaling(String),
-    /// Applying the description failed for an implementation-specific reason.
-    Other(String),
-}
-
-/// Why [`PeerConnection::wait_connected`] gave up.
-#[derive(Clone, Debug)]
-pub enum WaitError {
-    /// The connection did not reach `connected` within [`CONNECT_TIMEOUT`].
-    TimedOut,
-    /// The connection failed or closed before reaching `connected`.
-    Closed,
-    /// The peer connection could not be built.
-    Other(String),
-}
-
-/// A future resolving to the built peer connection, or a build-error message.
+/// A future resolving to the built peer connection, or its build error.
 /// Shared so every async method observes the same outcome.
 type BuiltFuture =
-    Shared<Pin<Box<dyn Future<Output = Result<Arc<dyn WebrtcPeerConnection>, String>> + Send>>>;
+    Shared<Pin<Box<dyn Future<Output = WebrtcResult<Arc<dyn WebrtcPeerConnection>>> + Send>>>;
 
 /// Connection-state signalling shared with the `webrtc-rs` state-change handler.
 #[derive(Default)]
@@ -194,7 +175,7 @@ impl PeerConnection {
     /// built (bind addresses, STUN/TURN servers, relay-only policy).
     pub fn new_with(hook: Option<SettingEngineHook>, ice: crate::WebrtcIceConfig) -> Self {
         let (built_tx, built_rx) =
-            oneshot::channel::<Result<Arc<dyn WebrtcPeerConnection>, String>>();
+            oneshot::channel::<WebrtcResult<Arc<dyn WebrtcPeerConnection>>>();
         let (cand_tx, cand_rx) = mpsc::unbounded::<LocalCandidate>();
         let (inc_tx, inc_rx) = mpsc::unbounded::<DataChannel>();
         let state = Arc::new(ConnState::default());
@@ -224,20 +205,20 @@ impl PeerConnection {
                         let _ = built_tx.send(Ok(pc));
                     }
                     Err(err) => {
-                        let _ = built_tx.send(Err(err.to_string()));
+                        let _ = built_tx.send(Err(WebrtcError::other(err)));
                     }
                 }
             });
         } else {
-            let _ = built_tx.send(Err(
-                "peer connection requires a running tokio runtime".to_string()
-            ));
+            let _ = built_tx.send(Err(WebrtcError::msg(
+                "peer connection requires a running tokio runtime",
+            )));
         }
 
         let built = async move {
             built_rx
                 .await
-                .unwrap_or_else(|_| Err("peer connection build was cancelled".to_string()))
+                .unwrap_or_else(|_| Err(WebrtcError::msg("peer connection build was cancelled")))
         }
         .boxed()
         .shared();
@@ -257,7 +238,7 @@ impl PeerConnection {
     }
 
     /// Await the built peer connection (or its build error).
-    async fn pc(&self) -> Result<Arc<dyn WebrtcPeerConnection>, String> {
+    async fn pc(&self) -> WebrtcResult<Arc<dyn WebrtcPeerConnection>> {
         self.inner.built.clone().await
     }
 
@@ -282,7 +263,7 @@ impl PeerConnection {
                     Ok(pc) => pc,
                     Err(err) => {
                         pending.end();
-                        let _ = wire_tx.send(Err(ChannelError::Other(err)));
+                        let _ = wire_tx.send(Err(err));
                         return;
                     }
                 };
@@ -299,13 +280,13 @@ impl PeerConnection {
                 match created {
                     Ok(channel) => spawn_channel_wiring(channel, wire_tx),
                     Err(err) => {
-                        let _ = wire_tx.send(Err(ChannelError::Other(err.to_string())));
+                        let _ = wire_tx.send(Err(WebrtcError::other(err)));
                     }
                 }
             });
         } else {
-            let _ = wire_tx.send(Err(ChannelError::Other(
-                "peer connection requires a running tokio runtime".to_string(),
+            let _ = wire_tx.send(Err(WebrtcError::msg(
+                "peer connection requires a running tokio runtime",
             )));
         }
         DataChannel::deferred(label, wired, self.inner.close_signal.clone())
@@ -324,7 +305,7 @@ impl PeerConnection {
     }
 
     /// Produce an SDP offer. The caller applies it via `set-local-description`.
-    pub async fn create_offer(&self) -> Result<String, String> {
+    pub async fn create_offer(&self) -> WebrtcResult<String> {
         let pc = self.pc().await?;
         // Wait for any spawned `create-data-channel` registrations, so the
         // offer's SDP covers every channel created before this call.
@@ -332,11 +313,11 @@ impl PeerConnection {
         pc.create_offer(None)
             .await
             .map(|desc| desc.sdp)
-            .map_err(|err| err.to_string())
+            .map_err(WebrtcError::other)
     }
 
     /// Produce an SDP answer to a previously set remote offer.
-    pub async fn create_answer(&self) -> Result<String, String> {
+    pub async fn create_answer(&self) -> WebrtcResult<String> {
         let pc = self.pc().await?;
         // Wait for any spawned `create-data-channel` registrations, so the
         // answer's SDP covers every channel created before this call.
@@ -344,26 +325,26 @@ impl PeerConnection {
         pc.create_answer(None)
             .await
             .map(|desc| desc.sdp)
-            .map_err(|err| err.to_string())
+            .map_err(WebrtcError::other)
     }
 
     /// Apply a local description, starting ICE gathering (and, in turn, the
     /// trickled `local-ice-candidates`).
-    pub async fn set_local_description(&self, kind: SdpKind, sdp: String) -> Result<(), SdpError> {
-        let pc = self.pc().await.map_err(SdpError::Other)?;
+    pub async fn set_local_description(&self, kind: SdpKind, sdp: String) -> WebrtcResult<()> {
+        let pc = self.pc().await?;
         let desc = to_rtc_description(kind, sdp)?;
         pc.set_local_description(desc)
             .await
-            .map_err(|err| SdpError::Other(err.to_string()))
+            .map_err(WebrtcError::other)
     }
 
     /// Apply the remote peer's description.
-    pub async fn set_remote_description(&self, kind: SdpKind, sdp: String) -> Result<(), SdpError> {
-        let pc = self.pc().await.map_err(SdpError::Other)?;
+    pub async fn set_remote_description(&self, kind: SdpKind, sdp: String) -> WebrtcResult<()> {
+        let pc = self.pc().await?;
         let desc = to_rtc_description(kind, sdp)?;
         pc.set_remote_description(desc)
             .await
-            .map_err(|err| SdpError::Other(err.to_string()))
+            .map_err(WebrtcError::other)
     }
 
     /// Add an ICE candidate received from the remote peer.
@@ -372,7 +353,7 @@ impl PeerConnection {
         candidate: String,
         sdp_mid: Option<String>,
         sdp_mline_index: Option<u16>,
-    ) -> Result<(), String> {
+    ) -> WebrtcResult<()> {
         let pc = self.pc().await?;
         let init = RTCIceCandidateInit {
             candidate,
@@ -383,13 +364,13 @@ impl PeerConnection {
         };
         pc.add_ice_candidate(init)
             .await
-            .map_err(|err| err.to_string())
+            .map_err(WebrtcError::invalid_signaling)
     }
 
     /// Resolve once the connection reaches `connected`, or report a timeout /
     /// failure.
-    pub async fn wait_connected(&self) -> Result<(), WaitError> {
-        self.pc().await.map_err(WaitError::Other)?;
+    pub async fn wait_connected(&self) -> WebrtcResult<()> {
+        self.pc().await?;
         let state = self.inner.state.clone();
         let deadline = tokio::time::sleep(CONNECT_TIMEOUT);
         tokio::pin!(deadline);
@@ -403,11 +384,11 @@ impl PeerConnection {
                 return Ok(());
             }
             if state.failed.load(Ordering::SeqCst) {
-                return Err(WaitError::Closed);
+                return Err(WebrtcError::Closed);
             }
             tokio::select! {
                 _ = &mut notified => continue,
-                _ = &mut deadline => return Err(WaitError::TimedOut),
+                _ = &mut deadline => return Err(WebrtcError::TimedOut),
             }
         }
     }
@@ -487,11 +468,11 @@ fn connection_handler(
 
 /// Build a `webrtc-rs` session description from a [`SdpKind`] and SDP string.
 /// A description that fails to parse is invalid signaling.
-fn to_rtc_description(kind: SdpKind, sdp: String) -> Result<RTCSessionDescription, SdpError> {
+fn to_rtc_description(kind: SdpKind, sdp: String) -> WebrtcResult<RTCSessionDescription> {
     let result = match kind {
         SdpKind::Offer => RTCSessionDescription::offer(sdp),
         SdpKind::Answer => RTCSessionDescription::answer(sdp),
         SdpKind::Pranswer => RTCSessionDescription::pranswer(sdp),
     };
-    result.map_err(|err| SdpError::InvalidSignaling(err.to_string()))
+    result.map_err(WebrtcError::invalid_signaling)
 }
