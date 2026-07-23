@@ -29,7 +29,7 @@ they behave compatibly.
 | [`wasmtime-impl`](wasmtime-impl) | The **Wasmtime host crate** (webrtc-rs), modeled after `wasmtime_wasi_http::p3`. Provides `add_to_linker` + `WasiWebrtcView` for the `types` interface and the `data-channel` resource of `connections` (the `peer-connection` resource is unimplemented). Crate name: `wasmtime-webrtc-datachannels`. |
 | [`jco-impl`](jco-impl) | The **browser-first host** (Node stand-in for the browser, jco + @roamhq/wrtc). |
 | [`examples/wasmtime-demo`](examples/wasmtime-demo) | The **native Rust host** (Wasmtime + webrtc-rs): demo binaries built on `wasmtime-impl`. |
-| [`examples/cli-signaling`](examples/cli-signaling) | The **manual-signaling CLI guest component** (Rust). |
+| [`examples/cli-signaling`](examples/cli-signaling) | The **manual-signaling CLI guest component** (Rust), driving `connections.peer-connection` with guest-side vanilla ICE. |
 | [`examples/webrtc-consumer`](examples/webrtc-consumer) | A **minimal consumer component** that imports `connections`. Composed (`wac plug`) with `wasip3-impl` for the in-guest round-trip integration test (`just test-webrtc-composed`). |
 | [`wasip3-impl`](wasip3-impl) | The **third implementation**: a wasm **component** (built for `wasm32-wasip2`) that runs the sans-I/O `rtc` 0.20 WebRTC stack *in-guest* — importing only `wasi:sockets`/`wasi:clocks` — and **exports** `lann:webrtc-datachannels/connections`. Its `SansIoPeer` core is driven over `wasi:sockets` UDP and WASI timers by an in-guest runtime pump. Composable via `wac plug`. Crate name: `wasip3-webrtc-datachannels`. |
 | [`conformance/`](conformance) | The **cross-implementation conformance suite**: a shared conformance guest run by per-target adapters (wasmtime, jco under Node and headless Chrome, the composed wasip3 stack), interop pairs, an netns lab, a Shadow lab, and a runner that renders the results matrix. `just conformance`; see [`conformance/README.md`](conformance/README.md). |
@@ -81,10 +81,11 @@ a single copy of the shared surface to edit:
     API is headed. It is the design target and is **not** required by the
     runnable demo.
 
-**`demo:webrtc-echo`** — the demo-only interfaces, which live with the demo
-components that use them ([`examples/echo-demo/wit`](examples/echo-demo/wit)
-for the echo demo, [`examples/cli-signaling/wit`](examples/cli-signaling/wit)
-for the manual-signaling demos):
+**`demo:webrtc-echo`** — the demo-only interfaces, which live with the echo
+demo that uses them ([`examples/echo-demo/wit`](examples/echo-demo/wit); the
+manual-signaling CLI demo in
+[`examples/cli-signaling`](examples/cli-signaling) imports only the standard
+`connections` interface and handles vanilla ICE guest-side):
 
 - **`rendezvous`** — a proposed, deliberately *unstandardized* HTTP signaling
   mailbox for carrying SDP/ICE between two *separate* peers via an existing

@@ -16,7 +16,6 @@ check: fmt-check clippy validate-wit test
 # Check formatting across all crates.
 fmt-check:
     cargo fmt --all -- --check
-    cargo fmt --manifest-path wasmtime-impl/tests/manual-signaling-guest/Cargo.toml -- --check
 
 # Run clippy across all crates.
 clippy:
@@ -28,7 +27,6 @@ clippy:
     cargo clippy -p webrtc-consumer --target wasm32-wasip2 -- -D warnings
     cargo clippy -p conformance-wasip3-mailbox --target wasm32-wasip2 -- -D warnings
     cargo clippy -p conformance-wasip3-driver --target wasm32-wasip2 -- -D warnings
-    cargo clippy --manifest-path wasmtime-impl/tests/manual-signaling-guest/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
 
 # Validate WIT packages.
 validate-wit:
@@ -39,7 +37,7 @@ validate-wit:
     wasm-tools component wit examples/webrtc-consumer/wit
     wasm-tools component wit conformance/wit
 
-# Run the Rust / Wasmtime tests (includes the manual-signaling integration test).
+# Run the Rust / Wasmtime tests (includes the cli-signaling integration test).
 # nextest runs faster but does not execute doctests, so run those separately.
 test:
     cargo nextest run --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest --exclude conformance-wasip3-mailbox --exclude conformance-wasip3-driver

@@ -18,14 +18,8 @@ mod data_channel;
 mod host;
 mod peer_connection;
 
-pub use data_channel::{
-    close_peer_connections, close_signal, max_inbound_buffer_bytes, new_peer_connection,
-    new_peer_connection_with, spawn_channel_pump, spawn_channel_wiring, wire_open_channel,
-    wiring_channel, CallbackHandler, ChannelError, ChannelPump, CloseSignal, CloseTrigger,
-    DataChannel, InboundBudget, InboundMessage, InboundQueue, Wired, WiredFuture,
-    DEFAULT_MAX_INBOUND_BUFFER_BYTES, MAX_INBOUND_BUFFER_ENV,
-};
-pub use peer_connection::{LocalCandidate, PeerConnection, SdpError, SdpKind, WaitError};
+pub use data_channel::{DataChannel, DEFAULT_MAX_INBOUND_BUFFER_BYTES, MAX_INBOUND_BUFFER_ENV};
+pub use peer_connection::PeerConnection;
 
 use std::sync::Arc;
 
@@ -192,8 +186,8 @@ impl HasData for WasiWebrtc {
 /// A plain configuration builder (mirroring `wasi:http`'s `request-options`):
 /// the guest constructs a default value through the imported constructor,
 /// adjusts the fields through the setters, then hands the resource to a
-/// data-channel-creating function such as `peer-connection.create-data-channel`
-/// or the demo `manual-signaling` `create-offer`. The host that receives the resource
+/// data-channel-creating function such as
+/// `peer-connection.create-data-channel`. The host that receives the resource
 /// reads these fields back to configure the `webrtc-rs` channel.
 #[derive(Clone, Debug)]
 pub struct DataChannelOptions {
@@ -222,10 +216,6 @@ impl Default for DataChannelOptions {
 /// The store's data type `T` must implement [`WasiWebrtcView`]. The engine's
 /// [`Config`](wasmtime::Config) must have `wasm_component_model_async` enabled,
 /// since the `send`/`receive` methods use the component-model async ABI.
-///
-/// The `manual-signaling` interface is **not** wired here: it is a demo-only
-/// surface implemented by the demo hosts on top of [`new_peer_connection`] and
-/// [`DataChannel`].
 ///
 /// # Example
 ///

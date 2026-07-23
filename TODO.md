@@ -36,19 +36,6 @@ remain. Still open:
   supports no STUN/TURN); a jco-node lab peer (a per-peer Node runner placed
   in a namespace) is deferred.
 
-## B. Correctness bugs (both hosts unless noted)
-
-### B2. The manual-signaling handshake can hang forever — no timeout
-
-The demo manual-signaling host's `connect`/gathering waits
-(`examples/wasmtime-demo/src/manual.rs`) are unbounded, so a failed ICE/DTLS
-negotiation hangs indefinitely (only the CI job timeout would catch it). The
-`open-echo` half of this item is gone: the echo demo now drives the standard
-`connections` interface, whose `wait-connected` is bounded on every
-implementation (asserted by the `error-timed-out` conformance probe). The
-remaining fix is to rebuild `cli-signaling` on the standard interface too,
-deleting the bespoke manual host rather than bounding it.
-
 ## C. WIT interface design
 
 ### C1. `peer-connection` semantics to pin down in the WIT docs
@@ -76,8 +63,7 @@ added it cannot simply be a sibling `option`).
 The WIT surface is `peer-connection`, but prose has previously referenced a
 "`signaling` interface/design target"; the known instances have been corrected.
 Keep future docs from reintroducing the name (it now only legitimately names
-the demo-only `manual-signaling` interface and the conformance signaling
-server).
+the manual-signaling CLI demo and the conformance signaling server).
 
 ### C4. Consider aligning `error` with WASI 0.3 `error-context`
 
@@ -91,7 +77,7 @@ information to async operations.
 ### D2. Host errors are flattened to strings at many call sites
 
 Every fallible host path does `Error::Other(e.to_string())`
-(`wasmtime-impl/src/host.rs`, `examples/wasmtime-demo/src/manual.rs`),
+(`wasmtime-impl/src/host.rs`),
 discarding the `anyhow`/`webrtc-rs` source chain and giving error
 classification no single home. Follow the `wasmtime-wasi-http` pattern: a
 crate-level error type with `From` conversions into the WIT variant, replacing
@@ -158,10 +144,9 @@ flags from the WIT) so a drifted rename fails fast with a clear message.
 
 ## Suggested priority
 
-1. Correctness the demos can already hit: the open/handshake timeout (B2).
-2. Give host errors a crate-level type instead of flattened strings (D2).
-3. Interface-stabilizing decisions (C1, C2).
-4. Strategic build-out: wire `rendezvous` (F3) and take `wasip3`'s
+1. Give host errors a crate-level type instead of flattened strings (D2).
+2. Interface-stabilizing decisions (C1, C2).
+3. Strategic build-out: wire `rendezvous` (F3) and take `wasip3`'s
    WIT-speaking component to a real network (F4).
-5. Cheap hygiene: the transpile-flag CI check (G1), the remaining
+4. Cheap hygiene: the transpile-flag CI check (G1), the remaining
    conformance-matrix gaps (A3), demo payload verification (F1).

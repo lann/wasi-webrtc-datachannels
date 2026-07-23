@@ -2,15 +2,13 @@
 //!
 //! [`DataChannel`] is the concrete host type mapped onto the
 //! `lann:webrtc-datachannels/connections.data-channel` resource. It wraps an
-//! open `webrtc-rs` data channel, its inbound-message stream, and the peer
-//! connection(s) that must outlive it.
+//! open `webrtc-rs` data channel and its inbound-message stream.
 //!
-//! A channel may be **wired** immediately (the echo/manual hosts build the
-//! `webrtc-rs` channel before constructing the resource) or **deferred** (the
-//! `peer-connection` resource's synchronous `create-data-channel` hands back a
-//! resource right away, then wires it once the peer connection has been built
-//! and the channel opened). Both share the same [`DataChannel`] type; the async
-//! methods await [`DataChannel::wired`] before touching the transport.
+//! A channel's transport is **deferred**: the `peer-connection` resource's
+//! synchronous `create-data-channel` hands back a resource right away, then
+//! wires it once the peer connection has been built and the channel opened
+//! (remote-opened channels are wired the same way). The async methods await
+//! [`DataChannel::wired`] before touching the transport.
 //!
 //! The `webrtc` 0.20 data channel has no `on_open`/`on_message` callbacks;
 //! instead each channel is driven by a per-channel **pump** task that loops on
@@ -160,24 +158,6 @@ impl InboundQueue {
     }
 }
 
-impl InboundMessage {
-    /// A binary inbound message.
-    pub fn binary(data: Vec<u8>) -> Self {
-        Self {
-            is_string: false,
-            data,
-        }
-    }
-
-    /// A text (UTF-8) inbound message.
-    pub fn text(data: Vec<u8>) -> Self {
-        Self {
-            is_string: true,
-            data,
-        }
-    }
-}
-
 /// Why a channel's wiring failed. Cloneable so it can flow through the shared
 /// wiring future to every awaiting `send`/`receive`.
 #[derive(Clone, Debug)]
@@ -204,13 +184,6 @@ pub struct Wired {
 /// A future resolving to a channel's wired transport parts (or a wiring error),
 /// shared so every awaiting async method observes the same outcome.
 pub type WiredFuture = Shared<Pin<Box<dyn Future<Output = Result<Wired, ChannelError>> + Send>>>;
-
-/// Build a [`WiredFuture`] that is already resolved to `wired`.
-fn ready_wired(wired: Wired) -> WiredFuture {
-    let fut: Pin<Box<dyn Future<Output = Result<Wired, ChannelError>> + Send>> =
-        Box::pin(futures::future::ready(Ok(wired)));
-    fut.shared()
-}
 
 /// The receiving half of a connection-close signal, shared by every data
 /// channel a `peer-connection` resource owns.
@@ -399,54 +372,20 @@ pub struct DataChannel {
     /// Resolves once `receive-via-stream` is called, so pending `receive` calls
     /// can be woken and fail with `receiving-via-stream`.
     stream_started: Shared<oneshot::Receiver<()>>,
-    /// Fired once the owning `peer-connection` resource closes (inert for
-    /// channels the demo hosts construct directly). Send/receive observe it so
-    /// operations on a closed connection fail with `error.closed` even though
-    /// the `webrtc` 0.20 wrapper reports nothing itself.
+    /// Fired once the owning `peer-connection` resource closes. Send/receive
+    /// observe it so operations on a closed connection fail with
+    /// `error.closed` even though the `webrtc` 0.20 wrapper reports nothing
+    /// itself.
     conn_closed: CloseSignal,
-    /// Keep the backing peer connection(s) alive for the channel's lifetime.
-    /// Dropped in `Drop`, which also closes each connection so `webrtc-rs` tears
-    /// down its ICE/DTLS/SCTP background tasks instead of leaking them. Empty on
-    /// the deferred `peer-connection` path, where the `peer-connection` resource
-    /// owns and closes the connection.
-    keep_alive: Vec<Arc<dyn PeerConnection>>,
 }
 
 impl DataChannel {
-    /// Wrap an already-open data channel and its inbound-message receiver,
-    /// retaining the given peer connections so they outlive the channel. Used by
-    /// the echo/manual hosts, which build the channel before the resource. The
-    /// `label` is supplied by the caller (the `webrtc` 0.20 channel exposes it
-    /// only through an async accessor).
-    pub fn new(
-        label: String,
-        channel: Arc<dyn WebrtcDataChannel>,
-        incoming: InboundQueue,
-        keep_alive: Vec<Arc<dyn PeerConnection>>,
-    ) -> Self {
-        let wired = ready_wired(Wired {
-            channel,
-            incoming: Arc::new(AsyncMutex::new(incoming)),
-        });
-        Self::from_parts(label, wired, CloseSignal::inert(), keep_alive)
-    }
-
     /// Create a channel whose transport is wired later (the synchronous
     /// `peer-connection` `create-data-channel` path). `label` is known up front;
     /// `wired` resolves once the peer connection has built and opened the
-    /// channel. The `peer-connection` resource owns the backing connection (so
-    /// no `keep_alive` is retained here) and supplies `conn_closed`, its
-    /// connection-close signal.
-    pub fn deferred(label: String, wired: WiredFuture, conn_closed: CloseSignal) -> Self {
-        Self::from_parts(label, wired, conn_closed, Vec::new())
-    }
-
-    fn from_parts(
-        label: String,
-        wired: WiredFuture,
-        conn_closed: CloseSignal,
-        keep_alive: Vec<Arc<dyn PeerConnection>>,
-    ) -> Self {
+    /// channel. The owning `peer-connection` resource supplies `conn_closed`,
+    /// its connection-close signal.
+    pub(crate) fn deferred(label: String, wired: WiredFuture, conn_closed: CloseSignal) -> Self {
         let (started_tx, started_rx) = oneshot::channel();
         Self {
             label,
@@ -455,7 +394,6 @@ impl DataChannel {
             stream_started_tx: Arc::new(Mutex::new(Some(started_tx))),
             stream_started: started_rx.shared(),
             conn_closed,
-            keep_alive,
         }
     }
 
@@ -516,12 +454,6 @@ pub fn wiring_channel() -> (oneshot::Sender<Result<Wired, ChannelError>>, WiredF
     (tx, fut.shared())
 }
 
-impl Drop for DataChannel {
-    fn drop(&mut self) {
-        close_peer_connections(std::mem::take(&mut self.keep_alive));
-    }
-}
-
 /// Close each peer connection so `webrtc-rs` tears down its ICE/DTLS/SCTP
 /// background tasks.
 ///
@@ -555,36 +487,16 @@ pub fn close_peer_connections(connections: Vec<Arc<dyn PeerConnection>>) {
     }
 }
 
-/// Create a peer connection, giving the caller a chance to customize the
-/// `webrtc-rs` [`SettingEngine`] first and supplying the event `handler` that
-/// receives its callbacks (ICE candidates, remote data channels, connection
-/// state). The `webrtc` 0.20 builder takes a single
-/// [`PeerConnectionEventHandler`] at build time, so callbacks cannot be attached
-/// after construction.
-///
-/// The crate deliberately does **not** hardcode any environment-driven ICE
-/// tweaks. Instead, `configure` is run against a fresh [`SettingEngine`] before
-/// the peer connection is built, mirroring the customization hook
-/// wasmtime-wasi-http exposes via its `WasiHttpHooks`.
-///
-/// Peers bind on IPv4 loopback (`127.0.0.1`), which gathers a loopback host
-/// candidate so two peers sharing one host connect. Demo and test hosts use the
-/// `configure` hook to opt into loopback ICE candidates via
-/// [`WasiWebrtcCtx::set_setting_engine_hook`](crate::WasiWebrtcCtx::set_setting_engine_hook).
-pub async fn new_peer_connection(
-    configure: impl FnOnce(&mut SettingEngine),
-    handler: Arc<dyn PeerConnectionEventHandler>,
-) -> Result<Arc<dyn PeerConnection>> {
-    new_peer_connection_with(configure, crate::WebrtcIceConfig::default(), handler).await
-}
-
-/// Like [`new_peer_connection`] but with an explicit [`WebrtcIceConfig`](crate::WebrtcIceConfig)
+/// Create a peer connection with an explicit [`WebrtcIceConfig`](crate::WebrtcIceConfig)
 /// controlling the UDP bind addresses, STUN/TURN servers, and ICE transport
-/// policy. A default config reproduces [`new_peer_connection`]'s built-in
-/// loopback behavior; the conformance netns lab (see `conformance/README.md`)
-/// overrides it per scenario to exercise host, server-reflexive, and relay
-/// candidate paths.
-pub async fn new_peer_connection_with(
+/// policy, giving the caller a chance to customize the `webrtc-rs`
+/// [`SettingEngine`] first and supplying the event `handler` that receives its
+/// callbacks (the `webrtc` 0.20 builder takes a single
+/// [`PeerConnectionEventHandler`] at build time). A default config binds IPv4
+/// loopback; the conformance netns lab (see `conformance/README.md`) overrides
+/// it per scenario to exercise host, server-reflexive, and relay candidate
+/// paths.
+pub(crate) async fn new_peer_connection_with(
     configure: impl FnOnce(&mut SettingEngine),
     ice: crate::WebrtcIceConfig,
     handler: Arc<dyn PeerConnectionEventHandler>,
@@ -645,8 +557,6 @@ pub struct CallbackHandler {
     on_data_channel: Option<Box<dyn Fn(Arc<dyn WebrtcDataChannel>) + Send + Sync>>,
     on_connection_state:
         Option<Box<dyn Fn(webrtc::peer_connection::RTCPeerConnectionState) + Send + Sync>>,
-    on_ice_connection_state:
-        Option<Box<dyn Fn(webrtc::peer_connection::RTCIceConnectionState) + Send + Sync>>,
 }
 
 impl CallbackHandler {
@@ -687,15 +597,6 @@ impl CallbackHandler {
         self.on_connection_state = Some(Box::new(f));
         self
     }
-
-    /// Register a callback for ICE-connection state transitions.
-    pub fn on_ice_connection_state(
-        mut self,
-        f: impl Fn(webrtc::peer_connection::RTCIceConnectionState) + Send + Sync + 'static,
-    ) -> Self {
-        self.on_ice_connection_state = Some(Box::new(f));
-        self
-    }
 }
 
 #[async_trait::async_trait]
@@ -728,15 +629,6 @@ impl PeerConnectionEventHandler for CallbackHandler {
         state: webrtc::peer_connection::RTCPeerConnectionState,
     ) {
         if let Some(f) = &self.on_connection_state {
-            f(state);
-        }
-    }
-
-    async fn on_ice_connection_state_change(
-        &self,
-        state: webrtc::peer_connection::RTCIceConnectionState,
-    ) {
-        if let Some(f) = &self.on_ice_connection_state {
             f(state);
         }
     }
