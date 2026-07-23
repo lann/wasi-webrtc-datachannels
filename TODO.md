@@ -17,16 +17,17 @@ lettering has gaps.
 
 The suite (see `conformance/README.md`) is built and green in CI: a shared
 conformance guest, the `conformance-signalingd` mailbox, adapters for
-`wasmtime`, `jco-node`, `jco-browser`, and `wasip3-guest`, the
-`wasmtime`<->`jco-node` interop pair (both orders) — all run in CI over
-loopback via `just conformance` — plus the Shadow lab in CI (non-loopback,
+`wasmtime`, `jco-node`, `jco-browser`, and `wasip3-guest`, the interop pairs
+`wasmtime`<->`jco-node`, `wasmtime`<->`jco-browser`, and
+`wasmtime`<->`wasip3-guest` (both orders each) — all run in CI over loopback
+via `just conformance` — plus the Shadow lab in CI (non-loopback,
 deterministic) and the workstation-only netns lab (`just conformance-netns` /
 `just conformance-nat`) covering `lan`, `stun-srflx` (behind a port-restricted
 cone NAT), `turn-relay`, and `nat-symmetric`. No manifest expected-fails
 remain. Still open:
 
-- **Full interop matrix.** No jco-browser interop pairs exist, and the
-  interop pairs run over loopback only.
+- **Non-loopback interop.** The interop pairs run over loopback only; the
+  labs run single-runtime peers.
 - **NAT-matrix confirmation.** The NAT scenarios are built and verified
   statically, but a clean `just conformance-nat` run on a workstation (real
   kernel, root) has not been confirmed; they briefly ran as a nightly

@@ -20,8 +20,8 @@ name: Conformance
 # with the wasip3-impl provider — the sans-I/O rtc stack over WASIp3
 # wasi:sockets — plus an in-guest wasi:http mailbox client and a CLI driver,
 # run under `wasmtime run`), and the cross-runtime interop pairs
-# `wasmtime`<->`jco-node` and `wasmtime`<->`wasip3-guest`, each in both
-# orders.
+# `wasmtime`<->`jco-node`, `wasmtime`<->`jco-browser` (one headless-Chromium
+# instance per test), and `wasmtime`<->`wasip3-guest`, each in both orders.
 
 on:
   push:

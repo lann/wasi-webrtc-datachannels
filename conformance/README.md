@@ -30,18 +30,19 @@ discarded without API cost.
   native Wasmtime host (loopback ICE, in-process signaling) and emits the
   adapter result document the runner classifies against its `manifests.toml`
   entry.
-- **jco adapters + first interop pair:** the browser-first host
+- **jco adapters + interop pairs:** the browser-first host
   transpiled by jco (`adapters/jco/`), run two ways — under Node with
   `@roamhq/wrtc` (`jco-node`, `run-node.mjs`) and inside headless Chromium via
   playwright-core (`jco-browser`, `run-browser.mjs`) — plus the cross-runtime
-  interop pair `wasmtime`<->`jco-node` in both orders (the `conformance-interop`
-  binary in `adapters/wasmtime/`, which drives one wasmtime peer via the adapter
-  library and the jco-node peer via `run-node.mjs --interop`). The jco host
-  drives real signaling over the suite mailbox with `fetch` (`signaling.js`) and
-  implements the full `connections` surface (`webrtc.js`); the shared corpus
-  orchestration lives in `driver.js`. Classified against the `jco-node`,
-  `jco-browser`, `wasmtime-x-jco-node`, and `jco-node-x-wasmtime` entries in
-  `manifests.toml`.
+  interop pairs `wasmtime`<->`jco-node` and `wasmtime`<->`jco-browser`, each in
+  both orders (the `conformance-interop` binary in `adapters/wasmtime/`, which
+  drives one wasmtime peer via the adapter library and the jco peer via
+  `run-node.mjs --interop` / `run-browser.mjs --interop` — the browser
+  direction launches one headless-Chromium instance per test). The jco host
+  drives real signaling over the suite mailbox with `fetch` (`signaling.js`)
+  and implements the full `connections` surface (`webrtc.js`); the shared
+  corpus orchestration lives in `driver.js`. Classified against the `jco-node`,
+  `jco-browser`, and the four jco pair entries in `manifests.toml`.
 
   The transpile step post-processes the generated module with
   `patch-generated.mjs`, a self-deactivating workaround for a jco codegen bug
@@ -111,8 +112,8 @@ the `wasmtime` adapter (which starts its own in-process signaling server and
 writes `conformance/results/wasmtime.json`), transpiles the guest for the jco
 adapters and runs the `jco-node` and `jco-browser` targets, composes and runs
 the `wasip3-guest` target under `wasmtime run`, runs the interop pairs
-(`wasmtime`<->`jco-node` and `wasmtime`<->`wasip3-guest`, each in both
-orders), then invokes
+(`wasmtime`<->`jco-node`, `wasmtime`<->`jco-browser`, and
+`wasmtime`<->`wasip3-guest`, each in both orders), then invokes
 `conformance-runner`, which reads the test registry, the target manifests,
 and those adapter result documents, starts and health-checks a standalone
 signaling server, applies the expected-fail / unexpected-pass policy, tears the
