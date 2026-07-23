@@ -50,6 +50,20 @@ const { values } = parseArgs({
     // How many tests to run concurrently (each test's peers use their own
     // signaling room, so tests are independent).
     jobs: { type: "string", default: "4" },
+    // Base URL of an already-running signaling server. When omitted, this
+    // adapter spawns its own `conformance-signalingd`.
+    server: { type: "string" },
+    // Single-instance interop mode: run exactly one guest instance for one
+    // `--test`/`--role`/`--room` against an already-running `--server`,
+    // printing the raw `test-result` (`{ "tag": ... }`) as JSON to stdout.
+    // Used by the cross-runtime interop orchestrator (conformance-interop) to
+    // drive the jco-browser half of a wasmtime<->jco-browser pair.
+    interop: { type: "boolean", default: false },
+    role: { type: "string", default: "offerer" },
+    room: { type: "string", default: "interop" },
+    test: { type: "string", default: "interop-handshake" },
+    "message-count": { type: "string", default: "16" },
+    "message-size": { type: "string", default: "512" },
   },
 });
 
@@ -234,6 +248,42 @@ async function runInPage({ base, only, jobs }) {
   });
 }
 
+/**
+ * The single interop test run performed inside the browser page. Serialized and
+ * evaluated via `page.evaluate`; the signaling server is reached through this
+ * adapter's same-origin proxy at `base`.
+ */
+async function runInteropInPage({ base, testId, config }) {
+  // Unlock non-filtered host ICE candidates (see file header).
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stream.getTracks().forEach((t) => t.stop());
+
+  const [{ MAX_INBOUND_BUFFER_BYTES }, connections, { Session }, { instantiate }] =
+    await Promise.all([
+      import(`${base}/driver.js`),
+      import(`${base}/webrtc.js`),
+      import(`${base}/signaling.js`),
+      import(`${base}/generated/conformance-guest.js`),
+    ]);
+  globalThis.WEBRTC_MAX_INBOUND_BUFFER_BYTES = MAX_INBOUND_BUFFER_BYTES;
+
+  const names = [
+    "conformance-guest.core.wasm",
+    "conformance-guest.core2.wasm",
+    "conformance-guest.core3.wasm",
+  ];
+  const modules = new Map();
+  for (const name of names) {
+    modules.set(name, await WebAssembly.compileStreaming(fetch(`${base}/generated/${name}`)));
+  }
+
+  const instance = await instantiate((name) => modules.get(name), {
+    "conformance:signaling/mailbox": { Session },
+    "lann:webrtc-datachannels/connections": connections,
+  });
+  return instance.runner.runTest(testId, config);
+}
+
 async function main() {
   try {
     await access(join(values.generated, "conformance-guest.js"));
@@ -248,10 +298,17 @@ async function main() {
     throw new Error("no Chrome/Chromium binary found; set CHROME_PATH to a Chrome 137+ executable");
   }
 
-  const signaling = await spawnSignaling(values["signaling-bin"]);
-  const server = await startServer(signaling.base);
+  if (values.interop && !values.server) {
+    throw new Error("--interop requires --server");
+  }
+
+  // Use the given already-running signaling server, or spawn our own. Either
+  // way the page reaches it through this adapter's same-origin proxy.
+  const owned = values.server ? null : await spawnSignaling(values["signaling-bin"]);
+  const signalingBase = values.server ?? owned.base;
+  const server = await startServer(signalingBase);
   const base = `http://127.0.0.1:${server.address().port}`;
-  process.stderr.write(`signaling server ready at ${signaling.base} (proxied via ${base})\n`);
+  process.stderr.write(`signaling server at ${signalingBase} (proxied via ${base})\n`);
 
   const browser = await chromium.launch({
     executablePath,
@@ -273,11 +330,31 @@ async function main() {
     page.on("pageerror", (err) => console.error(`[browser error] ${err.stack ?? err.message}`));
     await page.goto(`${base}/`);
 
+    // Single-instance interop mode: one guest instance, one test/role/room;
+    // emit just the raw result to stdout.
+    if (values.interop) {
+      const config = {
+        role: values.role,
+        signalingServer: base,
+        room: values.room,
+        messageCount: Number(values["message-count"]),
+        messageSize: Number(values["message-size"]),
+        trickle: true,
+      };
+      const result = await page.evaluate(runInteropInPage, {
+        base,
+        testId: values.test,
+        config,
+      });
+      process.stdout.write(`${JSON.stringify(result)}\n`);
+      return;
+    }
+
     results = await page.evaluate(runInPage, { base, only: values.only, jobs: Number(values.jobs) });
   } finally {
     await browser.close();
     server.close();
-    await signaling.shutdown();
+    if (owned) await owned.shutdown();
   }
 
   const report = { target: values.target, environment: values.environment, results };

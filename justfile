@@ -55,7 +55,8 @@ test:
 # browser-first host transpiled by jco, run under Node and headless Chromium),
 # wasip3-guest (the whole WebRTC stack in wasm: the guest composed with the
 # wasip3-impl provider, run under `wasmtime run`), plus the interop pairs
-# wasmtime<->jco-node and wasmtime<->wasip3-guest (both orders each). The jco
+# wasmtime<->jco-node, wasmtime<->jco-browser, and wasmtime<->wasip3-guest
+# (both orders each). The jco
 # targets need a JSPI-capable Node (24+; see conformance-jco-node) and, for the
 # browser target, a Chrome 137+ binary (auto-detected, or set CHROME_PATH).
 conformance: conformance-wasmtime conformance-jco-node conformance-jco-browser conformance-wasip3 conformance-interop build-signalingd
@@ -135,10 +136,11 @@ conformance-jco-node: transpile-conformance-guest build-signalingd
 conformance-jco-browser: transpile-conformance-guest build-signalingd
     cd conformance/adapters/jco && timeout {{conformance-timeout}} npm run run:browser
 
-# Run the interop pairs (each in both orders): wasmtime<->jco-node and
+# Run the interop pairs (each in both orders): wasmtime<->jco-node,
+# wasmtime<->jco-browser (one headless-Chromium instance per test), and
 # wasmtime<->wasip3-guest — one peer per runtime shares a signaling room and a
 # real WebRTC data channel. Writes conformance/results/<pair>.json for each of
-# the four pair directions.
+# the six pair directions.
 conformance-interop: transpile-conformance-guest build-conformance-wasip3 build-signalingd
     cargo build --release -p conformance-adapter-wasmtime --bin conformance-interop
     timeout {{conformance-timeout}} target/release/conformance-interop

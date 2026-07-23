@@ -79,5 +79,7 @@
 # `conformance-interop` binary in conformance/adapters/wasmtime.
 [target.wasmtime-x-jco-node]
 [target.jco-node-x-wasmtime]
+[target.wasmtime-x-jco-browser]
+[target.jco-browser-x-wasmtime]
 [target.wasmtime-x-wasip3-guest]
 [target.wasip3-guest-x-wasmtime]

@@ -1,21 +1,22 @@
 //! Cross-runtime interop orchestrator for the conformance suite.
 //!
-//! It runs the interop pairs — `wasmtime` <-> `jco-node` and `wasmtime` <->
-//! `wasip3-guest` — each in both orders. One peer is a native wasmtime guest
-//! instance (provisioned by [`conformance_adapter_wasmtime`]) and the other is
-//! driven out-of-process: the jco-node peer via
-//! `conformance/adapters/jco/run-node.mjs --interop`, the wasip3-guest peer via
-//! `wasmtime run` over the fully composed component
-//! ([`conformance_adapter_wasip3::Wasip3Peer`]). Both peers of a pair share one
-//! in-process `conformance-signalingd` room and connect over a real WebRTC data
-//! channel, so a green result proves the two runtimes are genuinely
-//! interoperable — not merely that each passes against itself.
+//! It runs the interop pairs — `wasmtime` <-> `jco-node`, `wasmtime` <->
+//! `jco-browser`, and `wasmtime` <-> `wasip3-guest` — each in both orders. One
+//! peer is a native wasmtime guest instance (provisioned by
+//! [`conformance_adapter_wasmtime`]) and the other is driven out-of-process:
+//! the jco-node peer via `conformance/adapters/jco/run-node.mjs --interop`,
+//! the jco-browser peer via `run-browser.mjs --interop` (one headless-Chromium
+//! instance per test), and the wasip3-guest peer via `wasmtime run` over the
+//! fully composed component ([`conformance_adapter_wasip3::Wasip3Peer`]). Both
+//! peers of a pair share one in-process `conformance-signalingd` room and
+//! connect over a real WebRTC data channel, so a green result proves the two
+//! runtimes are genuinely interoperable — not merely that each passes against
+//! itself.
 //!
 //! It writes one adapter result document per direction
-//! (`wasmtime-x-jco-node.json`, `jco-node-x-wasmtime.json`,
-//! `wasmtime-x-wasip3-guest.json`, `wasip3-guest-x-wasmtime.json`) that the
-//! conformance runner classifies against the matching manifests, exactly like a
-//! single-target adapter.
+//! (`wasmtime-x-jco-node.json`, `jco-node-x-wasmtime.json`, and so on) that
+//! the conformance runner classifies against the matching manifests, exactly
+//! like a single-target adapter.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -51,6 +52,8 @@ struct Direction {
 enum PeerKind {
     /// The jco-node host, via `run-node.mjs --interop`.
     JcoNode,
+    /// The jco host inside headless Chromium, via `run-browser.mjs --interop`.
+    JcoBrowser,
     /// The composed wasip3-guest component, via `wasmtime run`.
     Wasip3,
 }
@@ -89,6 +92,33 @@ async fn run_jco_peer(
     run_peer_command(command, &format!("jco-node peer ({})", cli.node_bin)).await
 }
 
+/// Run the jco-browser peer for one test/role/room via
+/// `run-browser.mjs --interop`, parsing its single-line JSON `test-result`
+/// from stdout. Each invocation launches its own headless Chromium; a
+/// Chrome/Chromium binary must be discoverable (`CHROME_PATH` or a standard
+/// location — see the adapter).
+async fn run_jco_browser_peer(
+    cli: &Cli,
+    base_url: &str,
+    test_id: &str,
+    room: &str,
+    role: &str,
+    count: u32,
+    size: u32,
+) -> Result<TestOutcome> {
+    let mut command = tokio::process::Command::new(&cli.node_bin);
+    command
+        .arg(&cli.jco_run_browser)
+        .arg("--interop")
+        .args(["--server", base_url])
+        .args(["--test", test_id])
+        .args(["--room", room])
+        .args(["--role", role])
+        .args(["--message-count", &count.to_string()])
+        .args(["--message-size", &size.to_string()]);
+    run_peer_command(command, &format!("jco-browser peer ({})", cli.node_bin)).await
+}
+
 /// Run the non-wasmtime peer for one test/role/room, parsing its single-line
 /// JSON `test-result` from stdout.
 #[allow(clippy::too_many_arguments)]
@@ -104,6 +134,9 @@ async fn run_peer(
 ) -> Result<TestOutcome> {
     match kind {
         PeerKind::JcoNode => run_jco_peer(cli, base_url, test_id, room, role, count, size).await,
+        PeerKind::JcoBrowser => {
+            run_jco_browser_peer(cli, base_url, test_id, room, role, count, size).await
+        }
         PeerKind::Wasip3 => {
             let peer = Wasip3Peer {
                 wasmtime_bin: cli.wasmtime_bin.clone(),
@@ -201,6 +234,10 @@ struct Cli {
     #[arg(long, default_value = "conformance/adapters/jco/run-node.mjs")]
     jco_run_node: PathBuf,
 
+    /// Path to the jco-browser adapter's `run-browser.mjs`.
+    #[arg(long, default_value = "conformance/adapters/jco/run-browser.mjs")]
+    jco_run_browser: PathBuf,
+
     /// The `wasmtime` binary that drives the wasip3-guest peer (v46+).
     #[arg(long, env = "CONFORMANCE_WASMTIME", default_value = "wasmtime")]
     wasmtime_bin: String,
@@ -251,6 +288,16 @@ async fn main() -> Result<()> {
         Direction {
             target: "jco-node-x-wasmtime",
             peer: PeerKind::JcoNode,
+            wasmtime_role: Role::Answerer,
+        },
+        Direction {
+            target: "wasmtime-x-jco-browser",
+            peer: PeerKind::JcoBrowser,
+            wasmtime_role: Role::Offerer,
+        },
+        Direction {
+            target: "jco-browser-x-wasmtime",
+            peer: PeerKind::JcoBrowser,
             wasmtime_role: Role::Answerer,
         },
         Direction {
