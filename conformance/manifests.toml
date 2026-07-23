@@ -36,6 +36,82 @@
 # The native Wasmtime host over webrtc-rs (adapter: conformance/adapters/wasmtime).
 [target.wasmtime]
 
+# The `stun-srflx` netns-lab scenario cannot connect: upstream `rtc-ice` emits
+# connectivity checks from a srflx candidate's mapped (public) address instead
+# of its base, so the `webrtc` 0.20 driver has no socket to send them from and
+# drops them (see TODO.md item E4 for the analysis).
+# Confirmed on a Linux workstation run of `just conformance-nat`: the sibling
+# scenarios (`lan`, `turn-relay`, `nat-symmetric`) all pass; only the scenario
+# whose sole viable path is server-reflexive fails. Scoped expected-fails keep
+# the workstation run honest; they flip to `unexpected-pass` when the upstream
+# fix reaches the pinned `rtc` revision.
+
+[[target.wasmtime.expected-fail]]
+test = "label-round-trip"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
+[[target.wasmtime.expected-fail]]
+test = "binary-message"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
+[[target.wasmtime.expected-fail]]
+test = "text-message"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
+[[target.wasmtime.expected-fail]]
+test = "message-boundaries"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
+[[target.wasmtime.expected-fail]]
+test = "zero-length-message"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
+[[target.wasmtime.expected-fail]]
+test = "large-message"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
+[[target.wasmtime.expected-fail]]
+test = "ordering"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
+[[target.wasmtime.expected-fail]]
+test = "payload-integrity"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
+[[target.wasmtime.expected-fail]]
+test = "concurrent-send-receive"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
+[[target.wasmtime.expected-fail]]
+test = "max-retransmits-accepted"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
+[[target.wasmtime.expected-fail]]
+test = "interop-handshake"
+reason = "srflx checks are sent from the mapped address, not the base; the driver drops them"
+tracking = "TODO.md item E4"
+environments = ["stun-srflx"]
+
 # The browser-first host transpiled by jco, run under Node with `@roamhq/wrtc`
 # (adapter: conformance/adapters/jco, `run-node.mjs`). Implements the full
 # `connections` surface and drives real signaling over the suite mailbox.

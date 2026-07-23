@@ -23,15 +23,13 @@ conformance guest, the `conformance-signalingd` mailbox, adapters for
 via `just conformance` — plus the Shadow lab in CI (non-loopback,
 deterministic) and the workstation-only netns lab (`just conformance-netns` /
 `just conformance-nat`) covering `lan`, `stun-srflx` (behind a port-restricted
-cone NAT), `turn-relay`, and `nat-symmetric`. No manifest expected-fails
-remain. Still open:
+cone NAT), `turn-relay`, and `nat-symmetric`. The full netns lab has been
+confirmed on a Linux workstation: `lan`, `turn-relay`, and `nat-symmetric`
+pass 11/11, and `stun-srflx` is an environment-scoped expected-fail pending
+the upstream srflx fix (item E4). Still open:
 
 - **Non-loopback interop.** The interop pairs run over loopback only; the
   labs run single-runtime peers.
-- **NAT-matrix confirmation.** The NAT scenarios are built and verified
-  statically, but a clean `just conformance-nat` run on a workstation (real
-  kernel, root) has not been confirmed; they briefly ran as a nightly
-  continue-on-error CI job before the netns lab was made workstation-only.
 - **netns-lab peer coverage.** The lab's `--peer-kind` covers `wasmtime` (all
   scenarios) and `wasip3-guest` (`lan` only — the in-guest sans-I/O stack
   supports no STUN/TURN); a jco-node lab peer (a per-peer Node runner placed
@@ -83,6 +81,23 @@ rev = … }`) because the empty-message receive fix
 ([`webrtc-rs/rtc#131`](https://github.com/webrtc-rs/rtc/pull/131), merged
 upstream) is not yet in any published release. Drop the patch and return to a
 published, stable `0.20` once a release including it ships.
+
+### E4. Upstream `rtc-ice` sends srflx checks from the mapped address
+
+The netns lab's `stun-srflx` scenario (peers behind a port-restricted cone
+NAT, direct path blocked, coturn as STUN) never connects: `rtc-ice`'s
+`send_stun` tags outbound connectivity checks with the local candidate's
+`addr()`, which for a server-reflexive candidate is the NAT-mapped public
+address — but RFC 8445 §6.1.2 requires checks from a srflx candidate to be
+sent from its **base**. The async `webrtc` 0.20 driver demultiplexes outbound
+transmits by `transport.local_addr`, finds no socket bound at the mapped
+address, and drops the packet (`None tcp/udp socket, drop the packet …`).
+Host and relay candidates are unaffected, which is why `lan`, `turn-relay`,
+and `nat-symmetric` all pass while `stun-srflx` fails 0/11. Fix upstream in
+`rtc-ice` (use the candidate's `related_address`/base when tagging
+transmits); the eleven `stun-srflx` expected-fails in
+`conformance/manifests.toml` track this and will flip to `unexpected-pass` —
+forcing cleanup — when the fix reaches the pinned `rtc` revision.
 
 ## F. Examples
 
