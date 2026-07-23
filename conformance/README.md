@@ -191,7 +191,7 @@ Scenarios:
 | Scenario | What it exercises |
 | --- | --- |
 | `lan` | Direct host-candidate connectivity over the router (no server). |
-| `stun-srflx` | coturn as a STUN server behind a port-restricted (cone) NAT; the router blocks the direct peer↔peer path so a server-reflexive path must be used, and the cone NAT lets it connect. |
+| `stun-srflx` | coturn as a STUN server behind a static one-to-one (full-cone) NAT; the router blocks the direct peer↔peer path so a server-reflexive path must be used, and the NAT delivers traffic addressed to the srflx candidates. |
 | `turn-relay` | coturn as a TURN server; the direct path is blocked and the peers are relay-only, so data is relayed by coturn. |
 | `nat-symmetric` | coturn as a STUN/TURN server behind a symmetric NAT; the direct path is blocked and the symmetric NAT makes srflx unusable, so ICE falls back to a TURN relay. |
 
@@ -222,9 +222,14 @@ router. The NAT scenarios add an nftables source-NAT on the router (applied by t
 `lab` module's nftables provisioning) that rewrites each peer's forwarded
 traffic to its own "public" address:
 
-- `stun-srflx` uses a **port-restricted (cone) NAT** (`snat … persistent`): the
-  mapping is endpoint-independent, so the two peers can hole-punch their srflx
-  candidates and connect — the meaningful server-reflexive path.
+- `stun-srflx` uses a **static one-to-one (full-cone) NAT** (`snat … persistent`
+  plus a prerouting DNAT of each public address back to its peer): the mapping
+  is endpoint-independent and inbound traffic addressed to a peer's public
+  address is delivered, so the srflx path connects — the meaningful
+  server-reflexive path. (Both peers' mappings live on the *same* router
+  namespace, and conntrack cannot hairpin one peer's fresh flow into the other
+  peer's reverse mapping, so hole punching alone cannot deliver the traffic on
+  this topology; the static DNAT is what stands in for the second NAT device.)
 - `nat-symmetric` uses a **symmetric NAT** (`snat … random`): the mapping is
   endpoint-dependent, so the address the STUN server observed is useless to the
   peer and ICE must fall back to a TURN relay.

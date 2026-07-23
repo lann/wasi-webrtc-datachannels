@@ -22,11 +22,9 @@ conformance guest, the `conformance-signalingd` mailbox, adapters for
 `wasmtime`<->`wasip3-guest` (both orders each) — all run in CI over loopback
 via `just conformance` — plus the Shadow lab in CI (non-loopback,
 deterministic) and the workstation-only netns lab (`just conformance-netns` /
-`just conformance-nat`) covering `lan`, `stun-srflx` (behind a port-restricted
-cone NAT), `turn-relay`, and `nat-symmetric`. The full netns lab has been
-confirmed on a Linux workstation: `lan`, `turn-relay`, and `nat-symmetric`
-pass 11/11, and `stun-srflx` is an environment-scoped expected-fail pending
-the upstream srflx fix (item E4). Still open:
+`just conformance-nat`) covering `lan`, `stun-srflx` (behind a one-to-one
+full-cone NAT), `turn-relay`, and `nat-symmetric`. The full netns lab has been
+confirmed on a Linux workstation: all four scenarios pass 11/11. Still open:
 
 - **Non-loopback interop.** The interop pairs run over loopback only; the
   labs run single-runtime peers.
@@ -82,22 +80,23 @@ rev = … }`) because the empty-message receive fix
 upstream) is not yet in any published release. Drop the patch and return to a
 published, stable `0.20` once a release including it ships.
 
-### E4. Upstream `rtc-ice` sends srflx checks from the mapped address
+### E4. Upstream `rtc-ice` tags srflx transmits with the mapped address
 
-The netns lab's `stun-srflx` scenario (peers behind a port-restricted cone
-NAT, direct path blocked, coturn as STUN) never connects: `rtc-ice`'s
-`send_stun` tags outbound connectivity checks with the local candidate's
-`addr()`, which for a server-reflexive candidate is the NAT-mapped public
-address — but RFC 8445 §6.1.2 requires checks from a srflx candidate to be
-sent from its **base**. The async `webrtc` 0.20 driver demultiplexes outbound
-transmits by `transport.local_addr`, finds no socket bound at the mapped
-address, and drops the packet (`None tcp/udp socket, drop the packet …`).
-Host and relay candidates are unaffected, which is why `lan`, `turn-relay`,
-and `nat-symmetric` all pass while `stun-srflx` fails 0/11. Fix upstream in
-`rtc-ice` (use the candidate's `related_address`/base when tagging
-transmits); the eleven `stun-srflx` expected-fails in
-`conformance/manifests.toml` track this and will flip to `unexpected-pass` —
-forcing cleanup — when the fix reaches the pinned `rtc` revision.
+`rtc-ice`'s `send_stun` (and the peer-connection ICE write path) tag outbound
+transmits with the local candidate's `addr()`, which for a server-reflexive
+candidate is the NAT-mapped public address; RFC 8445 §6.1.2 requires sends
+from a reflexive candidate to use its **base**. Drivers routing outbound
+transmits by `transport.local_addr` (the async `webrtc` 0.20 driver does) have
+no socket at the mapped address and drop the packets (`None tcp/udp socket…`).
+
+The bug is real but **not connection-blocking** in the netns lab: the
+host-sourced checks toward the peer's srflx candidate carry the connection, so
+`stun-srflx` passes with the drops present (~100 dropped srflx-sourced
+transmits per corpus run). A fix exists on
+[`lann/rtc#fix-srflx-check-source-addr`](https://github.com/lann/rtc/tree/fix-srflx-check-source-addr)
+(adds `Candidate::base_addr()` and uses it when tagging transmits; verified in
+the lab — same 11/11 pass with zero drops); upstream it and it rides the next
+pin bump (item E3).
 
 ## F. Examples
 

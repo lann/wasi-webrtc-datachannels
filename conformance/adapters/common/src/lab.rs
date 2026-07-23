@@ -147,9 +147,10 @@ impl LabTopology {
 pub enum Scenario {
     /// Direct host-candidate connectivity over the router (no STUN/TURN server).
     Lan,
-    /// Server-reflexive candidates via a STUN server behind a port-restricted
-    /// (cone) NAT; the direct path is blocked, and the cone NAT lets the srflx
-    /// candidates connect (see the NAT matrix in `conformance/README.md`).
+    /// Server-reflexive candidates via a STUN server behind a static
+    /// one-to-one (full-cone) NAT; the direct path is blocked, and the NAT
+    /// delivers traffic addressed to the srflx candidates, so the srflx path
+    /// connects (see the NAT matrix in `conformance/README.md`).
     StunSrflx,
     /// Relayed candidates via a TURN server; the direct path is blocked and the
     /// peers are relay-only.
@@ -438,20 +439,28 @@ impl LabTopology {
     /// observes (the srflx candidate) differs from the peer's private host
     /// address. The mapping style decides whether srflx is usable:
     ///
-    /// - `stun-srflx` — `snat … persistent` gives a consistent,
-    ///   endpoint-independent mapping (a port-restricted cone NAT), so the two
-    ///   peers can hole-punch their srflx candidates and connect.
+    /// - `stun-srflx` — `snat … persistent` plus a static one-to-one DNAT of
+    ///   each public address back to its peer (together: a full-cone,
+    ///   one-to-one NAT), so packets addressed to a peer's srflx candidate are
+    ///   delivered and the srflx path connects. The DNAT is what makes inbound
+    ///   delivery possible at all on this topology: both peers' mappings live
+    ///   on the *same* router, and conntrack cannot hairpin a packet from one
+    ///   peer's fresh flow into the other peer's reverse mapping (a packet
+    ///   matches exactly one conntrack entry, and its source is still private
+    ///   at lookup time), so without the DNAT the "public" addresses are
+    ///   unroutable phantoms. Distinct per-peer NAT devices would not need
+    ///   this, but a single-router lab does.
     /// - `nat-symmetric` — `snat … random` picks a fresh source port per
-    ///   destination (an endpoint-dependent, symmetric NAT), so the mapping the
-    ///   STUN server saw is useless to the peer and ICE must fall back to a
-    ///   TURN relay.
+    ///   destination (an endpoint-dependent, symmetric NAT) and no inbound
+    ///   mapping exists, so the mapping the STUN server saw is useless to the
+    ///   peer and ICE must fall back to a TURN relay.
     pub fn nftables_apply(&self, scenario: Scenario) -> Result<()> {
         self.nftables_clear();
         match scenario {
             Scenario::Lan => Ok(()),
-            Scenario::TurnRelay => self.nft_load(&self.nft_table(None)),
-            Scenario::StunSrflx => self.nft_load(&self.nft_table(Some("persistent"))),
-            Scenario::NatSymmetric => self.nft_load(&self.nft_table(Some("random"))),
+            Scenario::TurnRelay => self.nft_load(&self.nft_table(None, false)),
+            Scenario::StunSrflx => self.nft_load(&self.nft_table(Some("persistent"), true)),
+            Scenario::NatSymmetric => self.nft_load(&self.nft_table(Some("random"), false)),
         }
     }
 
@@ -467,13 +476,27 @@ impl LabTopology {
     /// The `cw_ice` nftables table body: a forward chain that drops traffic
     /// directly between the offerer and answerer subnets (both directions),
     /// forcing a server-mediated path, plus — when `snat_mode` is set — a
-    /// postrouting source-NAT rewriting each peer's forwarded traffic to its
+    /// postrouting source-NAT (and, when `one_to_one` is set, a prerouting
+    /// destination-NAT back from each public address) rewriting each peer's
+    /// forwarded traffic to its
     /// own public address in that mapping style.
-    fn nft_table(&self, snat_mode: Option<&str>) -> String {
+    fn nft_table(&self, snat_mode: Option<&str>, one_to_one: bool) -> String {
+        // The forward filter sees packets *after* prerouting DNAT, so traffic
+        // that arrived addressed to a public (NAT) address has already been
+        // rewritten back to a private peer address and would match the
+        // direct-path drop. Exempt it: `ct status dnat` is only set on
+        // translated flows, never on packets sent straight to a peer's
+        // private address, so the direct path stays blocked.
+        let dnat_exempt = if one_to_one {
+            "\x20       ct status dnat accept\n"
+        } else {
+            ""
+        };
         let mut ruleset = format!(
             "table inet {NFT_TABLE} {{\n\
              \x20   chain forward {{\n\
              \x20       type filter hook forward priority 0; policy accept;\n\
+             {dnat_exempt}\
              \x20       ip saddr {off} ip daddr {ans} drop\n\
              \x20       ip saddr {ans} ip daddr {off} drop\n\
              \x20   }}\n",
@@ -491,6 +514,19 @@ impl LabTopology {
                 ans = self.answerer_subnet,
                 off_pub = self.offerer_public,
                 ans_pub = self.answerer_public,
+            ));
+        }
+        if one_to_one {
+            ruleset.push_str(&format!(
+                "\x20   chain prerouting {{\n\
+                 \x20       type nat hook prerouting priority dstnat; policy accept;\n\
+                 \x20       ip daddr {off_pub} dnat ip to {off_addr}\n\
+                 \x20       ip daddr {ans_pub} dnat ip to {ans_addr}\n\
+                 \x20   }}\n",
+                off_pub = self.offerer_public,
+                ans_pub = self.answerer_public,
+                off_addr = self.offerer_addr,
+                ans_addr = self.answerer_addr,
             ));
         }
         ruleset.push_str("}\n");
@@ -698,12 +734,17 @@ mod tests {
     #[test]
     fn nft_rulesets_match_scenarios() {
         let topology = LabTopology::default();
-        let block = topology.nft_table(None);
+        let block = topology.nft_table(None, false);
         assert!(block.contains("ip saddr 10.79.1.0/30 ip daddr 10.79.2.0/30 drop"));
         assert!(!block.contains("snat"));
-        let cone = topology.nft_table(Some("persistent"));
+        let cone = topology.nft_table(Some("persistent"), true);
         assert!(cone.contains("snat ip to 10.79.11.1 persistent"));
-        let symmetric = topology.nft_table(Some("random"));
+        assert!(cone.contains("ct status dnat accept"));
+        assert!(cone.contains("ip daddr 10.79.11.1 dnat ip to 10.79.1.2"));
+        assert!(cone.contains("ip daddr 10.79.12.1 dnat ip to 10.79.2.2"));
+        let symmetric = topology.nft_table(Some("random"), false);
         assert!(symmetric.contains("snat ip to 10.79.12.1 random"));
+        assert!(!symmetric.contains("dnat ip to"));
+        assert!(!symmetric.contains("ct status dnat"));
     }
 }

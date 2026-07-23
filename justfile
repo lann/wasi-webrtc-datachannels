@@ -159,9 +159,9 @@ conformance-interop: transpile-conformance-guest build-conformance-wasip3 build-
 # stack supports no STUN/TURN, so only `lan` works for it. Needs root for
 # `ip netns exec` (hence sudo) and `turnserver` on PATH for the non-`lan`
 # scenarios (installed by scripts/setup.sh). The lab is always torn down on
-# exit. `stun-srflx` runs behind a port-restricted (cone) NAT so its srflx path
-# is meaningful; `nat-symmetric` runs behind a symmetric NAT so ICE must fall
-# back to a TURN relay.
+# exit. `stun-srflx` runs behind a static one-to-one (full-cone) NAT so its
+# srflx path is meaningful; `nat-symmetric` runs behind a symmetric NAT so ICE
+# must fall back to a TURN relay.
 conformance-netns scenario="lan" peer_kind="wasmtime": build-conformance-guest build-signalingd
     #!/usr/bin/env bash
     set -euo pipefail
@@ -180,7 +180,7 @@ conformance-netns scenario="lan" peer_kind="wasmtime": build-conformance-guest b
         --out conformance/results
 
 # Run the NAT matrix (see conformance/README.md): the srflx scenario behind a
-# port-restricted (cone) NAT, where the server-reflexive candidates connect, and
+# one-to-one (full-cone) NAT, where the server-reflexive candidates connect, and
 # the symmetric-NAT scenario, where srflx fails and ICE must fall back to a TURN
 # relay. Both write conformance/results/wasmtime-<scenario>.json. Like the rest
 # of the netns lab it is workstation-only (not run in CI). Requires the same
