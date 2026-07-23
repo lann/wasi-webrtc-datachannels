@@ -125,7 +125,7 @@ interface connections {
     /// This is a builder resource, following the shape of `wasi:http`'s
     /// `request-options`: construct a default value, adjust the fields you care
     /// about through the setters, then hand it to `peer-connection`'s
-    /// `create-data-channel` (or a demo's `open-echo`/`create-offer`). Each
+    /// `create-data-channel` (or the demo `manual-signaling` `create-offer`). Each
     /// field has an accessor pair — a getter that reports the current value and
     /// a setter that overrides it.
     resource data-channel-options {

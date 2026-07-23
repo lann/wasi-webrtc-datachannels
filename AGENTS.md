@@ -57,7 +57,7 @@ wasip3-impl/                           # wasm COMPONENT on `rtc` 0.20: runs the
 examples/                              # guest components + the demo/manual-signaling driver
   echo-demo/                           # example guest component (Rust)
     wit/                               #   demo-only WIT for this component
-      webrtc-echo-demo.wit             #     demo:webrtc-echo (connect, rendezvous, demo)
+      webrtc-echo-demo.wit             #     demo:webrtc-echo (rendezvous, demo)
       deps/lann-webrtc-datachannels -> ../../../../wit   # symlink to the root package
   cli-signaling/                       # manual-signaling CLI guest component (Rust)
     wit/                               #   demo-only WIT for this component
@@ -110,8 +110,8 @@ separate:
   one component that implements them.
 - **`demo:webrtc-echo`** — the demo-only interfaces, split across the demo
   components that use them:
-  - `examples/echo-demo/wit/webrtc-echo-demo.wit` — `connect`, `rendezvous`,
-    `demo`, and the `webrtc-echo-demo` world.
+  - `examples/echo-demo/wit/webrtc-echo-demo.wit` — `rendezvous`, `demo`, and
+    the `webrtc-echo-demo` world.
   - `examples/cli-signaling/wit/webrtc-echo-demo.wit` — the vanilla
     `manual-signaling` surface and the `manual-signaling-host` world.
 
@@ -263,10 +263,10 @@ codebase with context that quickly becomes stale and misleading.
 
 ## Real signaling (`rendezvous` + `wasi:http@0.3`) — direction
 
-The runnable demo uses the `connect` shortcut: the host builds *both* peers
-internally, so no external signaling happens. To support genuinely separate
-peers (developed and tested locally), two component instances — an offerer and
-an answerer — must exchange SDP and trickled ICE out of band.
+The runnable demo stands up *both* peers inside one component instance, so no
+external signaling happens. To support genuinely separate peers (developed and
+tested locally), two component instances — an offerer and an answerer — must
+exchange SDP and trickled ICE out of band.
 
 The intended shape:
 

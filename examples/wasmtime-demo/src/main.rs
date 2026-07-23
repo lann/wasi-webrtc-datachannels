@@ -3,24 +3,15 @@
 //!
 //! It is the non-browser counterpart to the Node host: it loads the same
 //! `echo-demo` component and invokes the component's exported async `run`. The
-//! `lann:webrtc-datachannels` imports (`types`, `connections`) are
-//! satisfied by [`wasmtime_webrtc_datachannels`]; this binary only
-//! implements the demo-only `connect` convenience, which wires a channel to a
-//! host-provided echo endpoint via a local helper.
+//! component stands up both peers itself through the standard `connections`
+//! interface, so this binary provisions nothing beyond
+//! [`wasmtime_webrtc_datachannels`]'s `add_to_linker`.
 
-use std::sync::Arc;
-
-use anyhow::anyhow;
-use futures::channel::mpsc;
-use futures::StreamExt;
-use wasmtime::component::{Accessor, Component, HasData, Linker, Resource, ResourceTable};
+use wasmtime::component::{Accessor, Component, HasData, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Result, Store};
 use wasmtime_webrtc_datachannels::{
-    self as webrtc_host, new_peer_connection, spawn_channel_pump, CallbackHandler, DataChannel,
-    WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
+    self as webrtc_host, WasiWebrtcCtx, WasiWebrtcCtxView, WasiWebrtcView,
 };
-use webrtc::data_channel::{DataChannelEvent, RTCDataChannelInit};
-use webrtc::peer_connection::{RTCIceCandidateInit, SettingEngine};
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -37,12 +28,11 @@ mod bindings {
                 wasmtime_webrtc_datachannels::DataChannelOptions,
             "lann:webrtc-datachannels/connections.data-channel":
                 wasmtime_webrtc_datachannels::DataChannel,
+            "lann:webrtc-datachannels/connections.peer-connection":
+                wasmtime_webrtc_datachannels::PeerConnection,
         },
     });
 }
-
-use bindings::lann::webrtc_datachannels::types::Error;
-use wasmtime_webrtc_datachannels::DataChannelOptions;
 
 struct Ctx {
     webrtc: WasiWebrtcCtx,
@@ -62,133 +52,6 @@ impl WasiWebrtcView for Ctx {
     }
 }
 
-// The demo-only `connect` convenience is implemented here; the
-// `connections`/`types` imports come from the crate's `add_to_linker`.
-impl bindings::demo::webrtc_echo::connect::Host for Ctx {}
-
-impl<T> bindings::demo::webrtc_echo::connect::HostWithStore<T> for Ctx {
-    async fn open_echo(
-        accessor: &Accessor<T, Self>,
-        options: Resource<DataChannelOptions>,
-    ) -> Result<std::result::Result<Resource<DataChannel>, Error>> {
-        // The two echo peers live in this one process, so apply the store's
-        // `SettingEngine` hook (e.g. loopback ICE candidates) to each of them.
-        // Take the guest-provided options out of the table, consuming the
-        // owned resource handle.
-        let (options, hook) = accessor.with(|mut access| {
-            let ctx = access.get();
-            let options = ctx.table.delete(options)?;
-            let hook = ctx.webrtc.setting_engine_hook();
-            Ok::<_, wasmtime::Error>((options, hook))
-        })?;
-        let echo = match build_echo(
-            &options.label,
-            options.ordered,
-            options.max_retransmits,
-            |engine| {
-                if let Some(hook) = &hook {
-                    hook(engine);
-                }
-            },
-        )
-        .await
-        {
-            Ok(echo) => echo,
-            Err(err) => return Ok(Err(Error::Other(err.to_string()))),
-        };
-        let resource = accessor.with(|mut access| access.get().table.push(echo))?;
-        Ok(Ok(resource))
-    }
-}
-
-async fn build_echo(
-    label: &str,
-    ordered: bool,
-    max_retransmits: Option<u16>,
-    configure: impl Fn(&mut SettingEngine),
-) -> anyhow::Result<DataChannel> {
-    // The two echo peers share this process and reach each other only over
-    // loopback ICE; trickle each peer's gathered candidates to the other.
-    let (near_ice_tx, mut near_ice_rx) = mpsc::unbounded::<RTCIceCandidateInit>();
-    let (far_ice_tx, mut far_ice_rx) = mpsc::unbounded::<RTCIceCandidateInit>();
-
-    let near_handler = Arc::new(CallbackHandler::new().on_ice_candidate(move |event| {
-        if let Ok(init) = event.candidate.to_json() {
-            let _ = near_ice_tx.unbounded_send(init);
-        }
-    }));
-
-    // The far peer echoes every message it receives back over the same channel.
-    let far_handler = Arc::new(
-        CallbackHandler::new()
-            .on_ice_candidate(move |event| {
-                if let Ok(init) = event.candidate.to_json() {
-                    let _ = far_ice_tx.unbounded_send(init);
-                }
-            })
-            .on_data_channel(move |channel| {
-                tokio::spawn(async move {
-                    while let Some(event) = channel.poll().await {
-                        match event {
-                            DataChannelEvent::OnMessage(message) => {
-                                let _ = channel.send(message.data).await;
-                            }
-                            DataChannelEvent::OnClose => break,
-                            _ => {}
-                        }
-                    }
-                });
-            }),
-    );
-
-    let near = new_peer_connection(&configure, near_handler).await?;
-    let far = new_peer_connection(&configure, far_handler).await?;
-
-    {
-        let far = far.clone();
-        tokio::spawn(async move {
-            while let Some(init) = near_ice_rx.next().await {
-                let _ = far.add_ice_candidate(init).await;
-            }
-        });
-    }
-    {
-        let near = near.clone();
-        tokio::spawn(async move {
-            while let Some(init) = far_ice_rx.next().await {
-                let _ = near.add_ice_candidate(init).await;
-            }
-        });
-    }
-
-    let init = RTCDataChannelInit {
-        ordered,
-        max_retransmits,
-        ..Default::default()
-    };
-    let channel = near.create_data_channel(label, Some(init)).await?;
-
-    let pump = spawn_channel_pump(channel.clone());
-
-    let offer = near.create_offer(None).await?;
-    near.set_local_description(offer.clone()).await?;
-    far.set_remote_description(offer).await?;
-    let answer = far.create_answer(None).await?;
-    far.set_local_description(answer.clone()).await?;
-    near.set_remote_description(answer).await?;
-
-    pump.open
-        .await
-        .map_err(|_| anyhow!("data channel closed before opening"))?;
-
-    Ok(DataChannel::new(
-        label.to_string(),
-        channel,
-        pump.incoming,
-        vec![near, far],
-    ))
-}
-
 fn engine() -> Result<Engine> {
     let mut config = Config::new();
     config.wasm_component_model(true);
@@ -197,8 +60,8 @@ fn engine() -> Result<Engine> {
 }
 
 /// Build the WebRTC context, opting into loopback ICE candidates when the
-/// `WEBRTC_INCLUDE_LOOPBACK` environment variable is set. `build_echo` stands up
-/// both peers in this one process, so on hosts without another mutually
+/// `WEBRTC_INCLUDE_LOOPBACK` environment variable is set. The component stands
+/// up both peers in this one process, so on hosts without another mutually
 /// reachable address this is required for them to pair.
 fn webrtc_ctx() -> WasiWebrtcCtx {
     let mut ctx = WasiWebrtcCtx::new();
@@ -227,10 +90,8 @@ async fn main() -> Result<()> {
     let engine = engine()?;
     let component = Component::from_file(&engine, &path)?;
     let mut linker: Linker<Ctx> = Linker::new(&engine);
-    // Shared `lann:webrtc-datachannels` imports.
+    // Shared `lann:webrtc-datachannels` imports — the component's only ones.
     webrtc_host::add_to_linker(&mut linker)?;
-    // Demo-only `connect` import.
-    bindings::demo::webrtc_echo::connect::add_to_linker::<_, Ctx>(&mut linker, |c| c)?;
 
     let mut store = Store::new(
         &engine,

@@ -1,25 +1,5 @@
 package demo:webrtc-echo@0.1.0;
 
-/// A convenience used by the demo.
-///
-/// The host connects a data channel to an internal "echo" endpoint, performing
-/// a genuine SDP/ICE handshake between two peer connections under the hood, and
-/// returns the near side to the guest. This keeps the runnable example focused
-/// on the streaming hot path while still exercising a real WebRTC stack in the
-/// host.
-///
-/// `connect` is a shortcut: both peers live inside a single host, so no external
-/// signaling is involved. See `rendezvous` for the interface that would carry
-/// signaling between two *separate* peers (the "real signaling" path).
-interface connect {
-    use lann:webrtc-datachannels/types@0.1.0.{error};
-    use lann:webrtc-datachannels/connections@0.1.0.{data-channel, data-channel-options};
-
-    /// Open a data channel connected to a host-provided echo endpoint. Every
-    /// message the guest sends is echoed back verbatim.
-    open-echo: async func(options: data-channel-options) -> result<data-channel, error>;
-}
-
 /// Demo-only HTTP signaling rendezvous (a proposal, not yet wired into the
 /// runnable world — mirroring how `lann:webrtc-datachannels/signaling` is
 /// designed but not yet exercised).
@@ -90,13 +70,17 @@ interface demo {
         bytes-echoed: u64,
     }
 
-    /// Send `message-count` messages of `message-size` bytes through an echo
-    /// data channel, read them all back, and verify the round trip.
+    /// Connect two in-component peers over the standard `connections`
+    /// interface, send `message-count` messages of `message-size` bytes from
+    /// one, echo each back from the other, and count the round trip.
     run: async func(config: demo-config) -> result<demo-stats, error>;
 }
 
 /// The world implemented by the example component and driven by both hosts.
+/// The component stands up both peers itself through the standard
+/// `connections` interface (an offerer and an in-component echo answerer), so
+/// the hosts provide nothing beyond `lann:webrtc-datachannels`.
 world webrtc-echo-demo {
-    import connect;
+    import lann:webrtc-datachannels/connections@0.1.0;
     export demo;
 }

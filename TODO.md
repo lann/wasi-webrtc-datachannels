@@ -38,22 +38,16 @@ remain. Still open:
 
 ## B. Correctness bugs (both hosts unless noted)
 
-### B2. `open-echo` / handshake can hang forever — no timeout
+### B2. The manual-signaling handshake can hang forever — no timeout
 
-Nothing bounds how long the open handshake may take, so a failed ICE/DTLS
-negotiation hangs the guest's `open-echo` indefinitely (only the CI job timeout
-would catch it):
-
-- Wasmtime: `examples/wasmtime-demo/src/main.rs` (`open_rx.await`) and the
-  manual host's `connect`/gathering waits.
-- jco: `waitOpen` (`jco-impl/webrtc.js:219`) and the `openEcho` SDP/ICE
-  sequence have no timeout.
-
-Add a bounded wait that surfaces `error::timed-out` and also react to
-`connectionstatechange`/`iceconnectionstatechange` = `failed` for fast failure.
-(The `peer-connection` path already has this — `wait-connected` times out on
-every implementation, asserted by the `error-timed-out` conformance probe —
-so what remains is the demo `open-echo`/manual-signaling surface.)
+The demo manual-signaling host's `connect`/gathering waits
+(`examples/wasmtime-demo/src/manual.rs`) are unbounded, so a failed ICE/DTLS
+negotiation hangs indefinitely (only the CI job timeout would catch it). The
+`open-echo` half of this item is gone: the echo demo now drives the standard
+`connections` interface, whose `wait-connected` is bounded on every
+implementation (asserted by the `error-timed-out` conformance probe). The
+remaining fix is to rebuild `cli-signaling` on the standard interface too,
+deleting the bespoke manual host rather than bounding it.
 
 ## C. WIT interface design
 
@@ -136,8 +130,8 @@ answerer) connecting via `peer-connection` (now implemented everywhere) + a
 `rendezvous` host that relays SDP/ICE over `wasi:http@0.3` (Wasmtime) / `fetch`
 (jco) through a trivial local mailbox server (the conformance
 `conformance-signalingd` is a ready-made candidate). This would exercise nearly
-every interface at once and could replace the `connect` shortcut as the
-reference example.
+every interface at once and would make the echo demo's two peers genuinely
+separate components, making it the reference example.
 
 ### F4. Drive the sans-I/O `rtc` stack across a real network (tracking)
 
@@ -167,9 +161,7 @@ flags from the WIT) so a drifted rename fails fast with a clear message.
 1. Correctness the demos can already hit: the open/handshake timeout (B2).
 2. Give host errors a crate-level type instead of flattened strings (D2).
 3. Interface-stabilizing decisions (C1, C2).
-4. Strategic build-out: port the conformance adapter's `peer-connection`
-   implementation to the demo jco host (`jco-impl/webrtc.js`, which still
-   implements only the `openEcho` shortcut), wire `rendezvous` (F3), and take
-   `wasip3`'s WIT-speaking component to a real network (F4).
+4. Strategic build-out: wire `rendezvous` (F3) and take `wasip3`'s
+   WIT-speaking component to a real network (F4).
 5. Cheap hygiene: the transpile-flag CI check (G1), the remaining
    conformance-matrix gaps (A3), demo payload verification (F1).
