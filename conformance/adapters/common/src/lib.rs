@@ -40,13 +40,18 @@ use serde_json::Value;
 
 /// Install the stderr `tracing` subscriber every adapter/executor binary uses.
 ///
-/// The filter comes from `RUST_LOG` when set, defaulting to `warn` so retry and
-/// peer-failure diagnostics are visible in CI logs without any configuration.
+/// The filter comes from `RUST_LOG` when set, defaulting to `warn` plus `info`
+/// for this crate's `conformance` target, so peer-failure diagnostics and the
+/// phase markers (guest instance / mailbox / peer-process progress) are visible
+/// in CI logs without any configuration — in particular, when an attempt trips
+/// [`run_test`]'s hang guard, the last phase marker identifies the hung phase.
 /// Call once at the top of `main`.
 pub fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,conformance=info".into()),
+        )
         .with_writer(std::io::stderr)
         .init();
 }
@@ -269,41 +274,54 @@ pub const MAX_INBOUND_BUFFER_ENV: &str = "WEBRTC_MAX_INBOUND_BUFFER_BYTES";
 // ----- peer subprocess invocation --------------------------------------------
 
 /// Run one peer subprocess to a [`TestOutcome`], parsing its single-line JSON
-/// `test-result` from stdout. `label` names the peer in error details.
+/// `test-result` from stdout. `label` names the peer in error details and in
+/// the forwarded-stderr prefix.
 ///
 /// This owns the subtle process plumbing every out-of-process peer needs:
 /// stdin is closed; the child is killed if this future is dropped
 /// (`kill_on_drop`), so an attempt abandoned by [`run_test`]'s timeout reaps
 /// its peers instead of leaking them to hold TURN allocations and CPU; and the
-/// child's captured stderr is forwarded to the orchestrator's stderr after the
-/// child exits. The forwarding must be explicit: `tokio`'s `output()` forces
-/// both stdout and stderr to be captured, silently overriding an earlier
-/// `stderr(Stdio::inherit())`, so diagnostics (e.g. `WASMTIME_LOG` output)
-/// would otherwise be captured and dropped.
+/// child's stderr is **streamed** to the orchestrator's stderr line by line as
+/// it arrives, each line prefixed `[{label}]`. Streaming (rather than
+/// capturing and forwarding after exit) is what keeps the diagnostics when the
+/// hang guard abandons the attempt: the kill arrives mid-run, and everything
+/// the peer printed up to that point — phase markers included — is already on
+/// the orchestrator's stderr instead of dying captured in a buffer.
 pub async fn run_peer_command(
     mut command: tokio::process::Command,
     label: &str,
 ) -> Result<TestOutcome> {
     tracing::debug!(target: "conformance", %label, command = ?command.as_std(), "spawning peer");
     let started = std::time::Instant::now();
-    let output = command
+    let mut child = command
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .output()
-        .await
+        .spawn()
         .with_context(|| format!("spawning {label}"))?;
+    tracing::info!(target: "conformance", %label, "peer spawned");
+    // The forwarding task is detached: it ends at stderr EOF, whether the child
+    // exits on its own or is killed by the hang guard dropping this future.
+    let stderr = child.stderr.take().expect("child stderr is piped");
+    let stderr_label = label.to_string();
+    tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt as _;
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            eprintln!("[{stderr_label}] {line}");
+        }
+    });
+    let output = child
+        .wait_with_output()
+        .await
+        .with_context(|| format!("waiting for {label}"))?;
     let elapsed = started.elapsed();
-    if !output.stderr.is_empty() {
-        use std::io::Write as _;
-        let mut stderr = std::io::stderr().lock();
-        let _ = writeln!(stderr, "--- {label} stderr ---");
-        let _ = stderr.write_all(&output.stderr);
-    }
     if !output.status.success() {
         tracing::warn!(target: "conformance", %label, status = %output.status, ?elapsed, "peer exited nonzero");
         anyhow::bail!("{label} exited with {}", output.status);
     }
-    tracing::debug!(target: "conformance", %label, ?elapsed, "peer completed");
+    tracing::info!(target: "conformance", %label, ?elapsed, "peer completed");
     let stdout =
         String::from_utf8(output.stdout).with_context(|| format!("{label} stdout not UTF-8"))?;
     parse_result_line(&stdout).with_context(|| format!("reading {label} result"))

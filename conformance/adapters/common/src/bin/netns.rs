@@ -46,8 +46,10 @@ use conformance_adapter_common::{
 };
 
 /// The hang guard for one test. Lab handshakes (real routing, and a TURN relay
-/// for `turn-relay`) are slower to establish than loopback, so the guard is
-/// more generous than the loopback adapters' 45s.
+/// for `turn-relay`) are slower to establish than loopback, but the lab runs
+/// native peers at low concurrency on a dedicated workstation, so it needs
+/// less headroom than the loopback adapters' 90s (which absorbs peer-process
+/// startup under 4-wide CI contention).
 const TEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Parser)]

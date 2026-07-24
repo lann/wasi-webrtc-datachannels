@@ -52,9 +52,10 @@ impl Wasip3Peer {
         let mut command = tokio::process::Command::new(&self.wasmtime_bin);
         // Surface host-side wasi:http diagnostics: `wasmtime-wasi-http` logs the
         // underlying hyper error at `warn` before collapsing it into the opaque
-        // `ErrorCode::HttpProtocolError` the guest sees. Peer stderr is
-        // inherited, so these lines land in the orchestrator's (and CI's) log.
-        // An explicit WASMTIME_LOG in the environment wins.
+        // `ErrorCode::HttpProtocolError` the guest sees. Peer stderr is streamed
+        // to the orchestrator's (and CI's) log as it arrives, so these lines
+        // survive even a hang-guard kill. An explicit WASMTIME_LOG in the
+        // environment wins.
         if std::env::var_os("WASMTIME_LOG").is_none() {
             command.env("WASMTIME_LOG", "wasmtime_wasi_http=warn");
         }
@@ -86,10 +87,6 @@ impl Wasip3Peer {
             .args(["--room", room])
             .args(["--message-count", &count.to_string()])
             .args(["--message-size", &size.to_string()]);
-        run_peer_command(
-            command,
-            &format!("wasip3-guest peer ({})", self.wasmtime_bin),
-        )
-        .await
+        run_peer_command(command, &format!("wasip3-guest peer {test_id}/{role}")).await
     }
 }

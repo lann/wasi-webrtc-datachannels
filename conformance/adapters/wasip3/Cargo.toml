@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 # The shared adapter building blocks: outcomes, the peer-subprocess invocation,
-# the retry loop, the corpus runner, and the result document.
+# the single-attempt test runner, the corpus runner, and the result document.
 conformance-adapter-common = { path = "../common" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "process"] }
 anyhow = "1"

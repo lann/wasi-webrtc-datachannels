@@ -276,12 +276,18 @@ async function runInteropInPage({ base, testId, config }) {
   for (const name of names) {
     modules.set(name, await WebAssembly.compileStreaming(fetch(`${base}/generated/${name}`)));
   }
+  // Forwarded to the adapter's stderr via the page console hook, so the
+  // orchestrator's live stderr stream carries the in-page phase progression.
+  console.log(`[phase] ${testId}: modules compiled; instantiating guest`);
 
   const instance = await instantiate((name) => modules.get(name), {
     "conformance:signaling/mailbox": { Session },
     "lann:webrtc-datachannels/connections": connections,
   });
-  return instance.runner.runTest(testId, config);
+  console.log(`[phase] ${testId}: guest instantiated; running test`);
+  const result = await instance.runner.runTest(testId, config);
+  console.log(`[phase] ${testId}: test finished`);
+  return result;
 }
 
 async function main() {
@@ -320,6 +326,9 @@ async function main() {
       "--use-fake-ui-for-media-stream",
     ],
   });
+  if (values.interop) {
+    process.stderr.write(`[phase] ${values.test}/${values.role}: browser launched\n`);
+  }
 
   let results;
   try {
