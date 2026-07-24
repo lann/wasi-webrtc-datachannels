@@ -118,6 +118,12 @@ separate:
 Cross-package `use` must include the version, e.g.
 `use lann:webrtc-datachannels/types@0.1.0.{error}`.
 
+Terminology: the standardized connection surface is **`peer-connection`** — do
+not describe it as a "signaling" interface or design target in docs or prose.
+"Signaling" legitimately names only the manual-signaling CLI demo
+(`examples/cli-signaling`) and the conformance signaling server
+(`conformance-signalingd`).
+
 Changing an interface identifier (package, interface, or function name) means
 updating the consumers that name them as strings:
 
