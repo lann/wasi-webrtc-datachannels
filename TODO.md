@@ -90,6 +90,21 @@ the lab — same 11/11 pass with zero drops); upstream it and pick it up by
 bumping the workspace `rtc` pin to the release that includes it (the fix is
 not in `0.20.0-rc.4`).
 
+### E5. `webrtc` 0.20.0-rc.4's GSO/GRO batching breaks under Shadow
+
+The Wasmtime host holds `webrtc` at `0.20.0-rc.3`
+(`wasmtime-impl/Cargo.toml`): rc.4's quinn-udp GSO/GRO UDP batching
+([`webrtc-rs/webrtc#820`](https://github.com/webrtc-rs/webrtc/pull/820))
+does not function under the Shadow simulator — Shadow's emulation lacks the
+`setsockopt`s quinn-udp probes (`IP_PKTINFO`/`IP_MTU_DISCOVER`/`IP_RECVTOS`
+warnings in the lab log), no traffic flows, and every two-peer conformance
+Shadow test hangs to the simulation cap (`StoppedByShadow`). Loopback and
+netns paths are unaffected. To bump `webrtc` past rc.3: either get a
+batching opt-out upstream (or verify one exists, e.g. an env knob), teach
+Shadow the missing syscalls, or accept losing the Shadow lab's wasmtime
+coverage. rc.3's `rtc ^0.20.0-rc.3` requirement already resolves to the
+workspace-pinned `rtc` 0.20.0-rc.4, so the hold costs nothing else.
+
 ## F. Examples
 
 ### F1. Demos count bytes but never verify content or ordering

@@ -11,8 +11,12 @@ description = "Wasmtime host implementation of the lann:webrtc-datachannels inte
 # API used here.
 wasmtime = { version = "47", features = ["component-model", "component-model-async", "async", "runtime"] }
 # `webrtc-rs`: a pure-Rust WebRTC stack. Provides the RTCPeerConnection /
-# RTCDataChannel implementation that backs the host's data channels.
-webrtc = "0.20.0-rc.4"
+# RTCDataChannel implementation that backs the host's data channels. Held at
+# 0.20.0-rc.3: rc.4's quinn-udp GSO/GRO batching (webrtc-rs/webrtc#820) does
+# not function under the Shadow simulator (the conformance Shadow lab's peers
+# hang with no traffic), and rc.3's `rtc ^0.20.0-rc.3` requirement already
+# resolves to the workspace-pinned rtc 0.20.0-rc.4.
+webrtc = "0.20.0-rc.3"
 futures = "0.3"
 anyhow = "1"
 bytes = "1"
