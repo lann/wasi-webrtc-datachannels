@@ -132,10 +132,13 @@ per-target recipes (`just conformance-jco-node`, `just conformance-jco-browser`,
 Within each adapter, tests run **in parallel by default** (4 at a time): every
 test's peers use fresh guest instances (or processes) and their own signaling
 room, so tests are independent. Each adapter exposes a `--jobs` flag to change
-the concurrency (`--jobs 1` restores serial execution). Every connection
-attempt is individually bounded (45s, retried with a fresh room), and the
-`just` recipes additionally cap each whole adapter run (`conformance-timeout`,
-600s by default) so a systemic hang fails in minutes rather than stalling CI.
+the concurrency (`--jobs 1` restores serial execution). Every test attempt is
+individually bounded by a hang guard (90s, one attempt — no retries; generous
+because peer-process startup and 4-wide CI contention are on the clock, while
+the hosts' shorter `wait-connected` timeouts classify genuine connection
+failures first), and the `just` recipes additionally cap each whole adapter
+run (`conformance-timeout`, 600s by default) so a systemic hang fails in
+minutes rather than stalling CI.
 
 Run the runner's unit tests and the signaling server's integration tests with
 the rest of the workspace:
@@ -311,7 +314,8 @@ conformance/
   adapters/                # per-target adapters (wasmtime / jco / wasip3);
                            #   common/ holds the shared native building blocks
                            #   (registry/plans, peer subprocess invocation,
-                           #   retry loop, corpus runner, result document),
+                           #   single-attempt runner, corpus runner, result
+                           #   document),
                            #   the netns-lab topology/provisioning (netns +
                            #   nftables + coturn, in Rust), and the
                            #   target-neutral netns-lab and Shadow-lab executors

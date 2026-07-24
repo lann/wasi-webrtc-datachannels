@@ -29,7 +29,7 @@ path = "src/bin/peer.rs"
 
 [dependencies]
 # The shared adapter building blocks: outcomes, the peer-subprocess invocation,
-# the retry loop, the corpus runner, and the result document.
+# the single-attempt test runner, the corpus runner, and the result document.
 conformance-adapter-common = { path = "../common" }
 # The wasmtime host under test: satisfies the guest's `connections`/`types`
 # imports with a real webrtc-rs data channel and peer connection.
@@ -52,6 +52,10 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive", "env"] }
+# Phase markers (guest instance / mailbox progress) at the `conformance`
+# target, surfaced by `init_tracing` so a hang-guard timeout identifies the
+# hung phase.
+tracing = "0.1"
 # The `rtc` (sans-I/O WebRTC) crate re-exports `MulticastDnsMode`, used to turn
 # off multicast-DNS candidate gathering for the Shadow environment (whose
 # simulated stack lacks the multicast-socket options mDNS needs).

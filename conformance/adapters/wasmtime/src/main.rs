@@ -62,9 +62,11 @@ async fn run_two_peer(
     Ok(fold_two(offerer?, answerer?))
 }
 
-/// The hang guard for one test: long enough for a genuine `wait-connected`
-/// timeout to surface as a WIT outcome rather than tripping this bound.
-const TEST_TIMEOUT: Duration = Duration::from_secs(45);
+/// The hang guard for one test. Generous: the whole attempt is on the clock
+/// under 4-wide CI contention, while the host's shorter `wait-connected`
+/// timeout fires first, so a genuine connection failure still surfaces as a
+/// WIT outcome rather than tripping this bound.
+const TEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Run one test to a raw result (single attempt; no retries).
 async fn run_test(

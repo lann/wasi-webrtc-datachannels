@@ -99,9 +99,11 @@ export function paramsFor(testId) {
 export const MAX_INBOUND_BUFFER_BYTES = 512 * 1024;
 
 // The hang guard for one test, bounding a run whose data-channel wait never
-// resolves. Long enough for a genuine `wait-connected` timeout to surface as a
-// WIT outcome rather than tripping this bound.
-const TEST_TIMEOUT_MS = 45_000;
+// resolves. Generous: the whole attempt is on the clock under 4-wide CI
+// contention, while the host's shorter `wait-connected` timeout fires first,
+// so a genuine connection failure still surfaces as a WIT outcome rather than
+// tripping this bound. Mirrors the native adapters' TEST_TIMEOUT.
+const TEST_TIMEOUT_MS = 90_000;
 
 /** Build a test config for one instance. */
 function makeConfig(role, base, room, count, size) {

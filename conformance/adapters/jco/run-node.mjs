@@ -132,9 +132,13 @@ async function main() {
     });
 
   // Single-instance interop mode: one guest instance, one test/role/room against
-  // an already-running server; emit just the raw result to stdout.
+  // an already-running server; emit just the raw result to stdout. The `[phase]`
+  // stderr markers are streamed live by the orchestrator, so if its hang guard
+  // kills this process the last marker identifies the hung phase.
   if (values.interop) {
     if (!values.server) throw new Error("--interop requires --server");
+    const phase = (msg) =>
+      process.stderr.write(`[phase] ${values.test}/${values.role}: ${msg}\n`);
     const config = {
       role: values.role,
       signalingServer: values.server,
@@ -143,8 +147,11 @@ async function main() {
       messageSize: Number(values["message-size"]),
       trickle: true,
     };
+    phase("modules compiled; instantiating guest");
     const instance = await newInstance();
+    phase(`guest instantiated; running test (room ${values.room})`);
     const result = await instance.runner.runTest(values.test, config);
+    phase("test finished");
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }

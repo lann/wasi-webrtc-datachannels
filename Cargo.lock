@@ -607,6 +607,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "wasmtime",
  "wasmtime-webrtc-datachannels",
 ]

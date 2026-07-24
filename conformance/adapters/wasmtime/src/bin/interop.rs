@@ -34,9 +34,13 @@ use conformance_adapter_common::{
 use conformance_adapter_wasip3::Wasip3Peer;
 use conformance_adapter_wasmtime::{build_engine, make_config, run_instance, Role};
 
-/// The hang guard for one test: long enough for a genuine `wait-connected`
-/// timeout to surface as a WIT outcome rather than tripping this bound.
-const TEST_TIMEOUT: Duration = Duration::from_secs(45);
+/// The hang guard for one test. Generous: everything is on the clock —
+/// including out-of-process peer startup (a fresh Node process compiling the
+/// JSPI wasm, or a whole headless Chromium) under 4-wide CI contention — while
+/// the hosts' shorter `wait-connected` timeouts (20-30s) fire first, so a
+/// genuine connection failure still surfaces as a WIT outcome rather than
+/// tripping this bound.
+const TEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// One direction of a pair: which runtime the non-wasmtime peer runs on, which
 /// role the wasmtime peer plays (the other peer plays the opposite), and the
@@ -89,7 +93,7 @@ async fn run_jco_peer(
         .args(["--role", role])
         .args(["--message-count", &count.to_string()])
         .args(["--message-size", &size.to_string()]);
-    run_peer_command(command, &format!("jco-node peer ({})", cli.node_bin)).await
+    run_peer_command(command, &format!("jco-node peer {test_id}/{role}")).await
 }
 
 /// Run the jco-browser peer for one test/role/room via
@@ -116,7 +120,7 @@ async fn run_jco_browser_peer(
         .args(["--role", role])
         .args(["--message-count", &count.to_string()])
         .args(["--message-size", &size.to_string()]);
-    run_peer_command(command, &format!("jco-browser peer ({})", cli.node_bin)).await
+    run_peer_command(command, &format!("jco-browser peer {test_id}/{role}")).await
 }
 
 /// Run the non-wasmtime peer for one test/role/room, parsing its single-line

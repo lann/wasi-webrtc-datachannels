@@ -30,9 +30,12 @@ use conformance_adapter_wasip3::Wasip3Peer;
 
 // ----- orchestration --------------------------------------------------------
 
-/// The hang guard for one test: long enough for a genuine `wait-connected`
-/// timeout to surface as a WIT outcome rather than tripping this bound.
-const TEST_TIMEOUT: Duration = Duration::from_secs(45);
+/// The hang guard for one test. Generous: everything is on the clock —
+/// including the per-instance `wasmtime run` startup of the composed component
+/// — under 4-wide CI contention, while the provider's shorter `wait-connected`
+/// timeout fires first, so a genuine connection failure still surfaces as a
+/// WIT outcome rather than tripping this bound.
+const TEST_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Run one test to a raw result (single attempt; no retries).
 async fn run_test(

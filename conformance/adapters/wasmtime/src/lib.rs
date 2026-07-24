@@ -124,6 +124,7 @@ impl mailbox::HostSessionWithStore<Ctx> for Ctx {
         room: String,
         as_role: MailboxRole,
     ) -> wasmtime::Result<std::result::Result<Resource<MailboxSession>, Error>> {
+        tracing::info!(target: "conformance", room, role = role_str(as_role), "mailbox opened");
         let session = MailboxSession {
             client: reqwest::Client::new(),
             base: server.trim_end_matches('/').to_string(),
@@ -150,8 +151,12 @@ impl mailbox::HostSessionWithStore<Ctx> for Ctx {
             session.room,
             session.own_role()
         );
+        let len = blob.len();
         Ok(match session.client.post(&url).body(blob).send().await {
-            Ok(resp) if resp.status().is_success() => Ok(()),
+            Ok(resp) if resp.status().is_success() => {
+                tracing::info!(target: "conformance", room = session.room, role = session.own_role(), len, "mailbox sent");
+                Ok(())
+            }
             Ok(resp) => Err(mailbox_error(format!("publish status {}", resp.status()))),
             Err(err) => Err(mailbox_error(err)),
         })
@@ -163,7 +168,17 @@ impl mailbox::HostSessionWithStore<Ctx> for Ctx {
     ) -> wasmtime::Result<std::result::Result<Option<Vec<u8>>, Error>> {
         let session = accessor
             .with(|mut access| Ok::<_, wasmtime::Error>(access.get().table.get(&self_)?.clone()))?;
-        Ok(fetch_next(&session).await)
+        let result = fetch_next(&session).await;
+        if let Ok(blob) = &result {
+            tracing::info!(
+                target: "conformance",
+                room = session.room,
+                role = session.own_role(),
+                len = ?blob.as_ref().map(Vec::len),
+                "mailbox received"
+            );
+        }
+        Ok(result)
     }
 
     async fn done(
@@ -179,7 +194,10 @@ impl mailbox::HostSessionWithStore<Ctx> for Ctx {
             session.own_role()
         );
         Ok(match session.client.post(&url).send().await {
-            Ok(resp) if resp.status().is_success() => Ok(()),
+            Ok(resp) if resp.status().is_success() => {
+                tracing::info!(target: "conformance", room = session.room, role = session.own_role(), "mailbox done");
+                Ok(())
+            }
             Ok(resp) => Err(mailbox_error(format!("done status {}", resp.status()))),
             Err(err) => Err(mailbox_error(err)),
         })
@@ -353,16 +371,33 @@ async fn run_instance_in_store(
     webrtc_host::add_to_linker(&mut linker)?;
     add_mailbox_to_linker(&mut linker)?;
 
+    let role = config.role;
+    let room = config.room.clone();
+    let started = std::time::Instant::now();
+    tracing::info!(target: "conformance", test_id, ?role, room, "guest instance starting");
     let instance = Conformance::instantiate_async(&mut store, component, &linker).await?;
-    let test_id = test_id.to_string();
+    let test_id_owned = test_id.to_string();
     let result = store
         .run_concurrent(async move |accessor: &Accessor<Ctx>| {
             instance
                 .conformance_suite_runner()
-                .call_run_test(accessor, test_id, config)
+                .call_run_test(accessor, test_id_owned, config)
                 .await
         })
         .await??;
+    tracing::info!(
+        target: "conformance",
+        test_id,
+        ?role,
+        room,
+        elapsed = ?started.elapsed(),
+        outcome = match &result {
+            TestResult::Pass => "pass",
+            TestResult::Fail(_) => "fail",
+            TestResult::Skipped(_) => "skipped",
+        },
+        "guest instance finished"
+    );
     Ok(match result {
         TestResult::Pass => TestOutcome::Pass,
         TestResult::Fail(detail) => TestOutcome::Fail(detail),
