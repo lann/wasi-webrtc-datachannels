@@ -372,6 +372,20 @@ impl Runtime {
             }
             flush(&shared, &socket).await;
             if done {
+                // The pump is this state's only writer; after it returns
+                // nothing would ever change the state again, so leave it
+                // terminally closed. In particular the drain-deadline exit (a
+                // local `close()` whose close handshake never completed) must
+                // mark every channel closed itself — including one whose open
+                // was drained after `begin_close` — or a `send` loop on such a
+                // channel would keep succeeding forever.
+                let mut s = shared.borrow_mut();
+                s.closed = true;
+                for c in &mut s.channels {
+                    c.closed = true;
+                }
+                drop(s);
+                watch.notify();
                 return;
             }
 
@@ -423,7 +437,13 @@ fn apply_event(s: &mut Shared, event: PeerEvent) {
         }
         PeerEvent::ChannelOpen { id, label } => {
             if s.channel_mut(id).is_none() {
-                s.channels.push(Channel::new(id, label));
+                let mut channel = Channel::new(id, label);
+                // An open drained after the connection closed or failed (e.g.
+                // the core surfacing a pending open during close teardown) is
+                // tracked already-closed, so `send`/`receive` on its handle
+                // observe `closed` rather than a spuriously usable channel.
+                channel.closed = s.closed || s.failed;
+                s.channels.push(channel);
             }
         }
         PeerEvent::ChannelClosed { id } => {
