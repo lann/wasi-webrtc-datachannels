@@ -114,6 +114,7 @@ fn corpus() -> &'static [(&'static str, &'static [&'static str])] {
         ("peer-add-ice-candidate", &["peer-connection"]),
         ("peer-wait-connected", &["peer-connection"]),
         ("peer-wait-connected-latch", &["peer-connection"]),
+        ("peer-streams-once", &["peer-connection"]),
         ("peer-close-releases", &["peer-connection"]),
         ("peer-invalid-sdp", &["peer-connection", "errors"]),
         ("interop-handshake", &["interop", "signaling"]),
@@ -133,6 +134,7 @@ async fn run(test_id: &str, config: &TestConfig) -> Outcome {
         | "peer-add-ice-candidate"
         | "peer-wait-connected"
         | "peer-wait-connected-latch"
+        | "peer-streams-once"
         | "peer-close-releases"
         | "peer-invalid-sdp"
         | "error-invalid-signaling"
@@ -492,6 +494,7 @@ async fn run_inproc(test_id: &str, config: &TestConfig) -> Outcome {
         "error-timed-out" => Outcome::from_result(error_timed_out().await),
         "post-close-send" => Outcome::from_result(post_close_send().await),
         "peer-wait-connected-latch" => Outcome::from_result(wait_connected_latch().await),
+        "peer-streams-once" => Outcome::from_result(streams_once().await),
         "send-via-stream" => Outcome::from_result(send_via_stream_round_trip(config).await),
         "receive-via-stream" => Outcome::from_result(receive_via_stream_round_trip(config).await),
         "receive-via-stream-once" => Outcome::from_result(receive_via_stream_once().await),
@@ -707,6 +710,38 @@ async fn error_timed_out() -> Result<(), String> {
     };
     peer.close();
     result
+}
+
+/// Assert the take-once stream contract: `inproc_connect` consumed both
+/// peers' `local-ice-candidates` and the answerer's `incoming-data-channels`,
+/// so second calls must return streams that end immediately without yielding
+/// anything (and must not re-deliver prior items).
+async fn streams_once() -> Result<(), String> {
+    let (offerer, answerer, _offer_dc, _answer_dc) =
+        inproc_connect("peer-streams-once").await?;
+
+    let candidates = collect_candidates(offerer.local_ice_candidates()).await;
+    if !candidates.is_empty() {
+        return Err(format!(
+            "second local-ice-candidates call yielded {} candidate(s); expected an \
+             immediately-ended empty stream",
+            candidates.len()
+        ));
+    }
+
+    let mut incoming = answerer.incoming_data_channels();
+    let (_status, channels) = incoming.read(Vec::with_capacity(1)).await;
+    if !channels.is_empty() {
+        return Err(format!(
+            "second incoming-data-channels call yielded {} channel(s); expected an \
+             immediately-ended empty stream",
+            channels.len()
+        ));
+    }
+
+    offerer.close();
+    answerer.close();
+    Ok(())
 }
 
 /// Assert `wait-connected`'s latch semantics: once the connection has ever

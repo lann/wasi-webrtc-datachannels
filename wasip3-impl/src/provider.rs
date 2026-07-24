@@ -322,6 +322,9 @@ struct PeerState {
     local_channel: Option<rtc::data_channel::RTCDataChannelId>,
     /// The local host candidate, delivered once through `local-ice-candidates`.
     candidate_taken: bool,
+    /// Whether `incoming-data-channels` has been taken: the stream is
+    /// take-once, and channels are never re-delivered on a later stream.
+    incoming_taken: bool,
     /// Which channel ids have already been surfaced via
     /// `incoming-data-channels`.
     started_pump: bool,
@@ -356,6 +359,7 @@ impl GuestPeerConnection for PeerConnection {
                     local_candidate: candidate,
                     local_channel: None,
                     candidate_taken: false,
+                    incoming_taken: false,
                     started_pump: false,
                     runtime: Some((runtime, wake_rx)),
                 }),
@@ -367,6 +371,7 @@ impl GuestPeerConnection for PeerConnection {
                     local_candidate: String::new(),
                     local_channel: None,
                     candidate_taken: true,
+                    incoming_taken: true,
                     started_pump: true,
                     runtime: None,
                 }),
@@ -401,11 +406,18 @@ impl GuestPeerConnection for PeerConnection {
     ) -> wit_bindgen::StreamReader<
         crate::exports::lann::webrtc_datachannels::connections::DataChannel,
     > {
-        let state = self.inner.borrow();
+        let mut state = self.inner.borrow_mut();
+        let (tx, rx) = crate::wit_stream::new();
+        // Take-once per the WIT contract: a later call returns a stream that
+        // ends immediately, and channels are never re-delivered.
+        if state.incoming_taken {
+            drop(tx);
+            return rx;
+        }
+        state.incoming_taken = true;
         let shared = state.shared.clone();
         let waker = state.waker.clone();
         let local_channel = state.local_channel;
-        let (tx, rx) = crate::wit_stream::new();
         wit_bindgen::spawn_local(pump_incoming(shared, waker, local_channel, tx));
         rx
     }

@@ -263,6 +263,9 @@ export class PeerConnection {
   #everConnected = false;
   /** True once `close()` has been called. */
   #closed = false;
+  /** Take-once claims for the resource's two streams (see the WIT contract). */
+  #candidatesTaken = false;
+  #channelsTaken = false;
   /**
    * Pending `waitConnected` rejecters, woken by a local `close()` — the W3C
    * `close()` transitions the state without firing `connectionstatechange`,
@@ -322,8 +325,14 @@ export class PeerConnection {
     return new DataChannel(channel);
   }
 
-  /** A stream of data channels opened by the remote peer. */
+  /**
+   * A stream of data channels opened by the remote peer. Take-once per the
+   * WIT contract: later calls return a stream that ends immediately, and
+   * channels are never re-delivered.
+   */
   incomingDataChannels() {
+    if (this.#channelsTaken) return emptyStream();
+    this.#channelsTaken = true;
     return this.#channels.stream;
   }
 
@@ -363,8 +372,15 @@ export class PeerConnection {
     }
   }
 
-  /** A stream of locally gathered ICE candidates to trickle to the peer. */
+  /**
+   * A stream of locally gathered ICE candidates to trickle to the peer.
+   * Take-once per the WIT contract: later calls return a stream that ends
+   * immediately, and candidates are never re-delivered. End-of-candidates is
+   * the stream ending.
+   */
   localIceCandidates() {
+    if (this.#candidatesTaken) return emptyStream();
+    this.#candidatesTaken = true;
     return this.#candidates.stream;
   }
 
@@ -446,6 +462,8 @@ export class PeerConnection {
     this.#pc.close();
     for (const hook of this.#closeHooks) hook();
     this.#closeHooks.clear();
+    this.#candidates.end();
+    this.#channels.end();
   }
 }
 
@@ -482,7 +500,16 @@ function eventStream(setup) {
     }
   };
   setup(push, end);
-  return { stream };
+  return { stream, end };
+}
+
+/** A `ReadableStream` that ends immediately without yielding anything. */
+function emptyStream() {
+  return new ReadableStream({
+    start(controller) {
+      controller.close();
+    },
+  });
 }
 
 /**
