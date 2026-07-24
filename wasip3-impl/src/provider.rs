@@ -387,6 +387,11 @@ impl GuestPeerConnection for PeerConnection {
         let mut state = self.inner.borrow_mut();
         let id = {
             let mut s = state.shared.borrow_mut();
+            // Per the WIT contract, methods on a closed connection fail
+            // `closed` (the gate precedes any input handling).
+            if s.closed || s.failed {
+                return Err(Error::Closed);
+            }
             s.peer
                 .create_data_channel(&config.label, config.ordered, config.max_retransmits)
                 .map_err(|e| Error::Other(e.to_string()))?
@@ -426,6 +431,9 @@ impl GuestPeerConnection for PeerConnection {
         PeerConnection::ensure_pump(&mut self.inner.borrow_mut());
         let state = self.inner.borrow();
         let mut s = state.shared.borrow_mut();
+        if s.closed || s.failed {
+            return Err(Error::Closed);
+        }
         let sdp = s
             .peer
             .create_offer()
@@ -442,6 +450,9 @@ impl GuestPeerConnection for PeerConnection {
         PeerConnection::ensure_pump(&mut self.inner.borrow_mut());
         let state = self.inner.borrow();
         let mut s = state.shared.borrow_mut();
+        if s.closed || s.failed {
+            return Err(Error::Closed);
+        }
         let sdp = s
             .peer
             .create_answer()
@@ -455,8 +466,14 @@ impl GuestPeerConnection for PeerConnection {
     async fn set_local_description(&self, _description: SessionDescription) -> Result<(), Error> {
         // `create-offer` / `create-answer` already apply the local description
         // (the sans-I/O core produces and sets it in one step), so this is a
-        // no-op kept for API symmetry.
+        // no-op kept for API symmetry — but the post-close contract still
+        // applies.
         PeerConnection::ensure_pump(&mut self.inner.borrow_mut());
+        let state = self.inner.borrow();
+        let s = state.shared.borrow();
+        if s.closed || s.failed {
+            return Err(Error::Closed);
+        }
         Ok(())
     }
 
@@ -464,6 +481,9 @@ impl GuestPeerConnection for PeerConnection {
         PeerConnection::ensure_pump(&mut self.inner.borrow_mut());
         let state = self.inner.borrow();
         let mut s = state.shared.borrow_mut();
+        if s.closed || s.failed {
+            return Err(Error::Closed);
+        }
         let result = match description.kind {
             crate::lann::webrtc_datachannels::types::SdpType::Offer => {
                 s.peer.set_remote_offer(description.sdp)
@@ -506,10 +526,11 @@ impl GuestPeerConnection for PeerConnection {
     async fn add_ice_candidate(&self, candidate: IceCandidate) -> Result<(), Error> {
         PeerConnection::ensure_pump(&mut self.inner.borrow_mut());
         let state = self.inner.borrow();
-        state
-            .shared
-            .borrow_mut()
-            .peer
+        let mut s = state.shared.borrow_mut();
+        if s.closed || s.failed {
+            return Err(Error::Closed);
+        }
+        s.peer
             .add_remote_candidate(candidate.candidate)
             .map_err(|e| Error::InvalidSignaling(e.to_string()))?;
         let _ = state.waker.unbounded_send(());

@@ -308,6 +308,17 @@ export class PeerConnection {
     });
   }
 
+  /**
+   * Throw `{ tag: 'closed' }` when the connection is terminally over, per the
+   * WIT contract for method calls made after `close` (the gate precedes any
+   * input handling, so a malformed argument after close is still `closed`).
+   */
+  #requireOpen() {
+    if (this.#closed || this.#pc.connectionState === "closed") {
+      throw { tag: "closed" };
+    }
+  }
+
   #isConnectedNow() {
     return (
       this.#pc.connectionState === "connected" ||
@@ -321,8 +332,13 @@ export class PeerConnection {
    * @param {DataChannelOptions} options
    */
   createDataChannel(options) {
-    const channel = this.#pc.createDataChannel(options.label(), options.toInit());
-    return new DataChannel(channel);
+    this.#requireOpen();
+    try {
+      const channel = this.#pc.createDataChannel(options.label(), options.toInit());
+      return new DataChannel(channel);
+    } catch (err) {
+      throw { tag: "other", val: String(err) };
+    }
   }
 
   /**
@@ -338,14 +354,26 @@ export class PeerConnection {
 
   /** Produce an SDP offer describing the local peer. */
   async createOffer() {
-    const offer = await this.#pc.createOffer();
-    return { kind: "offer", sdp: offer.sdp };
+    this.#requireOpen();
+    try {
+      const offer = await this.#pc.createOffer();
+      return { kind: "offer", sdp: offer.sdp };
+    } catch (err) {
+      // Map to a WIT error rather than letting the rejection escape as a trap.
+      throw { tag: "other", val: String(err) };
+    }
   }
 
   /** Produce an SDP answer in response to a previously set remote offer. */
   async createAnswer() {
-    const answer = await this.#pc.createAnswer();
-    return { kind: "answer", sdp: answer.sdp };
+    this.#requireOpen();
+    try {
+      const answer = await this.#pc.createAnswer();
+      return { kind: "answer", sdp: answer.sdp };
+    } catch (err) {
+      // Map to a WIT error rather than letting the rejection escape as a trap.
+      throw { tag: "other", val: String(err) };
+    }
   }
 
   /**
@@ -353,6 +381,7 @@ export class PeerConnection {
    * @param {{ kind: string, sdp: string }} description
    */
   async setLocalDescription(description) {
+    this.#requireOpen();
     try {
       await this.#pc.setLocalDescription({ type: description.kind, sdp: description.sdp });
     } catch (err) {
@@ -365,6 +394,7 @@ export class PeerConnection {
    * @param {{ kind: string, sdp: string }} description
    */
   async setRemoteDescription(description) {
+    this.#requireOpen();
     try {
       await this.#pc.setRemoteDescription({ type: description.kind, sdp: description.sdp });
     } catch (err) {
@@ -389,6 +419,7 @@ export class PeerConnection {
    * @param {{ candidate: string, sdpMid?: string, sdpMlineIndex?: number }} candidate
    */
   async addIceCandidate(candidate) {
+    this.#requireOpen();
     try {
       await this.#pc.addIceCandidate({
         candidate: candidate.candidate,

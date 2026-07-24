@@ -115,6 +115,7 @@ fn corpus() -> &'static [(&'static str, &'static [&'static str])] {
         ("peer-wait-connected", &["peer-connection"]),
         ("peer-wait-connected-latch", &["peer-connection"]),
         ("peer-streams-once", &["peer-connection"]),
+        ("post-close-signaling", &["peer-connection", "errors"]),
         ("peer-close-releases", &["peer-connection"]),
         ("peer-invalid-sdp", &["peer-connection", "errors"]),
         ("interop-handshake", &["interop", "signaling"]),
@@ -135,6 +136,7 @@ async fn run(test_id: &str, config: &TestConfig) -> Outcome {
         | "peer-wait-connected"
         | "peer-wait-connected-latch"
         | "peer-streams-once"
+        | "post-close-signaling"
         | "peer-close-releases"
         | "peer-invalid-sdp"
         | "error-invalid-signaling"
@@ -495,6 +497,7 @@ async fn run_inproc(test_id: &str, config: &TestConfig) -> Outcome {
         "post-close-send" => Outcome::from_result(post_close_send().await),
         "peer-wait-connected-latch" => Outcome::from_result(wait_connected_latch().await),
         "peer-streams-once" => Outcome::from_result(streams_once().await),
+        "post-close-signaling" => Outcome::from_result(post_close_signaling().await),
         "send-via-stream" => Outcome::from_result(send_via_stream_round_trip(config).await),
         "receive-via-stream" => Outcome::from_result(receive_via_stream_round_trip(config).await),
         "receive-via-stream-once" => Outcome::from_result(receive_via_stream_once().await),
@@ -712,13 +715,57 @@ async fn error_timed_out() -> Result<(), String> {
     result
 }
 
+/// Assert that peer-connection methods called after `close` fail with
+/// `error.closed`, and that the gate precedes input validation (a malformed
+/// description after close is `closed`, not `invalid-signaling`).
+async fn post_close_signaling() -> Result<(), String> {
+    let peer = PeerConnection::new();
+    peer.close();
+
+    let expect_closed = |what: &str, result: Result<(), Error>| match result {
+        Err(Error::Closed) => Ok(()),
+        Ok(()) => Err(format!("{what} succeeded after close")),
+        Err(other) => Err(format!(
+            "{what} after close: expected closed, got {}",
+            describe(&other)
+        )),
+    };
+
+    expect_closed("create-offer", peer.create_offer().await.map(|_| ()))?;
+    expect_closed("create-answer", peer.create_answer().await.map(|_| ()))?;
+    expect_closed(
+        "set-local-description",
+        peer.set_local_description(make_sdp(SdpType::Offer, "not sdp".to_string()))
+            .await,
+    )?;
+    expect_closed(
+        "set-remote-description",
+        peer.set_remote_description(make_sdp(SdpType::Offer, "not sdp".to_string()))
+            .await,
+    )?;
+    expect_closed(
+        "add-ice-candidate",
+        peer.add_ice_candidate(IceCandidate {
+            candidate: "not a candidate".to_string(),
+            sdp_mid: None,
+            sdp_mline_index: None,
+        })
+        .await,
+    )?;
+    expect_closed(
+        "create-data-channel",
+        peer.create_data_channel(DataChannelOptions::new())
+            .map(|_| ()),
+    )?;
+    Ok(())
+}
+
 /// Assert the take-once stream contract: `inproc_connect` consumed both
 /// peers' `local-ice-candidates` and the answerer's `incoming-data-channels`,
 /// so second calls must return streams that end immediately without yielding
 /// anything (and must not re-deliver prior items).
 async fn streams_once() -> Result<(), String> {
-    let (offerer, answerer, _offer_dc, _answer_dc) =
-        inproc_connect("peer-streams-once").await?;
+    let (offerer, answerer, _offer_dc, _answer_dc) = inproc_connect("peer-streams-once").await?;
 
     let candidates = collect_candidates(offerer.local_ice_candidates()).await;
     if !candidates.is_empty() {
