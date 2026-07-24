@@ -185,6 +185,7 @@ pub const TESTS: &[&str] = &[
     "peer-local-ice-candidates",
     "peer-add-ice-candidate",
     "peer-wait-connected",
+    "peer-wait-connected-latch",
     "peer-close-releases",
     "peer-invalid-sdp",
     "interop-handshake",
@@ -230,6 +231,7 @@ pub fn plan_for(test_id: &str) -> Plan {
         | "peer-local-ice-candidates"
         | "peer-add-ice-candidate"
         | "peer-wait-connected"
+        | "peer-wait-connected-latch"
         | "peer-close-releases"
         | "peer-invalid-sdp"
         | "error-invalid-signaling"

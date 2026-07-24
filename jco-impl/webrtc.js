@@ -274,9 +274,28 @@ export class PeerConnection {
   #pc;
   #candidates;
   #channels;
+  /** Latched true once the connection has ever reached `connected`. */
+  #everConnected = false;
+  /** True once `close()` has been called. */
+  #closed = false;
+  /**
+   * Pending `waitConnected` rejecters, woken by a local `close()` — the W3C
+   * `close()` transitions the state without firing `connectionstatechange`,
+   * so a pending waiter would otherwise hang to its timeout.
+   */
+  #closeHooks = new Set();
 
   constructor() {
     this.#pc = new RTCPeerConnection();
+
+    // Latch `connected` as soon as it is reached, independent of any
+    // `waitConnected` caller: the WIT contract keeps reporting a
+    // once-connected connection as connected even after a later close.
+    const latch = () => {
+      if (this.#isConnectedNow()) this.#everConnected = true;
+    };
+    this.#pc.addEventListener("connectionstatechange", latch);
+    this.#pc.addEventListener("iceconnectionstatechange", latch);
 
     // Local ICE candidates: a `null` (or empty) candidate ends the stream.
     this.#candidates = eventStream((push, end) => {
@@ -299,6 +318,14 @@ export class PeerConnection {
         push(new DataChannel(channel));
       });
     });
+  }
+
+  #isConnectedNow() {
+    return (
+      this.#pc.connectionState === "connected" ||
+      this.#pc.iceConnectionState === "connected" ||
+      this.#pc.iceConnectionState === "completed"
+    );
   }
 
   /**
@@ -373,47 +400,67 @@ export class PeerConnection {
   }
 
   /**
-   * Resolve once the connection reaches `connected`, or reject
-   * `{ tag: 'timed-out' }` when it fails or when `CONNECT_TIMEOUT_MS` elapses
-   * first (a handshake that can never complete — for example with no remote
-   * peer — must not hang forever).
+   * Resolve once the connection reaches `connected`.
+   *
+   * `connected` is latched per the WIT contract: once the connection has ever
+   * connected this resolves immediately — including after a later `close` —
+   * and may be awaited repeatedly. If the connection closes or fails without
+   * ever having connected it rejects `{ tag: 'closed' }`; a handshake that
+   * can never complete (for example with no remote peer) rejects
+   * `{ tag: 'timed-out' }` after `CONNECT_TIMEOUT_MS`.
    */
   async waitConnected() {
     const pc = this.#pc;
-    const isConnected = () =>
-      pc.connectionState === "connected" ||
-      pc.iceConnectionState === "connected" ||
-      pc.iceConnectionState === "completed";
-    const isFailed = () => pc.connectionState === "failed" || pc.iceConnectionState === "failed";
+    const isFailed = () =>
+      pc.connectionState === "failed" ||
+      pc.iceConnectionState === "failed" ||
+      pc.connectionState === "closed";
 
-    if (isConnected()) return;
+    if (this.#isConnectedNow()) this.#everConnected = true;
+    if (this.#everConnected) return;
+    if (this.#closed || isFailed()) throw { tag: "closed" };
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         cleanup();
         reject({ tag: "timed-out" });
       }, CONNECT_TIMEOUT_MS);
       const check = () => {
-        if (isConnected()) {
+        if (this.#isConnectedNow()) {
+          this.#everConnected = true;
           cleanup();
           resolve();
         } else if (isFailed()) {
           cleanup();
-          reject({ tag: "timed-out" });
+          reject({ tag: "closed" });
         }
+      };
+      const onClose = () => {
+        cleanup();
+        reject({ tag: "closed" });
       };
       const cleanup = () => {
         clearTimeout(timer);
+        this.#closeHooks.delete(onClose);
         pc.removeEventListener("connectionstatechange", check);
         pc.removeEventListener("iceconnectionstatechange", check);
       };
+      this.#closeHooks.add(onClose);
       pc.addEventListener("connectionstatechange", check);
       pc.addEventListener("iceconnectionstatechange", check);
     });
   }
 
-  /** Close the peer connection and any of its data channels. */
+  /**
+   * Close the peer connection and any of its data channels. Idempotent; wakes
+   * pending `waitConnected` callers (the W3C `close()` transitions the state
+   * without firing events).
+   */
   close() {
+    if (this.#closed) return;
+    this.#closed = true;
     this.#pc.close();
+    for (const hook of this.#closeHooks) hook();
+    this.#closeHooks.clear();
   }
 
   /**
@@ -423,7 +470,7 @@ export class PeerConnection {
    */
   [Symbol.dispose]() {
     try {
-      this.#pc.close();
+      this.close();
     } catch {
       // Already closed.
     }

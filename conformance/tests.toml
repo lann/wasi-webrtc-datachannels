@@ -138,6 +138,11 @@ tags = ["peer-connection"]
 description = "wait-connected resolves once the connection is established."
 
 [[test]]
+id = "peer-wait-connected-latch"
+tags = ["peer-connection"]
+description = "wait-connected is latched: re-awaitable after connect, still ok after close."
+
+[[test]]
 id = "peer-close-releases"
 tags = ["peer-connection"]
 description = "close releases resources; subsequent ops do not hang."

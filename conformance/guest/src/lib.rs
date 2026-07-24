@@ -113,6 +113,7 @@ fn corpus() -> &'static [(&'static str, &'static [&'static str])] {
         ("peer-local-ice-candidates", &["peer-connection"]),
         ("peer-add-ice-candidate", &["peer-connection"]),
         ("peer-wait-connected", &["peer-connection"]),
+        ("peer-wait-connected-latch", &["peer-connection"]),
         ("peer-close-releases", &["peer-connection"]),
         ("peer-invalid-sdp", &["peer-connection", "errors"]),
         ("interop-handshake", &["interop", "signaling"]),
@@ -131,6 +132,7 @@ async fn run(test_id: &str, config: &TestConfig) -> Outcome {
         | "peer-local-ice-candidates"
         | "peer-add-ice-candidate"
         | "peer-wait-connected"
+        | "peer-wait-connected-latch"
         | "peer-close-releases"
         | "peer-invalid-sdp"
         | "error-invalid-signaling"
@@ -489,6 +491,7 @@ async fn run_inproc(test_id: &str, config: &TestConfig) -> Outcome {
         "error-closed" => Outcome::from_result(error_closed().await),
         "error-timed-out" => Outcome::from_result(error_timed_out().await),
         "post-close-send" => Outcome::from_result(post_close_send().await),
+        "peer-wait-connected-latch" => Outcome::from_result(wait_connected_latch().await),
         "send-via-stream" => Outcome::from_result(send_via_stream_round_trip(config).await),
         "receive-via-stream" => Outcome::from_result(receive_via_stream_round_trip(config).await),
         "receive-via-stream-once" => Outcome::from_result(receive_via_stream_once().await),
@@ -704,6 +707,27 @@ async fn error_timed_out() -> Result<(), String> {
     };
     peer.close();
     result
+}
+
+/// Assert `wait-connected`'s latch semantics: once the connection has ever
+/// connected it may be re-awaited any number of times — including after
+/// `close` — and keeps resolving `ok`.
+async fn wait_connected_latch() -> Result<(), String> {
+    let (offerer, answerer, _offer_dc, _answer_dc) =
+        inproc_connect("peer-wait-connected-latch").await?;
+    offerer
+        .wait_connected()
+        .await
+        .map_err(|e| format!("re-await after connect: {}", describe(&e)))?;
+    offerer.close();
+    offerer.wait_connected().await.map_err(|e| {
+        format!(
+            "wait-connected after close: expected ok (connected is latched), got {}",
+            describe(&e)
+        )
+    })?;
+    answerer.close();
+    Ok(())
 }
 
 /// Assert that a `send` after the peer connection closes yields `error.closed`.
