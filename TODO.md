@@ -95,14 +95,40 @@ not in `0.20.0-rc.4`).
 The Wasmtime host holds `webrtc` at `0.20.0-rc.3`
 (`wasmtime-impl/Cargo.toml`): rc.4's quinn-udp GSO/GRO UDP batching
 ([`webrtc-rs/webrtc#820`](https://github.com/webrtc-rs/webrtc/pull/820))
-does not function under the Shadow simulator — Shadow's emulation lacks the
-`setsockopt`s quinn-udp probes (`IP_PKTINFO`/`IP_MTU_DISCOVER`/`IP_RECVTOS`
-warnings in the lab log), no traffic flows, and every two-peer conformance
-Shadow test hangs to the simulation cap (`StoppedByShadow`). Loopback and
-netns paths are unaffected. To bump `webrtc` past rc.3: either get a
-batching opt-out upstream (or verify one exists, e.g. an env knob), teach
-Shadow the missing syscalls, or accept losing the Shadow lab's wasmtime
-coverage. rc.3's `rtc ^0.20.0-rc.3` requirement already resolves to the
+does not function under the Shadow simulator. Loopback and netns paths are
+unaffected. Root cause (diagnosed by simulating Shadow's `setsockopt`
+behavior with an `LD_PRELOAD` shim — no Shadow harness needed — and
+confirmed against a plain loopback run of the conformance adapter with the
+lockfile resolved to rc.4):
+
+1. Shadow's UDP `setsockopt` returns **`ENOPROTOOPT`** for options it does
+   not implement (`shadow/src/main/host/descriptor/socket/inet/udp.rs`),
+   including `IP_PKTINFO`.
+2. `quinn-udp` 0.6's `UdpSocketState::new` treats an `IP_PKTINFO` failure
+   as **fatal** (`src/unix.rs`: a plain `?`, unlike the neighboring
+   `IP_RECVTOS` — ignored — and `IP_MTU_DISCOVER`/`UDP_GRO`/`UDP_SEGMENT`
+   probes, which degrade). Its tolerant probes accept only
+   `ENOPROTOOPT`/`EOPNOTSUPP`; an `ENOSYS` there is fatal too, so
+   quinn-udp is not syscall-suppression-graceful either (verified with an
+   `ENOSYS` shim variant: `IP_MTU_DISCOVER` then kills the constructor
+   before `IP_PKTINFO` is even reached).
+3. `webrtc` rc.4's `wrap_udp_socket` propagates the constructor error
+   (`src/runtime/tokio.rs`), so **every peer-connection build fails** —
+   #820's "falls back to per-packet send_to/recv_from" covers only the
+   tolerated probe failures, not constructor failure. (webrtc never uses
+   the pktinfo capability: it sends every transmit with `src_ip: None`.)
+4. In a two-peer test the offerer fails fast, but the answerer then
+   long-polls the signaling mailbox forever for an offer that never
+   arrives — which is why the lab shows a silent hang to the simulation
+   cap (`StoppedByShadow`) rather than an error.
+
+Fix upstream, in preference order: (a) `webrtc` — degrade
+`wrap_udp_socket` to a plain socket (no GSO/GRO) when `UdpSocketState::new`
+fails, honoring #820's fallback promise; (b) `quinn-udp` — tolerate
+`IP_PKTINFO` setsockopt failure like its sibling probes; (c) Shadow —
+implement `IP_PKTINFO` (needs recvmsg cmsg support to be useful). Once one
+lands, bump `webrtc` past rc.3 and re-run `just conformance-shadow`.
+rc.3's `rtc ^0.20.0-rc.3` requirement already resolves to the
 workspace-pinned `rtc` 0.20.0-rc.4, so the hold costs nothing else.
 
 ## F. Examples
