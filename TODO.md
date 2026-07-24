@@ -90,20 +90,37 @@ the lab — same 11/11 pass with zero drops); upstream it and pick it up by
 bumping the workspace `rtc` pin to the release that includes it (the fix is
 not in `0.20.0-rc.4`).
 
-### E5. `webrtc` 0.20.0-rc.4's GSO/GRO batching breaks under Shadow
+### E5. Retire the Shadow syscall shim once upstream closes the gap
 
-The Wasmtime host holds `webrtc` at `0.20.0-rc.3`
-(`wasmtime-impl/Cargo.toml`): rc.4's quinn-udp GSO/GRO UDP batching
+`webrtc` is at `0.20.0-rc.4`; its quinn-udp GSO/GRO UDP batching
 ([`webrtc-rs/webrtc#820`](https://github.com/webrtc-rs/webrtc/pull/820))
-does not function under the Shadow simulator — Shadow's emulation lacks the
-`setsockopt`s quinn-udp probes (`IP_PKTINFO`/`IP_MTU_DISCOVER`/`IP_RECVTOS`
-warnings in the lab log), no traffic flows, and every two-peer conformance
-Shadow test hangs to the simulation cap (`StoppedByShadow`). Loopback and
-netns paths are unaffected. To bump `webrtc` past rc.3: either get a
-batching opt-out upstream (or verify one exists, e.g. an env knob), teach
-Shadow the missing syscalls, or accept losing the Shadow lab's wasmtime
-coverage. rc.3's `rtc ^0.20.0-rc.3` requirement already resolves to the
-workspace-pinned `rtc` 0.20.0-rc.4, so the hold costs nothing else.
+needs syscalls the Shadow simulator does not implement — Shadow rejects the
+`IPPROTO_IP` receive-metadata `setsockopt`s (`IP_PKTINFO` et al.) with
+`ENOPROTOOPT`, which quinn-udp treats as fatal to socket construction, and
+does not implement `recvmmsg` (`ENOSYS`), which quinn-udp's Linux receive
+path calls with no fallback. The conformance Shadow lab bridges this with
+an in-binary syscall shim compiled into its `conformance-peer` build
+(`conformance/adapters/wasmtime/src/bin/peer/shadow_shim.rs`, cargo feature
+`shadow-syscall-shim`): each override forwards the call and stubs only
+Shadow's documented failure; anything unexpected aborts the peer. Loopback
+and netns paths are unaffected and run shim-free.
+
+The shim is a bridge, not a fix. Retire it when any upstream lands and
+reaches a published release:
+
+- **quinn-udp**: tolerate the receive-metadata option failures (a branch
+  exists:
+  [`lann/quinn#tolerate-unsupported-recv-cmsg-options`](https://github.com/lann/quinn/tree/tolerate-unsupported-recv-cmsg-options))
+  *and* restore a `recvmmsg` `ENOSYS` fallback (existed pre-0.6; both are
+  needed).
+- **webrtc**: degrade `wrap_udp_socket` to a plain socket when
+  `UdpSocketState::new` fails, honoring #820's per-packet-fallback promise.
+- **Shadow**: implement `recvmmsg` (loop the existing `recvmsg` handler)
+  and the `IP_PKTINFO`/`IP_MTU_DISCOVER`/`IP_RECVTOS` options.
+
+If a future `webrtc` bump grows the syscall surface again, the shim aborts
+(unexpected `setsockopt` errno) or the lab hangs with Shadow's "unsupported
+syscall" warning — extend the shim or fix upstream, per its module docs.
 
 ## F. Examples
 

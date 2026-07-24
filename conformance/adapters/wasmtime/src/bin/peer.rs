@@ -23,6 +23,12 @@ use conformance_adapter_wasmtime::{
     WebrtcIceConfig, WebrtcIceServer,
 };
 
+/// Syscall overrides bridging Shadow's syscall surface to the host's needs
+/// (see the module docs). Compiled only into the Shadow lab's peer build.
+#[cfg(all(feature = "shadow-syscall-shim", target_os = "linux"))]
+#[path = "peer/shadow_shim.rs"]
+mod shadow_shim;
+
 /// Run one conformance peer (one role of one test) and print its result.
 #[derive(Debug, Parser)]
 #[command(name = "conformance-peer", version)]

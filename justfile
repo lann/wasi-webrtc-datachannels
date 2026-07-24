@@ -20,6 +20,7 @@ fmt-check:
 # Run clippy across all crates.
 clippy:
     cargo clippy --workspace --exclude echo-demo --exclude cli-signaling --exclude wasip3-webrtc-datachannels --exclude webrtc-consumer --exclude conformance-guest --exclude conformance-wasip3-mailbox --exclude conformance-wasip3-driver -- -D warnings
+    cargo clippy -p conformance-adapter-wasmtime --features shadow-syscall-shim --all-targets -- -D warnings
     cargo clippy -p echo-demo --target wasm32-unknown-unknown -- -D warnings
     cargo clippy -p conformance-guest --target wasm32-unknown-unknown -- -D warnings
     cargo clippy -p cli-signaling --target wasm32-wasip2 -- -D warnings
@@ -221,7 +222,12 @@ conformance-shadow: build-conformance-guest build-signalingd build-conformance-w
     EOF
         exit 1
     fi
-    cargo build --release -p conformance-adapter-wasmtime --bin conformance-peer
+    # The Shadow peer carries the in-binary syscall shim bridging Shadow's
+    # syscall surface to the webrtc driver's quinn-udp UDP layer (see
+    # conformance/adapters/wasmtime/src/bin/peer/shadow_shim.rs); its unit
+    # tests (seccomp-simulated Shadow behavior) run first.
+    cargo test --release -p conformance-adapter-wasmtime --features shadow-syscall-shim --bin conformance-peer
+    cargo build --release -p conformance-adapter-wasmtime --bin conformance-peer --features shadow-syscall-shim
     cargo build --release -p conformance-adapter-common --bin conformance-shadow
     timeout {{conformance-timeout}} target/release/conformance-shadow \
         --target wasmtime --peer-kind wasmtime \
