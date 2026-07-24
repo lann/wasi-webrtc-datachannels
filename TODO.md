@@ -71,25 +71,6 @@ information to async operations.
 
 ## E. Implementations
 
-### E4. Upstream `rtc-ice` tags srflx transmits with the mapped address
-
-`rtc-ice`'s `send_stun` (and the peer-connection ICE write path) tag outbound
-transmits with the local candidate's `addr()`, which for a server-reflexive
-candidate is the NAT-mapped public address; RFC 8445 §6.1.2 requires sends
-from a reflexive candidate to use its **base**. Drivers routing outbound
-transmits by `transport.local_addr` (the async `webrtc` 0.20 driver does) have
-no socket at the mapped address and drop the packets (`None tcp/udp socket…`).
-
-The bug is real but **not connection-blocking** in the netns lab: the
-host-sourced checks toward the peer's srflx candidate carry the connection, so
-`stun-srflx` passes with the drops present (~100 dropped srflx-sourced
-transmits per corpus run). A fix exists on
-[`lann/rtc#fix-srflx-check-source-addr`](https://github.com/lann/rtc/tree/fix-srflx-check-source-addr)
-(adds `Candidate::base_addr()` and uses it when tagging transmits; verified in
-the lab — same 11/11 pass with zero drops); upstream it and pick it up by
-bumping the workspace `rtc` pin to the release that includes it (the fix is
-not in `0.20.0-rc.4`).
-
 ### E5. Retire the Shadow syscall shim once upstream closes the gap
 
 `webrtc` is at `0.20.0-rc.4`; its quinn-udp GSO/GRO UDP batching
@@ -121,6 +102,16 @@ reaches a published release:
 If a future `webrtc` bump grows the syscall surface again, the shim aborts
 (unexpected `setsockopt` errno) or the lab hangs with Shadow's "unsupported
 syscall" warning — extend the shim or fix upstream, per its module docs.
+
+### E6. Unwind the `rtc` git pin once upstream ships a release
+
+The `rtc` dependency is pinned to an upstream `master` commit (`Cargo.toml`
+`[patch.crates-io]`) because the srflx source-address fix
+([`webrtc-rs/rtc#136`](https://github.com/webrtc-rs/rtc/pull/136), merged
+upstream; the netns lab's `stun-srflx` scenario passes with zero dropped
+srflx-sourced transmits with it, vs ~100 drops without) is not yet in any
+published release. Drop the patch and return to a plain crates.io version
+once a release including it ships.
 
 ## F. Examples
 

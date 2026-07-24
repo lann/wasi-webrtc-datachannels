@@ -23,3 +23,17 @@ resolver = "2"
 # receive zero-length messages.
 [workspace.dependencies]
 rtc = "0.20.0-rc.4"
+
+# Redirect every `rtc` resolution — the direct dependency of `wasip3-impl` and,
+# crucially, the *transitive* dependency of the async `webrtc` 0.20 crate the
+# Wasmtime host is built on — to upstream `rtc` master. The pinned commit
+# includes the srflx source-address fix (webrtc-rs/rtc#136, merged upstream)
+# that is not yet in any published release: connectivity checks from a
+# server-reflexive candidate are sent from its base rather than the NAT-mapped
+# address, so drivers that demultiplex outbound transmits by local address no
+# longer drop them (TODO item E4's netns-lab finding). Using `[patch]` rather
+# than a direct git dependency is what lets the fix reach `webrtc`'s own copy
+# of `rtc`. Drop the patch and return to a plain crates.io version once a
+# release including the fix ships (see TODO item E6).
+[patch.crates-io]
+rtc = { git = "https://github.com/webrtc-rs/rtc.git", rev = "a10cd2c18f7c4e646e83f6f00b792ef38ac3cdb2" }
