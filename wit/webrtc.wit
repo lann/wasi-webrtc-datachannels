@@ -122,6 +122,20 @@ interface connections {
     /// Configuration for a data channel, a subset of `RTCDataChannelInit`
     /// (https://w3c.github.io/webrtc-pc/).
     ///
+    /// The omitted `RTCDataChannelInit` members are left out deliberately:
+    ///
+    /// - `protocol` — niche; trivially addable later as another accessor pair.
+    /// - `negotiated` / `id` — out-of-band channel negotiation contradicts this
+    ///   package's guest-driven in-band model (`create-data-channel` on one
+    ///   side, `incoming-data-channels` on the other).
+    /// - `max-packet-life-time` — mutually exclusive with `max-retransmits`
+    ///   upstream, so it can never be added as a sibling `option` field without
+    ///   inventing a runtime validation error on `create-data-channel`. If
+    ///   timer-based reliability is ever needed, reshape the two accessors
+    ///   around a single `reliability` variant
+    ///   (`reliable | max-retransmits(u16) | max-packet-life-time-ms(u16)`)
+    ///   instead.
+    ///
     /// This is a builder resource, following the shape of `wasi:http`'s
     /// `request-options`: construct a default value, adjust the fields you care
     /// about through the setters, then hand it to `peer-connection`'s
@@ -238,13 +252,27 @@ interface connections {
     /// across all of them by the conformance suite. See the demo `rendezvous`
     /// interface for the transport that would carry these blobs between remote
     /// peers.
+    ///
+    /// # Lifecycle
+    ///
+    /// The connection is terminally over when it has been closed by `close` or
+    /// has failed; there is no reconnection. Methods called after that point
+    /// fail with `error.closed` (and the resource's streams end). `connected`
+    /// is a **latched** observation: a connection that connected and later
+    /// closed still reports having connected (see `wait-connected`).
     resource peer-connection {
         constructor();
 
         /// Create a data channel that will be negotiated in-band with the peer.
         create-data-channel: func(options: data-channel-options) -> result<data-channel, error>;
 
-        /// A stream of data channels opened by the remote peer.
+        /// A stream of data channels opened by the remote peer, in the order
+        /// they open. The stream ends when the connection closes or fails.
+        ///
+        /// The stream may be taken **once**: the first call returns it, and
+        /// every later call returns a stream that ends immediately without
+        /// yielding anything. Channels are delivered exactly once — they are
+        /// never re-delivered on a later stream.
         incoming-data-channels: func() -> stream<data-channel>;
 
         /// Produce an SDP offer describing the local peer.
@@ -257,14 +285,40 @@ interface connections {
         set-remote-description: async func(description: session-description) -> result<_, error>;
 
         /// A stream of locally gathered ICE candidates to trickle to the peer.
+        ///
+        /// Yields one or more candidates in an implementation-defined order (a
+        /// vanilla-ICE implementation may deliver a single candidate covering
+        /// the whole session). **End-of-candidates is signaled by the stream
+        /// ending** — there is no browser-style `null`-candidate sentinel.
+        ///
+        /// The stream may be taken **once**: the first call returns it, and
+        /// every later call returns a stream that ends immediately without
+        /// yielding anything. Candidates are never re-delivered.
         local-ice-candidates: func() -> stream<ice-candidate>;
         /// Add an ICE candidate received from the remote peer.
         add-ice-candidate: async func(candidate: ice-candidate) -> result<_, error>;
 
         /// Resolve once the connection reaches the `connected` state.
+        ///
+        /// The `connected` state is **latched**: once the connection has ever
+        /// connected this resolves `ok` immediately — including after a later
+        /// `close` or failure — and may be awaited any number of times, before
+        /// or after the state is reached. If the connection closes or fails
+        /// without ever having connected, this fails with `error.closed`.
+        /// Implementations may bound the wait and fail with `error.timed-out`;
+        /// the bound is implementation-defined.
         wait-connected: async func() -> result<_, error>;
 
         /// Close the peer connection and any of its data channels.
+        ///
+        /// Deliberately synchronous, matching the W3C
+        /// `RTCPeerConnection.close()`: it initiates teardown and returns —
+        /// there is no way to await teardown completion. Idempotent: closing an
+        /// already-closed or failed connection is a no-op. Operations in
+        /// flight when the connection closes, and any method calls made after,
+        /// fail with `error.closed` (except `wait-connected` on a connection
+        /// that had already connected — see its latch semantics); the
+        /// resource's streams end.
         close: func();
     }
 }

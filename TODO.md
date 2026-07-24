@@ -35,39 +35,33 @@ confirmed on a Linux workstation: all four scenarios pass 11/11. Still open:
 
 ## C. WIT interface design
 
-### C1. `peer-connection` semantics to pin down in the WIT docs
+### C1. Align the implementations with the documented `peer-connection` contract
 
-The interface is now implemented across all three stacks, which settled some of these de
-facto; specify them in `wit/webrtc.wit` doc comments so implementations stay
-aligned: (a) end-of-candidates on `local-ice-candidates` is signaled by the
-stream ending (rather than a browser-style null candidate) — document it; (b)
-connection-state observability beyond the one-shot `wait-connected` — there is
-no way to observe `disconnected`/`failed` or to re-await; (c) the
-`incoming-data-channels` / `local-ice-candidates` streams' once-only semantics;
-(d) `close: func()` is sync while the rest is async — confirm that is intended.
-Output: revised WIT doc comments.
+The `peer-connection` contract is now specified in `wit/webrtc.wit` doc
+comments (end-of-candidates = stream end; take-once streams; latched
+`wait-connected`; sync, idempotent `close` with post-close calls failing
+`error.closed`). A cross-implementation survey found the implementations
+diverge from it, and none of the divergences are visible to the conformance
+matrix. Fix the implementations and add a conformance test per behavior:
 
-### C2. `data-channel-options` omits `RTCDataChannelInit` fields without explanation
-
-`data-channel-options` (`wit/webrtc.wit`) exposes only `label`, `ordered`,
-`max-retransmits`. Document *why* `protocol`, `max-packet-life-time`,
-`negotiated`/`id` were left out, and note that `max-retransmits` and
-`max-packet-life-time` are mutually exclusive upstream (so if the latter is ever
-added it cannot simply be a sibling `option`).
-
-### C3. Terminology: keep "signaling" out of the design-target prose
-
-The WIT surface is `peer-connection`, but prose has previously referenced a
-"`signaling` interface/design target"; the known instances have been corrected.
-Keep future docs from reintroducing the name (it now only legitimately names
-the manual-signaling CLI demo and the conformance signaling server).
-
-### C4. Consider aligning `error` with WASI 0.3 `error-context`
-
-Before stabilizing the interface, evaluate whether the `types.error` variant
-should align with (or be replaced by) WASI 0.3's `error-context` mechanism,
-which is the component-model-native way to attach contextual failure
-information to async operations.
+- **`wait-connected` latch (jco)**: jco does not latch `connected` — a
+  connected-then-closed connection hangs the full 20s and rejects
+  `timed-out`, and a terminal failure also rejects `timed-out` instead of
+  `closed` (`conformance/adapters/jco/webrtc.js`); wasmtime and wasip3 latch
+  and classify correctly.
+- **Take-once streams (jco, wasip3)**: a second `local-ice-candidates` /
+  `incoming-data-channels` call must return an immediately-ended stream
+  (wasmtime's behavior). jco returns the *same* stream object each call (a
+  live first stream makes the second consumption trap); wasip3's second
+  `incoming-data-channels` replays every previously delivered channel as
+  duplicate handles over shared state (`pump_incoming` restarts its cursor
+  at 0, `wasip3-impl/src/provider.rs`).
+- **Post-close calls → `error.closed` (all three)**: none gate signaling
+  methods on close — wasmtime/wasip3 surface whatever the underlying stack
+  returns (`other`/`invalid-signaling`), and jco's `create-offer` /
+  `create-answer` have no error mapping at all, so a closed-pc rejection
+  escapes as a raw trap rather than a WIT `error` (a bug regardless of the
+  contract).
 
 ## E. Implementations
 
@@ -172,7 +166,8 @@ flags from the WIT) so a drifted rename fails fast with a clear message.
 
 ## Suggested priority
 
-1. Interface-stabilizing decisions (C1, C2, C4).
+1. Contract alignment: fix the `peer-connection` divergences and land their
+   conformance tests (C1).
 2. Strategic build-out: wire `rendezvous` (F3) and take `wasip3`'s
    WIT-speaking component to a real network (F4).
 3. Cheap hygiene: the transpile-flag CI check (G1), the remaining
